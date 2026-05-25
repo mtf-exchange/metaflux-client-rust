@@ -13,7 +13,7 @@ use metaflux_client::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let ws_url = std::env::var("MTF_WS_URL").unwrap_or_else(|_| "wss://api.mtf.xyz/ws".into());
+    let ws_url = std::env::var("MTF_WS_URL").unwrap_or_else(|_| "wss://api.mtf.exchange/ws".into());
     println!("connecting to {ws_url}");
     let ws = WsClient::connect(ws_url).await?;
     let mut rx = ws.messages();

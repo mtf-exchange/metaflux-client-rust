@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wallet = Wallet::from_hex(&priv_hex)?;
     println!("wallet address: {}", wallet.address());
 
-    let client = Client::new("https://api.mtf.xyz")?;
+    let client = Client::new("https://api.mtf.exchange")?;
 
     // Pull the market list to confirm we're talking to a live node.
     let markets = client.rest().info().markets().await?;

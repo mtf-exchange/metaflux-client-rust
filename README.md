@@ -25,7 +25,7 @@ It exposes every MTF differentiation feature with first-class types:
 
 There is **no HL-compat code path** in this SDK. HL migrants should keep using
 [`hyperliquid-rust-sdk`](https://github.com/hyperliquid-dex/hyperliquid-rust-sdk)
-against the MTF gateway URL `https://api.mtf.xyz/hl-compat/` — the gateway
+against the MTF gateway URL `https://api.mtf.exchange/hl-compat/` — the gateway
 translates between HL surface and MTF internals at the protocol layer.
 
 ## Quick start
@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("wallet address: 0x{}", hex::encode(wallet.address()));
 
     // 2. Construct the client (MTF testnet).
-    let client = Client::new("https://api.mtf.xyz")?;
+    let client = Client::new("https://api.mtf.exchange")?;
 
     // 3. Build + sign + submit a limit order.
     let order = Order {
