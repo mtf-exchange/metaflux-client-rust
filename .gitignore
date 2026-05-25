@@ -1,0 +1,14 @@
+# Rust build artefacts
+/target
+
+# Editor / backup
+*.bk
+*.swp
+*.swo
+
+# Local env
+.env
+.env.local
+
+# macOS
+.DS_Store
