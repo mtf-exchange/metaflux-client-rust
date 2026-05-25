@@ -35,7 +35,7 @@ pub struct GrpcClient {
 }
 
 impl GrpcClient {
-    /// Build a client targeting `endpoint` (e.g. `https://api.mtf.xyz:8443`).
+    /// Build a client targeting `endpoint` (e.g. `https://api.mtf.exchange:8443`).
     ///
     /// Note: real production usage requires an mTLS-provisioned client cert.
     /// This v0 stub does not yet wire that in; PR welcome once the gateway
@@ -90,7 +90,7 @@ mod tests {
 
     #[test]
     fn grpc_client_records_endpoint() {
-        let c = GrpcClient::new("https://api.mtf.xyz:8443");
-        assert_eq!(c.endpoint(), "https://api.mtf.xyz:8443");
+        let c = GrpcClient::new("https://api.mtf.exchange:8443");
+        assert_eq!(c.endpoint(), "https://api.mtf.exchange:8443");
     }
 }

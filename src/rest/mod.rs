@@ -36,7 +36,7 @@ pub struct RestClient {
 impl RestClient {
     /// Build a REST client pointing at the given base URL.
     ///
-    /// `base_url` should be of the form `https://api.mtf.xyz` (no trailing
+    /// `base_url` should be of the form `https://api.mtf.exchange` (no trailing
     /// slash). Endpoints are appended as `/info`, `/exchange`, etc.
     ///
     /// # Errors
@@ -139,13 +139,13 @@ mod tests {
 
     #[test]
     fn rejects_non_http_url() {
-        let err = RestClient::new("ftp://api.mtf.xyz").unwrap_err();
+        let err = RestClient::new("ftp://api.mtf.exchange").unwrap_err();
         assert!(matches!(err, ClientError::Builder(_)));
     }
 
     #[test]
     fn strips_trailing_slash() {
-        let c = RestClient::new("https://api.mtf.xyz/").unwrap();
-        assert_eq!(c.base_url(), "https://api.mtf.xyz");
+        let c = RestClient::new("https://api.mtf.exchange/").unwrap();
+        assert_eq!(c.base_url(), "https://api.mtf.exchange");
     }
 }

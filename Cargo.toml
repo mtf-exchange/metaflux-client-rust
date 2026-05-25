@@ -15,7 +15,7 @@ keywords = ["metaflux", "mtf", "crypto", "perpetuals", "sdk"]
 categories = ["api-bindings", "cryptography::cryptocurrencies"]
 
 # Per ADR-019: MTF-native only. HL migrants use `hyperliquid-rust-sdk` with
-# base url https://api.mtf.xyz/hl-compat/. We do not carry HL-shape schema.
+# base url https://api.mtf.exchange/hl-compat/. We do not carry HL-shape schema.
 
 [features]
 default = []
