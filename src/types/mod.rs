@@ -38,7 +38,7 @@ pub struct OrderId(pub u64);
 
 /// Internal market identifier.
 ///
-/// Sequentially allocated from genesis; HIP-3 permissionless deploys get
+/// Sequentially allocated from genesis; MIP-3 permissionless deploys get
 /// fresh ids per `perpDeploy` action.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
