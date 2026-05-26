@@ -18,8 +18,12 @@ categories = ["api-bindings", "cryptography::cryptocurrencies"]
 # base url https://api.mtf.exchange/hl-compat/. We do not carry HL-shape schema.
 
 [features]
-default = []
+default = ["cli"]
 grpc = ["dep:tonic", "dep:prost"]
+# Compiles the `mip3-deploy` CLI binary. On by default so `cargo install
+# metaflux-client` ships the binary; library-only users can opt out via
+# `default-features = false`.
+cli = ["dep:clap"]
 
 [dependencies]
 # Async runtime
@@ -47,6 +51,10 @@ tracing = "0.1"
 hex = "0.4"
 bytes = "1"
 
+# CLI (used by the `mip3-deploy` bin; gated behind `cli` feature so library
+# users don't pull it in transitively).
+clap = { version = "4", features = ["derive"], optional = true }
+
 # Optional — gRPC (gated)
 tonic = { version = "0.12", optional = true }
 prost = { version = "0.13", optional = true }
@@ -56,6 +64,7 @@ proptest = "1"
 wiremock = "0.6"
 tokio-test = "0.4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "test-util", "time", "net"] }
+assert_cmd = "2"
 
 [build-dependencies]
 tonic-build = { version = "0.12", optional = true }
@@ -71,6 +80,15 @@ path = "examples/stream_trades.rs"
 [[example]]
 name = "create_vault"
 path = "examples/create_vault.rs"
+
+[[example]]
+name = "mip3_full_deploy"
+path = "examples/mip3_full_deploy.rs"
+
+[[bin]]
+name = "mip3-deploy"
+path = "src/bin/mip3-deploy.rs"
+required-features = ["cli"]
 
 [lints.rust]
 # Suppress "stop drumming" doc lints; require basic hygiene.

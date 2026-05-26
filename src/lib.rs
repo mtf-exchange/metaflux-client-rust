@@ -45,6 +45,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod error;
+pub mod mip3;
 pub mod rest;
 pub mod types;
 pub mod wallet;
