@@ -27,7 +27,7 @@ pub struct Info<'a> {
 ///
 /// Wire shape:
 /// ```json
-/// { "market_id": 1, "symbol": "BTC-PERP", "size_decimals": 6,
+/// { "market_id": 1, "symbol": "BTC", "size_decimals": 6,
 ///   "px_decimals": 4, "max_leverage": 50, "tick_size": 1, "min_size": 1 }
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,7 +35,7 @@ pub struct Info<'a> {
 pub struct MarketMeta {
     /// Internal market id.
     pub market_id: MarketId,
-    /// Human-readable symbol (e.g. `"BTC-PERP"`).
+    /// Human-readable symbol (e.g. `"BTC"`).
     pub symbol: String,
     /// Number of decimals in the size field's fixed-point encoding.
     pub size_decimals: u8,
@@ -260,7 +260,7 @@ mod tests {
     fn market_meta_round_trips() {
         let m = MarketMeta {
             market_id: MarketId(1),
-            symbol: "BTC-PERP".into(),
+            symbol: "BTC".into(),
             size_decimals: 6,
             px_decimals: 4,
             max_leverage: 50,

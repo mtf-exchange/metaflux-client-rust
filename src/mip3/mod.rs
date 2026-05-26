@@ -30,7 +30,7 @@
 //! client.await_deploy_credit(&wallet, Duration::from_secs(120)).await?;
 //!
 //! // 3. Customise a preset and submit the 8-action deploy sequence.
-//! let builder = templates::long_tail_perp_default()
+//! let builder = templates::long_tail_default()
 //!     .with_asset_name("BANANA-PERP")
 //!     .with_asset_symbol("BANANA");
 //! for action in builder.deploy_sequence() {
@@ -53,6 +53,6 @@ pub mod templates;
 pub use auction::{AuctionBid, AuctionKind, BidReceipt};
 pub use params::{Action, OracleSource, PerpDeployBuilder, SpotDeployBuilder};
 pub use templates::{
-    PRESET_NAMES, btc_perp_standard, eth_perp_standard, long_tail_perp_default, mm_friendly_perp,
+    PRESET_NAMES, btc_standard, eth_standard, long_tail_default, mm_friendly,
     preset_by_name,
 };

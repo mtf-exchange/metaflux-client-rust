@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("found {} markets", markets.len());
     let market = markets
         .iter()
-        .find(|m| m.symbol == "BTC-PERP")
+        .find(|m| m.symbol == "BTC")
         .ok_or("no BTC-PERP market available")?;
     println!("using {}", market.symbol);
 
