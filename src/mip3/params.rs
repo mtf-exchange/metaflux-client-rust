@@ -99,7 +99,7 @@ impl OracleSource {
 pub enum Action {
     /// Register a new perp asset name + decimals (sub-action 1/8).
     PerpRegisterAsset {
-        /// Asset name, e.g. `"ETH-PERP"`.
+        /// Asset name, e.g. `"ETH"`.
         asset_name: String,
         /// Ticker symbol, e.g. `"ETH"`.
         asset_symbol: String,
@@ -165,7 +165,7 @@ pub enum Action {
         base_asset_id: u32,
         /// Quote asset id (typically USDC = 0).
         quote_asset_id: u32,
-        /// Human-readable name, e.g. `"ETH-USDC"`.
+        /// Human-readable name, e.g. `"ETH/USDC"`.
         name: String,
     },
     /// Set taker/maker fees on the spot pair (sub-action 2/4).
@@ -321,7 +321,7 @@ impl Action {
 /// `build_*` constructors to inspect individual sub-actions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PerpDeployBuilder {
-    /// Asset name, e.g. `"ETH-PERP"`.
+    /// Asset name, e.g. `"ETH"`.
     pub asset_name: String,
     /// Asset ticker symbol, e.g. `"ETH"`.
     pub asset_symbol: String,
@@ -618,7 +618,7 @@ pub struct SpotDeployBuilder {
     pub base_asset_id: u32,
     /// Quote asset id (typically USDC = 0).
     pub quote_asset_id: u32,
-    /// Human-readable name, e.g. `"ETH-USDC"`.
+    /// Human-readable name, e.g. `"ETH/USDC"`.
     pub name: String,
     /// Taker fee bps × 10.
     pub taker_fee_bps: i16,
@@ -964,7 +964,7 @@ mod tests {
 
     #[test]
     fn spot_deploy_sequence_has_four_actions() {
-        let b = SpotDeployBuilder::new(2, 0, "ETH-USDC", 10, -5, 1_000).unwrap();
+        let b = SpotDeployBuilder::new(2, 0, "ETH/USDC", 10, -5, 1_000).unwrap();
         let seq = b.deploy_sequence();
         assert_eq!(seq.len(), 4);
         assert_eq!(

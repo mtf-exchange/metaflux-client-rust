@@ -9,15 +9,15 @@
 //!
 //! | Preset                    | Leverage | Taker | Maker  | Min size | Oracle sources |
 //! |---------------------------|---------:|------:|-------:|---------:|---------------:|
-//! | `btc_perp_standard`       |       50 |  4.5  |  -1.0  |   10_000 |   all 10       |
-//! | `eth_perp_standard`       |       50 |  4.5  |  -1.0  |   10_000 |   all 10       |
-//! | `long_tail_perp_default`  |       10 |  8.0  |   0.0  |   10_000 |   8/10 (no CB/Kraken) |
-//! | `mm_friendly_perp`        |       20 |  3.0  |  -2.0  |    1_000 |   all 10       |
+//! | `btc_standard`       |       50 |  4.5  |  -1.0  |   10_000 |   all 10       |
+//! | `eth_standard`       |       50 |  4.5  |  -1.0  |   10_000 |   all 10       |
+//! | `long_tail_default`  |       10 |  8.0  |   0.0  |   10_000 |   8/10 (no CB/Kraken) |
+//! | `mm_friendly`        |       20 |  3.0  |  -2.0  |    1_000 |   all 10       |
 //!
 //! Notes:
 //! - All fee bps are stored ×10 internally (so 4.5 bps is `45`).
 //! - Deployer fee is the MIP-3 builder's take (per ADR-012, capped at 5 bps i.e. `50`).
-//! - The `long_tail_perp_default` excludes Coinbase + Kraken because they
+//! - The `long_tail_default` excludes Coinbase + Kraken because they
 //!   rarely list long-tail / new assets quickly, so their data would be
 //!   stale; better to drop them and let the medianizer use the listed venues.
 
@@ -33,9 +33,9 @@ use crate::mip3::params::{OracleSource, PerpDeployBuilder};
 /// validation bounds defined by [`PerpDeployBuilder::new`]. Marked
 /// `#[must_use]` so callers don't forget to chain `with_*` modifiers.
 #[must_use]
-pub fn btc_perp_standard() -> PerpDeployBuilder {
+pub fn btc_standard() -> PerpDeployBuilder {
     PerpDeployBuilder::new(
-        "BTC-PERP",
+        "BTC",
         "BTC",
         8,
         OracleSource::all().to_vec(),
@@ -53,11 +53,11 @@ pub fn btc_perp_standard() -> PerpDeployBuilder {
 /// Mirrors BTC params; leverage 50, taker 4.5 bps / maker -1 bps.
 ///
 /// # Panics
-/// Never panics — see [`btc_perp_standard`].
+/// Never panics — see [`btc_standard`].
 #[must_use]
-pub fn eth_perp_standard() -> PerpDeployBuilder {
+pub fn eth_standard() -> PerpDeployBuilder {
     PerpDeployBuilder::new(
-        "ETH-PERP",
+        "ETH",
         "ETH",
         8,
         OracleSource::all().to_vec(),
@@ -77,9 +77,9 @@ pub fn eth_perp_standard() -> PerpDeployBuilder {
 /// alts; the remaining 8 sources keep the medianizer well-fed.
 ///
 /// # Panics
-/// Never panics — see [`btc_perp_standard`].
+/// Never panics — see [`btc_standard`].
 #[must_use]
-pub fn long_tail_perp_default() -> PerpDeployBuilder {
+pub fn long_tail_default() -> PerpDeployBuilder {
     let sources: Vec<OracleSource> = OracleSource::all()
         .iter()
         .copied()
@@ -101,9 +101,9 @@ pub fn long_tail_perp_default() -> PerpDeployBuilder {
 /// want to incentivise resting liquidity.
 ///
 /// # Panics
-/// Never panics — see [`btc_perp_standard`].
+/// Never panics — see [`btc_standard`].
 #[must_use]
-pub fn mm_friendly_perp() -> PerpDeployBuilder {
+pub fn mm_friendly() -> PerpDeployBuilder {
     PerpDeployBuilder::new(
         "MM-PERP",
         "MM",
@@ -121,20 +121,20 @@ pub fn mm_friendly_perp() -> PerpDeployBuilder {
 /// All preset names, in stable order. Used by the CLI's `templates list`
 /// subcommand to enumerate available starting points.
 pub const PRESET_NAMES: [&str; 4] = [
-    "btc_perp_standard",
-    "eth_perp_standard",
-    "long_tail_perp_default",
-    "mm_friendly_perp",
+    "btc_standard",
+    "eth_standard",
+    "long_tail_default",
+    "mm_friendly",
 ];
 
 /// Look up a preset by its CLI-name; returns `None` if unknown.
 #[must_use]
 pub fn preset_by_name(name: &str) -> Option<PerpDeployBuilder> {
     match name {
-        "btc_perp_standard" => Some(btc_perp_standard()),
-        "eth_perp_standard" => Some(eth_perp_standard()),
-        "long_tail_perp_default" => Some(long_tail_perp_default()),
-        "mm_friendly_perp" => Some(mm_friendly_perp()),
+        "btc_standard" => Some(btc_standard()),
+        "eth_standard" => Some(eth_standard()),
+        "long_tail_default" => Some(long_tail_default()),
+        "mm_friendly" => Some(mm_friendly()),
         _ => None,
     }
 }
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn btc_preset_has_full_oracle_set() {
-        let b = btc_perp_standard();
+        let b = btc_standard();
         assert_eq!(b.oracle_sources.len(), 10);
         assert_eq!(b.max_leverage, 50);
         assert_eq!(b.taker_fee_bps, 45);
@@ -155,15 +155,15 @@ mod tests {
 
     #[test]
     fn eth_preset_has_full_oracle_set() {
-        let b = eth_perp_standard();
-        assert_eq!(b.asset_name, "ETH-PERP");
+        let b = eth_standard();
+        assert_eq!(b.asset_name, "ETH");
         assert_eq!(b.asset_symbol, "ETH");
         assert_eq!(b.oracle_sources.len(), 10);
     }
 
     #[test]
     fn long_tail_preset_excludes_coinbase_kraken() {
-        let b = long_tail_perp_default();
+        let b = long_tail_default();
         assert_eq!(b.oracle_sources.len(), 8);
         assert!(!b.oracle_sources.contains(&OracleSource::Coinbase));
         assert!(!b.oracle_sources.contains(&OracleSource::Kraken));
@@ -172,7 +172,7 @@ mod tests {
 
     #[test]
     fn mm_friendly_preset_has_negative_maker_fee() {
-        let b = mm_friendly_perp();
+        let b = mm_friendly();
         assert!(b.maker_fee_bps < 0, "rebate expected");
         assert_eq!(b.max_leverage, 20);
         assert_eq!(b.min_order_size, 1_000);
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn preset_chained_with_modifiers_still_validates() {
-        let b = btc_perp_standard().with_asset_name("BTC-PERP-2026");
+        let b = btc_standard().with_asset_name("BTC-PERP-2026");
         b.validate().expect("post-chain validation");
         let seq = b.deploy_sequence();
         // The asset_name must propagate to every sub-action that echoes it.

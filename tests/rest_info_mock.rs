@@ -20,7 +20,7 @@ async fn markets_decodes_array_of_market_meta() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([
             {
                 "market_id": 1,
-                "symbol": "BTC-PERP",
+                "symbol": "BTC",
                 "size_decimals": 6,
                 "px_decimals": 4,
                 "max_leverage": 50,
@@ -29,7 +29,7 @@ async fn markets_decodes_array_of_market_meta() {
             },
             {
                 "market_id": 2,
-                "symbol": "ETH-PERP",
+                "symbol": "ETH",
                 "size_decimals": 5,
                 "px_decimals": 4,
                 "max_leverage": 40,
@@ -43,9 +43,9 @@ async fn markets_decodes_array_of_market_meta() {
     let client = Client::new(server.uri()).unwrap();
     let markets = client.rest().info().markets().await.unwrap();
     assert_eq!(markets.len(), 2);
-    assert_eq!(markets[0].symbol, "BTC-PERP");
+    assert_eq!(markets[0].symbol, "BTC");
     assert_eq!(markets[0].market_id.0, 1);
-    assert_eq!(markets[1].symbol, "ETH-PERP");
+    assert_eq!(markets[1].symbol, "ETH");
     assert_eq!(markets[1].max_leverage, 40);
 }
 

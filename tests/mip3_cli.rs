@@ -26,10 +26,10 @@ fn templates_list_prints_all_four_preset_names() {
         .success();
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     for name in [
-        "btc_perp_standard",
-        "eth_perp_standard",
-        "long_tail_perp_default",
-        "mm_friendly_perp",
+        "btc_standard",
+        "eth_standard",
+        "long_tail_default",
+        "mm_friendly",
     ] {
         assert!(
             stdout.contains(name),
@@ -56,12 +56,12 @@ fn templates_list_json_emits_array() {
 fn templates_show_btc_standard_produces_expected_json() {
     let out = Command::cargo_bin(BIN)
         .unwrap()
-        .args(["--json", "templates", "show", "btc_perp_standard"])
+        .args(["--json", "templates", "show", "btc_standard"])
         .assert()
         .success();
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("parse JSON");
-    assert_eq!(v["asset_name"], "BTC-PERP");
+    assert_eq!(v["asset_name"], "BTC");
     assert_eq!(v["asset_symbol"], "BTC");
     assert_eq!(v["max_leverage"], 50);
     assert_eq!(v["taker_fee_bps"], 45);
@@ -85,7 +85,7 @@ fn perp_dry_run_prints_eight_action_lines() {
         .unwrap()
         .args([
             "perp",
-            "btc_perp_standard",
+            "btc_standard",
             "--name",
             "BTC-PERP-2026",
             "--dry-run",
@@ -125,7 +125,7 @@ fn perp_dry_run_propagates_name_override() {
         .unwrap()
         .args([
             "perp",
-            "eth_perp_standard",
+            "eth_standard",
             "--name",
             "ETH-PERP-VANITY",
             "--dry-run",
@@ -145,7 +145,7 @@ fn perp_dry_run_with_leverage_override_applies() {
         .unwrap()
         .args([
             "perp",
-            "btc_perp_standard",
+            "btc_standard",
             "--name",
             "BTC-CUSTOM",
             "--leverage",
@@ -172,7 +172,7 @@ fn perp_dry_run_rejects_invalid_leverage() {
         .unwrap()
         .args([
             "perp",
-            "btc_perp_standard",
+            "btc_standard",
             "--name",
             "BTC",
             "--leverage",
@@ -194,7 +194,7 @@ fn spot_dry_run_prints_four_action_lines() {
             "--quote-asset",
             "0",
             "--name",
-            "ETH-USDC",
+            "ETH/USDC",
             "--dry-run",
         ])
         .assert()

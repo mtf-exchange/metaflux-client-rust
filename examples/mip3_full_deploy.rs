@@ -4,7 +4,7 @@
 //! 1. Read `MTF_PRIVATE_KEY` and build a wallet.
 //! 2. Bid in the perp-deploy gas auction.
 //! 3. Await our pending deploy credit (2-minute timeout for the demo).
-//! 4. Customise [`metaflux_client::mip3::templates::long_tail_perp_default`]
+//! 4. Customise [`metaflux_client::mip3::templates::long_tail_default`]
 //!    and submit the 8-action deploy sequence.
 //! 5. Print the resulting `asset_id` parsed from the final activate response.
 //!
@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("deploy credit acquired");
 
     // 3. Customise the long-tail preset.
-    let builder = templates::long_tail_perp_default()
+    let builder = templates::long_tail_default()
         .with_asset_name("BANANA-PERP")
         .with_asset_symbol("BANANA");
     builder.validate()?;
