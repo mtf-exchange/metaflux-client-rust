@@ -87,7 +87,7 @@ pub struct FeeSchedule {
     pub referrer_share_bps: u16,
     /// Max additional builder code fee in bps.
     pub builder_cap_bps: u16,
-    /// Max additional HIP-3 deployer fee in bps.
+    /// Max additional MIP-3 deployer fee in bps.
     pub deployer_cap_bps: u16,
     /// Burn fraction of the non-referrer remainder, in bps.
     pub burn_bps: u16,
