@@ -80,6 +80,7 @@ async fn submit_order_envelope_includes_valid_signature() {
         stp_mode: StpMode::CancelOldest,
         reduce_only: false,
         cloid: None,
+        builder: None,
     };
     let resp = client
         .exchange()
@@ -184,6 +185,7 @@ async fn submit_order_rejects_mismatched_owner_locally() {
         stp_mode: StpMode::CancelOldest,
         reduce_only: false,
         cloid: None,
+        builder: None,
     };
     let err = client
         .exchange()
