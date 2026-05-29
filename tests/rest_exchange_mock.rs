@@ -70,7 +70,6 @@ async fn submit_order_envelope_includes_valid_signature() {
     let client = Client::new(server.uri()).unwrap();
     let wallet = sample_wallet();
     let order = Order {
-        oid: OrderId(0),
         owner: wallet.address(),
         market: MarketId(1),
         side: Side::Bid,
@@ -80,7 +79,7 @@ async fn submit_order_envelope_includes_valid_signature() {
         tif: TimeInForce::Gtc,
         stp_mode: StpMode::CancelOldest,
         reduce_only: false,
-        client_order_id: None,
+        coid: None,
     };
     let resp = client
         .exchange()
@@ -139,7 +138,7 @@ async fn cancel_order_round_trips_through_exchange() {
         owner: wallet.address(),
         market: MarketId(1),
         oid: Some(OrderId(1234)),
-        client_order_id: None,
+        coid: None,
     };
     let resp = client
         .exchange()
@@ -175,7 +174,6 @@ async fn submit_order_rejects_mismatched_owner_locally() {
         Wallet::from_hex("1111111111111111111111111111111111111111111111111111111111111111")
             .unwrap();
     let order = Order {
-        oid: OrderId(0),
         owner: other.address(),
         market: MarketId(1),
         side: Side::Bid,
@@ -185,7 +183,7 @@ async fn submit_order_rejects_mismatched_owner_locally() {
         tif: TimeInForce::Gtc,
         stp_mode: StpMode::CancelOldest,
         reduce_only: false,
-        client_order_id: None,
+        coid: None,
     };
     let err = client
         .exchange()

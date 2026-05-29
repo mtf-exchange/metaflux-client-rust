@@ -53,6 +53,5 @@ pub mod templates;
 pub use auction::{AuctionBid, AuctionKind, BidReceipt};
 pub use params::{Action, OracleSource, PerpDeployBuilder, SpotDeployBuilder};
 pub use templates::{
-    PRESET_NAMES, btc_standard, eth_standard, long_tail_default, mm_friendly,
-    preset_by_name,
+    PRESET_NAMES, btc_standard, eth_standard, long_tail_default, mm_friendly, preset_by_name,
 };

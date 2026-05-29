@@ -97,7 +97,7 @@ impl<'a> Exchange<'a> {
         self.post_signed(wallet, action).await
     }
 
-    /// Cancel an order by `oid` or by `client_order_id`.
+    /// Cancel an order by `oid` or by `coid`.
     ///
     /// # Errors
     /// See [`Exchange::submit_order`].
