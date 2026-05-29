@@ -79,7 +79,7 @@ async fn submit_order_envelope_includes_valid_signature() {
         tif: TimeInForce::Gtc,
         stp_mode: StpMode::CancelOldest,
         reduce_only: false,
-        coid: None,
+        cloid: None,
     };
     let resp = client
         .exchange()
@@ -138,7 +138,7 @@ async fn cancel_order_round_trips_through_exchange() {
         owner: wallet.address(),
         market: MarketId(1),
         oid: Some(OrderId(1234)),
-        coid: None,
+        cloid: None,
     };
     let resp = client
         .exchange()
@@ -183,7 +183,7 @@ async fn submit_order_rejects_mismatched_owner_locally() {
         tif: TimeInForce::Gtc,
         stp_mode: StpMode::CancelOldest,
         reduce_only: false,
-        coid: None,
+        cloid: None,
     };
     let err = client
         .exchange()

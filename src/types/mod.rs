@@ -58,25 +58,25 @@ pub struct VaultId(pub u64);
 
 /// Client-supplied order identifier (16 bytes / 128 bits) for idempotency.
 ///
-/// MTF-native uses `coid` as a 32-char hex `0x...` string on the wire so it
+/// MTF-native uses `cloid` as a 32-char hex `0x...` string on the wire so it
 /// survives JS-safe-integer limits. We expose it as a `[u8; 16]` newtype
 /// internally and serialize as hex.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Coid(pub [u8; 16]);
+pub struct Cloid(pub [u8; 16]);
 
-impl Serialize for Coid {
+impl Serialize for Cloid {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(&format!("0x{}", hex::encode(self.0)))
     }
 }
 
-impl<'de> Deserialize<'de> for Coid {
+impl<'de> Deserialize<'de> for Cloid {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let s: String = String::deserialize(d)?;
         let stripped = s.strip_prefix("0x").unwrap_or(&s);
         if stripped.len() != 32 {
             return Err(serde::de::Error::custom(format!(
-                "coid hex must be 32 chars, got {}",
+                "cloid hex must be 32 chars, got {}",
                 stripped.len()
             )));
         }
@@ -108,11 +108,11 @@ mod tests {
     }
 
     #[test]
-    fn coid_round_trips_as_hex_string() {
-        let coid = Coid([0xABu8; 16]);
-        let j = serde_json::to_string(&coid).unwrap();
+    fn cloid_round_trips_as_hex_string() {
+        let cloid = Cloid([0xABu8; 16]);
+        let j = serde_json::to_string(&cloid).unwrap();
         assert_eq!(j, "\"0xabababababababababababababababab\"");
-        let dec: Coid = serde_json::from_str(&j).unwrap();
-        assert_eq!(coid, dec);
+        let dec: Cloid = serde_json::from_str(&j).unwrap();
+        assert_eq!(cloid, dec);
     }
 }
