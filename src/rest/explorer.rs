@@ -31,7 +31,10 @@ pub struct Block {
     pub proposer: String,
     /// Transaction hashes in inclusion order.
     pub tx_hashes: Vec<String>,
-    /// Application state root hash post-block.
+    /// Application state commitment post-block — an opaque 0x-hex 32-byte hash
+    /// (a pure full-state fold of the server's `Exchange` ledger). Does NOT
+    /// encode height/epoch, so an unchanged-state chain reports a constant
+    /// value. Round-tripped verbatim; the client does not recompute or verify it.
     pub app_hash: String,
 }
 
