@@ -320,7 +320,7 @@ impl<'a> Exchange<'a> {
 /// The MTF-native domain is:
 ///
 /// ```text
-///   EIP712Domain(name string, version string, chainId uint256)
+///   EIP712Domain(name string, version string, chainId uint256, verifyingContract address)
 ///   MetaFluxAction(action string, nonce uint64)  -- action is the canonical-JSON action body
 /// ```
 ///
@@ -333,20 +333,24 @@ struct ActionSignedDigest<'a> {
 
 impl Eip712 for ActionSignedDigest<'_> {
     fn domain_separator(&self) -> [u8; 32] {
-        // EIP712Domain typeHash and the encoded domain struct.
+        // EIP712Domain typeHash and the encoded domain struct. 5-field form,
+        // byte-for-byte mirroring the server `EipDomain::separator()` in
+        // metaflux/crates/core-state/src/signing.rs.
         //
-        // typeHash = keccak256("EIP712Domain(string name,string version,uint256 chainId)")
-        // domain   = keccak256( typeHash || keccak256(name) || keccak256(version) || chainId )
+        // typeHash = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")
+        // domain   = keccak256( typeHash || keccak256(name) || keccak256(version) || chainId || verifyingContract )
         let name = "MetaFlux";
         let version = "1";
         let chain_id: u64 = MTF_CHAIN_ID;
 
-        let type_hash =
-            keccak("EIP712Domain(string name,string version,uint256 chainId)".as_bytes());
+        let type_hash = keccak(
+            "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
+                .as_bytes(),
+        );
         let name_hash = keccak(name.as_bytes());
         let version_hash = keccak(version.as_bytes());
 
-        let mut buf = Vec::with_capacity(32 * 4);
+        let mut buf = Vec::with_capacity(32 * 5);
         buf.extend_from_slice(&type_hash);
         buf.extend_from_slice(&name_hash);
         buf.extend_from_slice(&version_hash);
@@ -354,6 +358,11 @@ impl Eip712 for ActionSignedDigest<'_> {
         let mut chain_be = [0u8; 32];
         chain_be[24..].copy_from_slice(&chain_id.to_be_bytes());
         buf.extend_from_slice(&chain_be);
+        // verifyingContract = 20-byte zero address (L1 actions), left-padded to 32.
+        let verifying_contract = [0u8; 20];
+        let mut verifying_padded = [0u8; 32];
+        verifying_padded[12..].copy_from_slice(&verifying_contract);
+        buf.extend_from_slice(&verifying_padded);
         keccak(&buf)
     }
 
@@ -456,5 +465,57 @@ mod tests {
             nonce: 1,
         };
         assert_ne!(a.struct_hash(), b.struct_hash());
+    }
+
+    /// Cross-impl known-answer vector. Pins the SDK's EIP-712 domain (now
+    /// 5-field) + digest FORMULA against the server's committed value
+    /// (`metaflux/crates/core-state/src/signing.rs::native_action_kat_vector`).
+    ///
+    /// We hash the LITERAL action_json bytes via the keccak primitives directly
+    /// — NOT through `ActionSignedDigest`, which serializes a `serde_json::Value`
+    /// and may reorder keys. This isolates the test to the domain + composition,
+    /// the only thing the SDK fix touched.
+    #[test]
+    fn native_action_kat_matches_server() {
+        // EXACT bytes the server hashed in its KAT vector.
+        let action_json = br#"{"type":"submit_order","order":{"owner":"0x000000000000000000000000000000000000beef","market":1,"side":"bid","kind":"limit","size":1000,"limit_px":5000000000000,"tif":"gtc","stp_mode":"cancel_oldest","reduce_only":false}}"#;
+        let nonce: u64 = 1_700_000_000_000;
+
+        // Reuse the SDK's fixed 5-field domain separator.
+        let domain = ActionSignedDigest {
+            action: &json!({}),
+            nonce: 0,
+        }
+        .domain_separator();
+
+        // struct_hash = keccak( typeHash || keccak(action_json) || nonce_be32 )
+        let type_hash = keccak("MetaFluxAction(string action,uint64 nonce)".as_bytes());
+        let action_hash = keccak(action_json);
+        let mut nonce_be = [0u8; 32];
+        nonce_be[24..].copy_from_slice(&nonce.to_be_bytes());
+        let mut sh_buf = Vec::with_capacity(32 * 3);
+        sh_buf.extend_from_slice(&type_hash);
+        sh_buf.extend_from_slice(&action_hash);
+        sh_buf.extend_from_slice(&nonce_be);
+        let struct_hash = keccak(&sh_buf);
+
+        // digest = keccak( 0x19 0x01 || domain || struct_hash )
+        let mut d_buf = Vec::with_capacity(2 + 64);
+        d_buf.extend_from_slice(&[0x19, 0x01]);
+        d_buf.extend_from_slice(&domain);
+        d_buf.extend_from_slice(&struct_hash);
+        let digest = keccak(&d_buf);
+
+        // Server's committed value (core-state signing::native_action_kat_vector):
+        // bc1fa314ad46f9aa0b146623144ef6f7efff7d43a8998d7bf63ef018c21352f2
+        let expected: [u8; 32] = [
+            0xbc, 0x1f, 0xa3, 0x14, 0xad, 0x46, 0xf9, 0xaa, 0x0b, 0x14, 0x66, 0x23, 0x14, 0x4e,
+            0xf6, 0xf7, 0xef, 0xff, 0x7d, 0x43, 0xa8, 0x99, 0x8d, 0x7b, 0xf6, 0x3e, 0xf0, 0x18,
+            0xc2, 0x13, 0x52, 0xf2,
+        ];
+        assert_eq!(
+            digest, expected,
+            "SDK digest must equal server KAT bc1fa3..52f2; got {digest:02x?}"
+        );
     }
 }
