@@ -311,7 +311,11 @@ impl<'a> Exchange<'a> {
             nonce,
             signature: sig.to_hex(),
         };
-        self.client.post_json("/exchange", &envelope).await
+        // The node's MTF-native signed-action front door. The `{action, nonce,
+        // signature}` envelope + EIP-712-over-canonical-JSON digest match the
+        // server's `handle_exchange_native` (verified by the cross-impl KAT in
+        // this module + `core-state/src/signing.rs`).
+        self.client.post_json("/exchange/native", &envelope).await
     }
 }
 
