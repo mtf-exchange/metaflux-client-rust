@@ -62,7 +62,7 @@ async fn submit_order_envelope_includes_valid_signature() {
         }),
     };
     Mock::given(method("POST"))
-        .and(path("/exchange"))
+        .and(path("/exchange/native"))
         .respond_with(captor.clone())
         .mount(&server)
         .await;
@@ -128,7 +128,7 @@ async fn cancel_order_round_trips_through_exchange() {
         response: json!({ "cancelled": true }),
     };
     Mock::given(method("POST"))
-        .and(path("/exchange"))
+        .and(path("/exchange/native"))
         .respond_with(captor.clone())
         .mount(&server)
         .await;
@@ -164,7 +164,7 @@ async fn cancel_order_round_trips_through_exchange() {
 async fn submit_order_rejects_mismatched_owner_locally() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path("/exchange"))
+        .and(path("/exchange/native"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
         .mount(&server)
         .await;
