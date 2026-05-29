@@ -35,7 +35,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Build a tiny resting bid 10% below mark — won't fill, easy to cancel.
     let order = Order {
-        oid: metaflux_client::types::OrderId(0),
         owner: wallet.address(),
         market: MarketId(market.market_id.0),
         side: Side::Bid,
@@ -45,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tif: TimeInForce::Gtc,
         stp_mode: StpMode::CancelOldest,
         reduce_only: false,
-        client_order_id: None,
+        coid: None,
     };
     let resp = client.exchange().submit_order(&wallet, &order).await?;
     println!("submitted: {resp:?}");

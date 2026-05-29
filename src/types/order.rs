@@ -4,7 +4,6 @@
 //!
 //! ```json
 //! {
-//!   "oid":              0,
 //!   "owner":            "0x...",
 //!   "market":           1,
 //!   "side":             "bid",
@@ -14,16 +13,19 @@
 //!   "tif":              "gtc",
 //!   "stp_mode":         "cancel_oldest",
 //!   "reduce_only":      false,
-//!   "client_order_id":  null
+//!   "coid":             null
 //! }
 //! ```
+//!
+//! The submit shape carries **no `oid`** — the order id is assigned by the node
+//! and returned in [`OrderResponse`]. A client never declares it.
 //!
 //! Numerics are plain integers (u64 / i64). Sizes / prices use **fixed-point
 //! tick units** — the SDK does not adopt the HL decimal-string convention.
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{ClientOrderId, MarketId, OrderId};
+use crate::types::{Coid, MarketId, OrderId};
 use crate::wallet::Address;
 
 /// Side of an order — buyer (bid) or seller (ask).
@@ -82,8 +84,6 @@ pub enum StpMode {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Order {
-    /// Server-assigned order id. Send 0 on submit; the node fills it in.
-    pub oid: OrderId,
     /// 20-byte EVM address that owns the order.
     pub owner: Address,
     /// Target market id.
@@ -104,10 +104,10 @@ pub struct Order {
     pub reduce_only: bool,
     /// Optional client-supplied identifier for idempotency.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_order_id: Option<ClientOrderId>,
+    pub coid: Option<Coid>,
 }
 
-/// Cancel intent — by `oid` or by `client_order_id`.
+/// Cancel intent — by `oid` or by `coid`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CancelOrder {
@@ -118,9 +118,9 @@ pub struct CancelOrder {
     /// Optional server `oid`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oid: Option<OrderId>,
-    /// Optional client_order_id (mutually exclusive with `oid`).
+    /// Optional coid (mutually exclusive with `oid`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub client_order_id: Option<ClientOrderId>,
+    pub coid: Option<Coid>,
 }
 
 /// Response envelope from `/exchange` for an order submission.
@@ -143,7 +143,6 @@ mod tests {
 
     fn sample_order() -> Order {
         Order {
-            oid: OrderId(0),
             owner: Address::ZERO,
             market: MarketId(1),
             side: Side::Bid,
@@ -153,7 +152,7 @@ mod tests {
             tif: TimeInForce::Gtc,
             stp_mode: StpMode::CancelOldest,
             reduce_only: false,
-            client_order_id: None,
+            coid: None,
         }
     }
 
@@ -208,10 +207,22 @@ mod tests {
     }
 
     #[test]
-    fn order_omits_none_client_order_id() {
+    fn order_omits_none_coid() {
         let o = sample_order();
         let j = serde_json::to_value(&o).unwrap();
-        assert!(j.get("client_order_id").is_none());
+        assert!(j.get("coid").is_none());
+    }
+
+    /// A submitted order must NOT carry an `oid` — the node assigns it and
+    /// returns it in `OrderResponse`. A client never declares the order id.
+    #[test]
+    fn order_submit_shape_has_no_oid() {
+        let o = sample_order();
+        let j = serde_json::to_value(&o).unwrap();
+        assert!(
+            j.get("oid").is_none(),
+            "submit Order must not serialize oid"
+        );
     }
 
     #[test]
@@ -220,10 +231,10 @@ mod tests {
             owner: Address::ZERO,
             market: MarketId(1),
             oid: Some(OrderId(42)),
-            client_order_id: None,
+            coid: None,
         };
         let j = serde_json::to_value(&c).unwrap();
         assert!(j.get("oid").is_some());
-        assert!(j.get("client_order_id").is_none());
+        assert!(j.get("coid").is_none());
     }
 }
