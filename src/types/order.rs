@@ -13,7 +13,8 @@
 //!   "tif":              "gtc",
 //!   "stp_mode":         "cancel_oldest",
 //!   "reduce_only":      false,
-//!   "cloid":             null
+//!   "cloid":             null,
+//!   "builder":          {"fee": 5, "user": "0x..."}
 //! }
 //! ```
 //!
@@ -105,6 +106,19 @@ pub struct Order {
     /// Optional client-supplied identifier for idempotency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloid: Option<Cloid>,
+    /// Optional builder-code fee attribution (RFC-009 Stage 2b).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub builder: Option<Builder>,
+}
+
+/// Builder-code fee attribution riding inside a signed order (RFC-009 Stage 2b).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Builder {
+    /// Builder fee in basis points (server enforces ≤ 8).
+    pub fee: u16,
+    /// Address credited with the builder fee.
+    pub user: Address,
 }
 
 /// Cancel intent — by `oid` or by `cloid`.
@@ -153,6 +167,7 @@ mod tests {
             stp_mode: StpMode::CancelOldest,
             reduce_only: false,
             cloid: None,
+            builder: None,
         }
     }
 
@@ -211,6 +226,28 @@ mod tests {
         let o = sample_order();
         let j = serde_json::to_value(&o).unwrap();
         assert!(j.get("cloid").is_none());
+    }
+
+    #[test]
+    fn order_omits_none_builder() {
+        let o = sample_order();
+        let j = serde_json::to_value(&o).unwrap();
+        assert!(j.get("builder").is_none());
+    }
+
+    #[test]
+    fn order_serializes_builder_object() {
+        let mut o = sample_order();
+        let user = Address::from_hex("0x00000000000000000000000000000000000000ff").unwrap();
+        o.builder = Some(Builder { fee: 5, user });
+        let j = serde_json::to_value(&o).unwrap();
+        let b = j.get("builder").expect("builder key present");
+        assert_eq!(b["fee"], serde_json::json!(5));
+        assert!(b["fee"].is_number(), "fee must be a plain JSON number");
+        assert_eq!(
+            b["user"],
+            serde_json::json!("0x00000000000000000000000000000000000000ff")
+        );
     }
 
     /// A submitted order must NOT carry an `oid` — the node assigns it and
