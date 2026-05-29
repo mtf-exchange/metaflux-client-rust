@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tif: TimeInForce::Gtc,
         stp_mode: StpMode::CancelOldest,
         reduce_only: false,
-        coid: None,
+        cloid: None,
     };
     let resp = client.exchange().submit_order(&wallet, &order).await?;
     println!("submitted: {resp:?}");

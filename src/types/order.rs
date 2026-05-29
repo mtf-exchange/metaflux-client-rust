@@ -13,7 +13,7 @@
 //!   "tif":              "gtc",
 //!   "stp_mode":         "cancel_oldest",
 //!   "reduce_only":      false,
-//!   "coid":             null
+//!   "cloid":             null
 //! }
 //! ```
 //!
@@ -25,7 +25,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::types::{Coid, MarketId, OrderId};
+use crate::types::{Cloid, MarketId, OrderId};
 use crate::wallet::Address;
 
 /// Side of an order — buyer (bid) or seller (ask).
@@ -104,10 +104,10 @@ pub struct Order {
     pub reduce_only: bool,
     /// Optional client-supplied identifier for idempotency.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub coid: Option<Coid>,
+    pub cloid: Option<Cloid>,
 }
 
-/// Cancel intent — by `oid` or by `coid`.
+/// Cancel intent — by `oid` or by `cloid`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CancelOrder {
@@ -118,9 +118,9 @@ pub struct CancelOrder {
     /// Optional server `oid`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oid: Option<OrderId>,
-    /// Optional coid (mutually exclusive with `oid`).
+    /// Optional cloid (mutually exclusive with `oid`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub coid: Option<Coid>,
+    pub cloid: Option<Cloid>,
 }
 
 /// Response envelope from `/exchange` for an order submission.
@@ -152,7 +152,7 @@ mod tests {
             tif: TimeInForce::Gtc,
             stp_mode: StpMode::CancelOldest,
             reduce_only: false,
-            coid: None,
+            cloid: None,
         }
     }
 
@@ -207,10 +207,10 @@ mod tests {
     }
 
     #[test]
-    fn order_omits_none_coid() {
+    fn order_omits_none_cloid() {
         let o = sample_order();
         let j = serde_json::to_value(&o).unwrap();
-        assert!(j.get("coid").is_none());
+        assert!(j.get("cloid").is_none());
     }
 
     /// A submitted order must NOT carry an `oid` — the node assigns it and
@@ -231,10 +231,10 @@ mod tests {
             owner: Address::ZERO,
             market: MarketId(1),
             oid: Some(OrderId(42)),
-            coid: None,
+            cloid: None,
         };
         let j = serde_json::to_value(&c).unwrap();
         assert!(j.get("oid").is_some());
-        assert!(j.get("coid").is_none());
+        assert!(j.get("cloid").is_none());
     }
 }
