@@ -300,7 +300,7 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         action: Value,
     ) -> Result<R, ClientError> {
-        let nonce = current_unix_ms();
+        let nonce = next_nonce();
         let signed = ActionSignedDigest {
             action: &action,
             nonce,
@@ -311,11 +311,11 @@ impl<'a> Exchange<'a> {
             nonce,
             signature: sig.to_hex(),
         };
-        // The node's MTF-native signed-action front door. The `{action, nonce,
-        // signature}` envelope + EIP-712-over-canonical-JSON digest match the
-        // server's `handle_exchange_native` (verified by the cross-impl KAT in
+        // `/exchange` is the node's MTF-native signed-action front door. The
+        // `{action, nonce, signature}` envelope + EIP-712-over-canonical-JSON
+        // digest match the server's handler byte-for-byte (cross-impl KAT in
         // this module + `core-state/src/signing.rs`).
-        self.client.post_json("/exchange/native", &envelope).await
+        self.client.post_json("/exchange", &envelope).await
     }
 }
 
@@ -397,15 +397,31 @@ fn keccak(input: &[u8]) -> [u8; 32] {
 }
 
 /// Current unix-time in milliseconds.
-///
-/// Used as the EIP-712 nonce. The MTF gateway enforces that consecutive
-/// signed actions from the same address have strictly monotonic nonces.
 fn current_unix_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
+}
+
+/// Strictly-increasing EIP-712 nonce — at least the current unix-ms, but bumped
+/// past the last issued value so a burst of actions within one millisecond gets
+/// distinct nonces. The server's per-account window (`check_and_advance_nonce`)
+/// tolerates out-of-order delivery within 64 but rejects *collisions*, so a raw
+/// `unix_ms` would drop the 2nd-and-later order in a same-ms burst.
+fn next_nonce() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NONCE_CLOCK: AtomicU64 = AtomicU64::new(0);
+    let now = current_unix_ms();
+    let mut prev = NONCE_CLOCK.load(Ordering::Relaxed);
+    loop {
+        let next = now.max(prev.saturating_add(1));
+        match NONCE_CLOCK.compare_exchange_weak(prev, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return next,
+            Err(observed) => prev = observed,
+        }
+    }
 }
 
 /// Test-only escape hatch: compute the EIP-712 digest the SDK would sign
