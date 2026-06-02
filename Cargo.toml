@@ -19,7 +19,7 @@ categories = ["api-bindings", "cryptography::cryptocurrencies"]
 
 [features]
 default = ["cli"]
-grpc = ["dep:tonic", "dep:prost"]
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-build"]
 # Compiles the `mip3-deploy` CLI binary. On by default so `cargo install
 # metaflux-client` ships the binary; library-only users can opt out via
 # `default-features = false`.

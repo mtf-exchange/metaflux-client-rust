@@ -161,6 +161,91 @@ async fn error_envelope_surfaces_as_protocol_error() {
 }
 
 #[tokio::test]
+async fn node_info_decodes() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "chain_id": 998,
+            "epoch": 4,
+            "height": 1_234_567u64,
+            "peers_connected": 12
+        })))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let n = client.rest().info().node_info().await.unwrap();
+    assert_eq!(n.chain_id, 998);
+    assert_eq!(n.height, 1_234_567);
+    assert_eq!(n.peers_connected, 12);
+}
+
+#[tokio::test]
+async fn account_state_decodes_by_account_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "account_id": 7,
+            "position_count": 2,
+            "balance_base": 0,
+            "balance_quote": 10_000_000i64
+        })))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let a = client.rest().info().account_state(7).await.unwrap();
+    assert_eq!(a.account_id, 7);
+    assert_eq!(a.position_count, 2);
+    assert_eq!(a.balance_quote, 10_000_000);
+}
+
+#[tokio::test]
+async fn market_info_decodes_mark_px_as_string() {
+    let server = MockServer::start().await;
+    // The node renders `mark_px` as a decimal string (precision past 2^53).
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "market_id": 1,
+            "mark_px": "5000000000000",
+            "last_trade_ms": 1_700_000_000_000u64,
+            "oi": 9_999_999_999_999_999u64
+        })))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let m = client.rest().info().market_info(MarketId(1)).await.unwrap();
+    assert_eq!(m.market_id, 1);
+    assert_eq!(m.mark_px, "5000000000000");
+    assert_eq!(m.oi, 9_999_999_999_999_999);
+}
+
+#[tokio::test]
+async fn staking_state_decodes_by_account_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "address": "0x0000000000000000000000000000000000000003",
+            "total_staked": 0,
+            "pending_rewards": 0,
+            "delegations": [],
+            "unbonding": []
+        })))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let s = client.rest().info().staking_state(42).await.unwrap();
+    assert_eq!(s.total_staked, 0);
+    assert!(s.delegations.is_empty());
+}
+
+#[tokio::test]
 async fn l2_book_decodes_levels() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
