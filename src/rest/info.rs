@@ -2,6 +2,18 @@
 //!
 //! No signing required. Discriminator is `type` per the MTF-native handler
 //! in `crates/api-node/src/rest/info.rs`; payload fields are snake_case.
+//!
+//! Two tiers of query:
+//!
+//! - **Node-native** ([`Info::node_info`], [`Info::account_state`],
+//!   [`Info::market_info`], [`Info::vault_state`], [`Info::staking_state`],
+//!   [`Info::fee_schedule`]) — 1:1 with the node's `handle_info` dispatch.
+//!   Keyed by internal numeric ids (`account_id` / `market_id` / `vault_id`).
+//! - **Gateway-surface** ([`Info::markets`], [`Info::l2_book`],
+//!   [`Info::user_state`], [`Info::pm_state`], [`Info::rfq_state`]) — richer
+//!   `address`-keyed / aggregate shapes served by the gateway's MTF-native
+//!   adapter (which translates `0x…` ↔ internal ids). Use these when pointed
+//!   at a gateway URL rather than a bare node.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -139,6 +151,62 @@ pub struct UnbondingEntry {
     pub claim_at_ms: u64,
 }
 
+// ── node-native `/info` shapes ──────────────────────────────────────────────
+//
+// The handlers in `crates/api-node/src/rest/info.rs` are the source of truth
+// for what the NODE serves directly. They are keyed by internal numeric ids
+// (`account_id`, `market_id`, `vault_id`) — the gateway's HL-compat layer is
+// what translates `user: 0x…` ↔ `account_id`. The richer `address`-keyed
+// methods above target that gateway surface; the methods below hit the node
+// 1:1 so a `Client` pointed straight at a node works today.
+
+/// `node_info` response — chain identity + sync state. No request parameters.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct NodeInfo {
+    /// EVM chain id this node is pinned to (the EIP-712 domain chain id).
+    pub chain_id: u64,
+    /// Current consensus epoch.
+    pub epoch: u64,
+    /// Committed block height.
+    pub height: u64,
+    /// Number of connected gossip peers.
+    pub peers_connected: u32,
+}
+
+/// `account_state` response — account snapshot keyed by internal `account_id`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AccountState {
+    /// Echo of the requested account id.
+    pub account_id: u64,
+    /// Number of asset clearinghouses where the account holds a non-zero net
+    /// position.
+    pub position_count: u32,
+    /// Native base balance (always 0 today — MTF has no single base balance).
+    pub balance_base: i64,
+    /// Quote collateral (`cross_account_value`), truncated toward zero.
+    pub balance_quote: i64,
+}
+
+/// `market_info` response — single-market snapshot keyed by `market_id`.
+///
+/// `mark_px` is a decimal STRING: the node emits the raw fixed-point magnitude
+/// (which can exceed JS safe-int range) as a string so no precision is lost on
+/// the wire. `oi` (open interest, u128) is a JSON number today.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MarketInfo {
+    /// Echo of the requested market id.
+    pub market_id: u32,
+    /// Mark price as a decimal string of the raw fixed-point magnitude.
+    pub mark_px: String,
+    /// Last trade timestamp (unix ms); 0 if no trades.
+    pub last_trade_ms: u64,
+    /// Open interest in fixed-point units.
+    pub oi: u128,
+}
+
 impl<'a> Info<'a> {
     /// List all markets and their metadata.
     ///
@@ -188,15 +256,62 @@ impl<'a> Info<'a> {
             .await
     }
 
-    /// Fetch the staking state for an address.
+    /// Fetch the staking state for an account.
+    ///
+    /// The node keys this query by internal `account_id` (the gateway HL-compat
+    /// layer translates `user: 0x…` → `account_id`). Mirrors
+    /// `handle_staking_state` in `crates/api-node/src/rest/info.rs`.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn staking_state(&self, addr: Address) -> Result<StakingState, ClientError> {
+    pub async fn staking_state(&self, account_id: u64) -> Result<StakingState, ClientError> {
         self.client
             .post_json(
                 "/info",
-                &json!({ "type": "staking_state", "address": addr }),
+                &json!({ "type": "staking_state", "account_id": account_id }),
+            )
+            .await
+    }
+
+    // ── node-native queries (keyed by internal numeric ids) ──
+
+    /// `node_info` — chain identity + sync state. No parameters.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn node_info(&self) -> Result<NodeInfo, ClientError> {
+        self.client
+            .post_json("/info", &json!({ "type": "node_info" }))
+            .await
+    }
+
+    /// `account_state` — account snapshot keyed by internal `account_id`.
+    ///
+    /// This is the node-native counterpart to [`Info::user_state`] (which
+    /// targets the gateway's `address`-keyed surface).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn account_state(&self, account_id: u64) -> Result<AccountState, ClientError> {
+        self.client
+            .post_json(
+                "/info",
+                &json!({ "type": "account_state", "account_id": account_id }),
+            )
+            .await
+    }
+
+    /// `market_info` — single-market snapshot keyed by `market_id`.
+    ///
+    /// Node-native counterpart to the gateway's `markets` / `l2_book` surface.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn market_info(&self, market: MarketId) -> Result<MarketInfo, ClientError> {
+        self.client
+            .post_json(
+                "/info",
+                &json!({ "type": "market_info", "market_id": market.0 }),
             )
             .await
     }
@@ -211,13 +326,13 @@ impl<'a> Info<'a> {
             .await
     }
 
-    /// List active delegations for an address. Convenience wrapper that
+    /// List active delegations for an account. Convenience wrapper that
     /// extracts the `delegations` field from [`Info::staking_state`].
     ///
     /// # Errors
     /// See [`Info::staking_state`].
-    pub async fn delegations(&self, addr: Address) -> Result<Vec<Delegation>, ClientError> {
-        Ok(self.staking_state(addr).await?.delegations)
+    pub async fn delegations(&self, account_id: u64) -> Result<Vec<Delegation>, ClientError> {
+        Ok(self.staking_state(account_id).await?.delegations)
     }
 
     /// Fetch the portfolio-margin state for an address.
@@ -270,6 +385,46 @@ mod tests {
         let j = serde_json::to_string(&m).unwrap();
         let dec: MarketMeta = serde_json::from_str(&j).unwrap();
         assert_eq!(m, dec);
+    }
+
+    #[test]
+    fn node_info_round_trips() {
+        let n = NodeInfo {
+            chain_id: 998,
+            epoch: 1,
+            height: 42,
+            peers_connected: 7,
+        };
+        let dec: NodeInfo = serde_json::from_str(&serde_json::to_string(&n).unwrap()).unwrap();
+        assert_eq!(n, dec);
+    }
+
+    #[test]
+    fn market_info_mark_px_is_a_string_on_the_wire() {
+        let m = MarketInfo {
+            market_id: 1,
+            mark_px: "5000000000000".into(),
+            last_trade_ms: 0,
+            oi: 0,
+        };
+        let j = serde_json::to_value(&m).unwrap();
+        assert!(
+            j["mark_px"].is_string(),
+            "mark_px must serialize as a string"
+        );
+        assert!(j["oi"].is_number(), "oi must serialize as a number");
+    }
+
+    #[test]
+    fn account_state_round_trips() {
+        let a = AccountState {
+            account_id: 7,
+            position_count: 3,
+            balance_base: 0,
+            balance_quote: -123,
+        };
+        let dec: AccountState = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        assert_eq!(a, dec);
     }
 
     #[test]
