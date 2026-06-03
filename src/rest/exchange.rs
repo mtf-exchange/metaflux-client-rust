@@ -46,18 +46,32 @@ use crate::types::{
 };
 use crate::wallet::{Eip712, Signature, Wallet};
 
-/// MTF EIP-712 domain chain id.
+/// MTF EIP-712 domain chain ids.
 ///
-/// Pinned to `998` provisionally — the real value lands when the L1 genesis
-/// is set in S10. Once configurable chain ids land we'll switch this to a
-/// builder field on [`Exchange`] (see TODO in the exchange module).
-pub const MTF_CHAIN_ID: u64 = 998;
+/// MetaFlux runs its own verified-unregistered chain ids, distinct from
+/// Hyperliquid's testnet `998` (retired here to avoid a competitor
+/// collision — signing with `998` would land in HL's domain, not ours):
+///
+/// - **mainnet** `8964` (`0x2304`)
+/// - **testnet** `114514` (`0x1bf52`) — the live devnet/testnet runs this,
+///   so it is the SDK's default signing target today.
+///
+/// The chain id rides in the EIP-712 domain separator; the node enforces
+/// the same value, so a mismatch makes every `POST /exchange` return 401.
+pub const MTF_MAINNET_CHAIN_ID: u64 = 8964;
+
+/// MTF testnet/devnet EIP-712 domain chain id. See [`MTF_MAINNET_CHAIN_ID`].
+pub const MTF_TESTNET_CHAIN_ID: u64 = 114514;
+
+/// Default MTF EIP-712 domain chain id. Aliases the testnet id, since the
+/// live devnet/testnet is what the SDK signs against today.
+pub const MTF_CHAIN_ID: u64 = MTF_TESTNET_CHAIN_ID;
 
 /// `/exchange` namespace handle. Constructed via [`RestClient::exchange`].
 ///
-/// Uses the global [`MTF_CHAIN_ID`] constant for EIP-712 domain
-/// construction. Configurable chain ids will arrive once testnet / devnet
-/// chain ids are pinned (post-S10).
+/// Uses the global [`MTF_CHAIN_ID`] constant (= testnet [`MTF_TESTNET_CHAIN_ID`])
+/// for EIP-712 domain construction. A builder field for selecting
+/// [`MTF_MAINNET_CHAIN_ID`] will arrive when mainnet goes live.
 #[derive(Debug)]
 pub struct Exchange<'a> {
     pub(crate) client: &'a RestClient,
@@ -526,16 +540,17 @@ mod tests {
         d_buf.extend_from_slice(&struct_hash);
         let digest = keccak(&d_buf);
 
-        // Server's committed value (core-state signing::native_action_kat_vector):
-        // bc1fa314ad46f9aa0b146623144ef6f7efff7d43a8998d7bf63ef018c21352f2
+        // Server's committed value (core-state signing::native_action_kat_vector),
+        // recomputed for the MTF testnet chain id 114514 (MTF_CHAIN_ID):
+        // f7aa1087f79b30fb3f13a190636d32b32720d5984191992d707e2afbca716e0d
         let expected: [u8; 32] = [
-            0xbc, 0x1f, 0xa3, 0x14, 0xad, 0x46, 0xf9, 0xaa, 0x0b, 0x14, 0x66, 0x23, 0x14, 0x4e,
-            0xf6, 0xf7, 0xef, 0xff, 0x7d, 0x43, 0xa8, 0x99, 0x8d, 0x7b, 0xf6, 0x3e, 0xf0, 0x18,
-            0xc2, 0x13, 0x52, 0xf2,
+            0xf7, 0xaa, 0x10, 0x87, 0xf7, 0x9b, 0x30, 0xfb, 0x3f, 0x13, 0xa1, 0x90, 0x63, 0x6d,
+            0x32, 0xb3, 0x27, 0x20, 0xd5, 0x98, 0x41, 0x91, 0x99, 0x2d, 0x70, 0x7e, 0x2a, 0xfb,
+            0xca, 0x71, 0x6e, 0x0d,
         ];
         assert_eq!(
             digest, expected,
-            "SDK digest must equal server KAT bc1fa3..52f2; got {digest:02x?}"
+            "SDK digest must equal server KAT f7aa10..6e0d; got {digest:02x?}"
         );
     }
 }

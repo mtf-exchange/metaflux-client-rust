@@ -411,13 +411,15 @@ mod tests {
     }
 
     #[test]
-    fn order_response_decodes_array_of_statuses() {
-        // Exact shape from api/rest/exchange.md (multi-order Order response).
-        let j = serde_json::json!([
+    fn order_response_decodes_statuses_object() {
+        // Real server shape: ExchangeResponse `{ statuses: [<per-order union>] }`
+        // (api/rest/exchange.md) — an object with a `statuses` array, NOT a bare
+        // array. The order path returns exactly this.
+        let j = serde_json::json!({ "statuses": [
             { "resting": { "oid": 12345, "cloid": "0x000102030405060708090a0b0c0d0e0f" } },
             { "filled":  { "total_sz": "100000000", "avg_px": "10050000000", "oid": 12346 } },
             { "error":   "size below market minimum" }
-        ]);
+        ]});
         let resp: OrderResponse = serde_json::from_value(j).unwrap();
         assert_eq!(resp.statuses.len(), 3);
         assert_eq!(resp.first().and_then(OrderStatus::oid), Some(OrderId(12345)));

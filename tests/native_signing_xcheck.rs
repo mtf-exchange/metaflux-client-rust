@@ -8,15 +8,16 @@
 //! It mirrors the server's end-to-end reference flow
 //! (`metaflux/crates/api-node/tests/native_order_e2e.rs` and
 //! `crates/devnet-demo/src/main.rs`): the **fixed key `[0x42; 32]`**, the
-//! chain-998 MTF domain, and the EXACT `order_json` field shape
+//! chain-114514 (MTF testnet) MTF domain, and the EXACT `order_json` field shape
 //! (`owner, market, side, kind, size, limit_px, tif, stp_mode, reduce_only`).
 //!
 //! Three independent angles, each of which would fail on a digest/domain drift:
 //!
 //! 1. `digest_formula_matches_server_kat` — recompute the digest over the
 //!    server's exact committed KAT bytes and assert it equals the server's
-//!    committed value `bc1fa3…52f2` (printed by the server's
-//!    `signing::tests::native_action_kat_vector`). Pins the FORMULA.
+//!    committed value `f7aa10…6e0d` (printed by the server's
+//!    `signing::tests::native_action_kat_vector` for MTF testnet chain
+//!    114514). Pins the FORMULA.
 //!
 //! 2. `fixed_key_sign_recover_over_literal_order_json` — sign the digest over
 //!    the literal `order_json` bytes with the fixed key and recover with the
@@ -161,32 +162,34 @@ fn recover(digest: &[u8; 32], r: &[u8; 32], s: &[u8; 32], v: u8) -> [u8; 20] {
 
 /// (1) The SDK's digest formula must reproduce the server's committed KAT.
 ///
-/// The server's `signing::tests::native_action_kat_vector` prints (chain=998,
-/// nonce=1_700_000_000_000) digest = `bc1fa3…52f2`. We recompute it here over
-/// the server's EXACT committed action bytes. A drift in the domain (5-field),
-/// the `MetaFluxAction(string action,uint64 nonce)` typehash, or the
-/// `0x1901 || domain || struct` envelope would change this.
+/// The server's `signing::tests::native_action_kat_vector` prints
+/// (chain=114514 MTF testnet, nonce=1_700_000_000_000) digest =
+/// `f7aa10…6e0d`. We recompute it here over the server's EXACT committed
+/// action bytes. A drift in the domain (5-field), the
+/// `MetaFluxAction(string action,uint64 nonce)` typehash, the chain id, or
+/// the `0x1901 || domain || struct` envelope would change this.
 #[test]
 fn digest_formula_matches_server_kat() {
     let action_json = br#"{"type":"submit_order","order":{"owner":"0x000000000000000000000000000000000000beef","market":1,"side":"bid","kind":"limit","size":1000,"limit_px":5000000000000,"tif":"gtc","stp_mode":"cancel_oldest","reduce_only":false}}"#;
     let nonce: u64 = 1_700_000_000_000;
-    let digest = native_action_digest(998, action_json, nonce);
+    let digest = native_action_digest(MTF_CHAIN_ID, action_json, nonce);
 
-    // Server-committed value (core-state signing::native_action_kat_vector).
+    // Server-committed value (core-state signing::native_action_kat_vector),
+    // recomputed for the MTF testnet chain id 114514.
     let expected: [u8; 32] = [
-        0xbc, 0x1f, 0xa3, 0x14, 0xad, 0x46, 0xf9, 0xaa, 0x0b, 0x14, 0x66, 0x23, 0x14, 0x4e, 0xf6,
-        0xf7, 0xef, 0xff, 0x7d, 0x43, 0xa8, 0x99, 0x8d, 0x7b, 0xf6, 0x3e, 0xf0, 0x18, 0xc2, 0x13,
-        0x52, 0xf2,
+        0xf7, 0xaa, 0x10, 0x87, 0xf7, 0x9b, 0x30, 0xfb, 0x3f, 0x13, 0xa1, 0x90, 0x63, 0x6d, 0x32,
+        0xb3, 0x27, 0x20, 0xd5, 0x98, 0x41, 0x91, 0x99, 0x2d, 0x70, 0x7e, 0x2a, 0xfb, 0xca, 0x71,
+        0x6e, 0x0d,
     ];
     assert_eq!(
         digest, expected,
-        "SDK digest formula must equal the server KAT bc1fa3…52f2"
+        "SDK digest formula must equal the server KAT f7aa10…6e0d"
     );
 
-    // And the SDK constant must be the chain id this KAT is pinned to.
+    // And the SDK default constant must be the chain id this KAT is pinned to.
     assert_eq!(
-        MTF_CHAIN_ID, 998,
-        "SDK MTF_CHAIN_ID must match the server KAT chain id"
+        MTF_CHAIN_ID, 114514,
+        "SDK MTF_CHAIN_ID must match the server KAT chain id (MTF testnet)"
     );
 }
 
