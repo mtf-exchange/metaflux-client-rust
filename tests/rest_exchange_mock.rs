@@ -12,7 +12,7 @@ use metaflux_client::{
     rest::exchange::{_action_digest_for_test, _recover_for_test},
     types::{
         MarketId, OrderId,
-        order::{CancelOrder, Order, OrderKind, Side, StpMode, TimeInForce},
+        order::{CancelOrder, Order, OrderKind, OrderStatus, Side, StpMode, TimeInForce},
     },
     wallet::Wallet,
 };
@@ -52,13 +52,15 @@ fn sample_wallet() -> Wallet {
 #[tokio::test]
 async fn submit_order_envelope_includes_valid_signature() {
     let server = MockServer::start().await;
+    // Doc shape: Order action returns the per-order status union, wrapped in
+    // the committed `{ type, data }` envelope. One resting order here.
     let captor = CapturingResponder {
         last: Arc::new(Mutex::new(None)),
         response: json!({
-            "oid": 1234,
-            "status": "accepted",
-            "filled_size": 0,
-            "avg_px": 0
+            "type": "Order",
+            "data": [
+                { "resting": { "oid": 1234, "cloid": "0x000102030405060708090a0b0c0d0e0f" } }
+            ]
         }),
     };
     Mock::given(method("POST"))
@@ -87,8 +89,14 @@ async fn submit_order_envelope_includes_valid_signature() {
         .submit_order(&wallet, &order)
         .await
         .unwrap();
-    assert_eq!(resp.oid.0, 1234);
-    assert_eq!(resp.status, "accepted");
+    // Response decodes through the per-order status union and the envelope is
+    // peeled (the `data` array becomes the transparent OrderResponse vec).
+    assert_eq!(resp.statuses.len(), 1);
+    match resp.first().expect("one status") {
+        OrderStatus::Resting(r) => assert_eq!(r.oid, OrderId(1234)),
+        other => panic!("expected resting status, got {other:?}"),
+    }
+    assert_eq!(resp.first().and_then(OrderStatus::oid), Some(OrderId(1234)));
 
     // Recover the body the SDK posted.
     let captured = captor.last.lock().await.clone().expect("body captured");

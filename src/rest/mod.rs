@@ -99,6 +99,10 @@ impl RestClient {
     ///
     /// On HTTP error status, attempts to decode the MTF-native error
     /// envelope (`{"error": "..."}`) into a [`ClientError::ProtocolError`].
+    ///
+    /// Peels the MTF-native `{ "type": ..., "data": ... }` response envelope
+    /// (committed in `api/rest/info.md` / `exchange.md`): every `/info` and
+    /// `/exchange` reply wraps the payload under `data`. See [`peel_envelope`].
     pub(crate) async fn post_json<Req, Resp>(
         &self,
         path: &str,
@@ -129,8 +133,33 @@ impl RestClient {
             });
         }
 
-        serde_json::from_slice(&bytes).map_err(ClientError::from)
+        let value: Value = serde_json::from_slice(&bytes)?;
+        let payload = peel_envelope(value);
+        serde_json::from_value(payload).map_err(ClientError::from)
     }
+}
+
+/// Peel the MTF-native `{ "type": <query>, "data": <payload> }` response
+/// envelope, returning the inner `data` payload.
+///
+/// Per the committed contract (`api/rest/info.md` §Envelope and
+/// `api/rest/exchange.md`) every `/info` and `/exchange` success response is
+/// wrapped. We unwrap on the canonical shape — an object carrying a `data`
+/// key alongside `type`. Anything else (a bare object, the `/exchange` 202
+/// `{accepted,...}` admission ack, `/explorer` replies which are not
+/// enveloped) is returned verbatim so the typed decode still applies. This
+/// keeps the peel a no-op for non-enveloped endpoints rather than a hard
+/// requirement, which matters while the node rolls the envelope out per-path.
+fn peel_envelope(value: Value) -> Value {
+    if let Value::Object(ref map) = value {
+        if map.contains_key("data") && map.contains_key("type") {
+            // Safe: presence checked above.
+            if let Value::Object(mut map) = value {
+                return map.remove("data").unwrap_or(Value::Null);
+            }
+        }
+    }
+    value
 }
 
 #[cfg(test)]
@@ -147,5 +176,36 @@ mod tests {
     fn strips_trailing_slash() {
         let c = RestClient::new("https://api.mtf.exchange/").unwrap();
         assert_eq!(c.base_url(), "https://api.mtf.exchange");
+    }
+
+    #[test]
+    fn peels_data_from_typed_envelope() {
+        let env = serde_json::json!({
+            "type": "node_info",
+            "data": { "chain_id": 998, "epoch": 1 }
+        });
+        let inner = super::peel_envelope(env);
+        assert_eq!(inner, serde_json::json!({ "chain_id": 998, "epoch": 1 }));
+    }
+
+    #[test]
+    fn passes_bare_object_through_unchanged() {
+        // No `data`/`type` pair → not an envelope, returned verbatim.
+        let bare = serde_json::json!({ "accepted": true, "mempool_depth": 3 });
+        assert_eq!(super::peel_envelope(bare.clone()), bare);
+    }
+
+    #[test]
+    fn passes_array_through_unchanged() {
+        let arr = serde_json::json!([1, 2, 3]);
+        assert_eq!(super::peel_envelope(arr.clone()), arr);
+    }
+
+    #[test]
+    fn does_not_peel_a_data_field_without_type() {
+        // A payload whose own field happens to be named `data` is not an
+        // envelope unless it also carries the `type` discriminator.
+        let payload = serde_json::json!({ "data": { "x": 1 } });
+        assert_eq!(super::peel_envelope(payload.clone()), payload);
     }
 }

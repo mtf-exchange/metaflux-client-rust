@@ -35,52 +35,28 @@ pub struct Info<'a> {
     pub(crate) client: &'a RestClient,
 }
 
-/// Static market metadata returned by `markets()`.
-///
-/// Wire shape:
-/// ```json
-/// { "market_id": 1, "symbol": "BTC", "size_decimals": 6,
-///   "px_decimals": 4, "max_leverage": 50, "tick_size": 1, "min_size": 1 }
-/// ```
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct MarketMeta {
-    /// Internal market id.
-    pub market_id: MarketId,
-    /// Human-readable symbol (e.g. `"BTC"`).
-    pub symbol: String,
-    /// Number of decimals in the size field's fixed-point encoding.
-    pub size_decimals: u8,
-    /// Number of decimals in the price field's fixed-point encoding.
-    pub px_decimals: u8,
-    /// Maximum leverage (integer multiple, e.g. 50 = 50×).
-    pub max_leverage: u32,
-    /// Tick size (smallest price increment) in fixed-point units.
-    pub tick_size: u64,
-    /// Minimum order size in fixed-point units.
-    pub min_size: u64,
-}
-
 /// One level of the L2 book.
+///
+/// Per `api/rest/info.md` (`l2_book`): `px` / `sz` are 8-decimal fixed-point
+/// **u128 strings** (precision past 2^53), `n_orders` is a JSON number.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct L2Level {
-    /// Price in fixed-point tick units.
-    pub px: u64,
-    /// Aggregate size at this price.
-    pub size: u64,
+    /// Price, 8-decimal fixed-point as a decimal string.
+    pub px: String,
+    /// Aggregate size at this price, fixed-point as a decimal string.
+    pub sz: String,
     /// Number of orders at this price.
     pub n_orders: u32,
 }
 
 /// L2 book snapshot.
+///
+/// Per `api/rest/info.md` (`l2_book`) the `data` payload is exactly
+/// `{ "bids": [...], "asks": [...] }`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct L2Book {
-    /// Market id (echo).
-    pub market_id: MarketId,
-    /// Server timestamp (unix ms).
-    pub ts_ms: u64,
     /// Bid side (descending by price).
     pub bids: Vec<L2Level>,
     /// Ask side (ascending by price).
@@ -160,61 +136,197 @@ pub struct UnbondingEntry {
 // methods above target that gateway surface; the methods below hit the node
 // 1:1 so a `Client` pointed straight at a node works today.
 
-/// `node_info` response — chain identity + sync state. No request parameters.
+/// `node_info` response — static node identity + protocol version.
+///
+/// Per `api/rest/info.md` (`node_info`). No request parameters.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct NodeInfo {
-    /// EVM chain id this node is pinned to (the EIP-712 domain chain id).
+    /// Network variant: `"devnet"`, `"testnet"`, or `"mainnet"`.
+    pub network: String,
+    /// EIP-712 chain id this node is pinned to.
     pub chain_id: u64,
-    /// Current consensus epoch.
-    pub epoch: u64,
-    /// Committed block height.
-    pub height: u64,
-    /// Number of connected gossip peers.
-    pub peers_connected: u32,
+    /// Wire-protocol version (semver string).
+    pub protocol_version: String,
+    /// This node's index in the active validator set.
+    pub validator_index: u32,
+    /// Operator-published build identifier (short hex).
+    pub build_commit: String,
+    /// Process uptime in seconds.
+    pub uptime_seconds: u64,
 }
 
-/// `account_state` response — account snapshot keyed by internal `account_id`.
+/// Account liquidation tier. See `concepts/tiered-liquidation.md`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Tier {
+    /// Above all liquidation thresholds.
+    Safe,
+    /// Tier 0.
+    T0,
+    /// Tier 1.
+    T1,
+    /// Tier 2.
+    T2,
+    /// Tier 3.
+    T3,
+}
+
+/// Account margin mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MarginMode {
+    /// Cross margin — shared collateral across positions.
+    Cross,
+    /// Isolated margin.
+    Isolated,
+    /// Strict isolated margin.
+    StrictIso,
+}
+
+/// One open position inside an [`AccountState`].
+///
+/// Distinct from [`crate::types::position::Position`] (the `user_state`
+/// element): this is the `account_state.positions[*]` shape from
+/// `api/rest/info.md`. `size` / `entry_px` / `unrealised_pnl` are fixed-point
+/// **string** numerics; `leverage` is an integer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AccountPosition {
+    /// Asset id.
+    pub asset: u32,
+    /// Signed position size, fixed-point as a decimal string.
+    pub size: String,
+    /// Volume-weighted entry price, fixed-point as a decimal string.
+    pub entry_px: String,
+    /// Unrealised PnL (signed), USDC base units as a decimal string.
+    pub unrealised_pnl: String,
+    /// Whether this position uses isolated margin.
+    pub isolated: bool,
+    /// Per-asset leverage multiple.
+    pub leverage: u32,
+}
+
+/// Per-account balances inside an [`AccountState`].
+///
+/// `usdc` is the cross USDC collateral (6-decimal base units as a string);
+/// `spot` maps spot-asset symbol → balance (8-decimal fixed-point string).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Balances {
+    /// USDC collateral, 6-decimal base units as a decimal string.
+    pub usdc: String,
+    /// Spot balances keyed by asset symbol, fixed-point strings. `BTreeMap`
+    /// for deterministic key ordering.
+    #[serde(default)]
+    pub spot: std::collections::BTreeMap<String, String>,
+}
+
+/// `account_state` response — rich per-account snapshot keyed by `address`.
+///
+/// Per `api/rest/info.md` (`account_state`). All monetary magnitudes are
+/// fixed-point **string** numerics (USDC base units / 8-decimal fixed-point)
+/// to survive JS-safe-integer limits; `health` may be negative.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct AccountState {
-    /// Echo of the requested account id.
-    pub account_id: u64,
-    /// Number of asset clearinghouses where the account holds a non-zero net
-    /// position.
-    pub position_count: u32,
-    /// Native base balance (always 0 today — MTF has no single base balance).
-    pub balance_base: i64,
-    /// Quote collateral (`cross_account_value`), truncated toward zero.
-    pub balance_quote: i64,
+    /// Echo of the requested address.
+    pub address: Address,
+    /// Equity including unrealised PnL, USDC base units (u128 string).
+    pub account_value: String,
+    /// Equity minus initial margin held by open positions (u128 string).
+    pub free_collateral: String,
+    /// Maintenance margin requirement (u128 string).
+    pub maint_margin: String,
+    /// Initial margin requirement (u128 string).
+    pub init_margin: String,
+    /// `account_value - maint_margin` (i128 string; can be negative).
+    pub health: String,
+    /// Liquidation tier.
+    pub tier: Tier,
+    /// Margin mode.
+    pub margin_mode: MarginMode,
+    /// Portfolio-margin opt-in state.
+    pub pm_enabled: bool,
+    /// Per-asset open positions.
+    #[serde(default)]
+    pub positions: Vec<AccountPosition>,
+    /// Account balances.
+    pub balances: Balances,
 }
 
-/// `market_info` response — single-market snapshot keyed by `market_id`.
+/// Market kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum MarketKind {
+    /// Perpetual future.
+    Perp,
+    /// Spot market.
+    Spot,
+}
+
+/// Per-market funding parameters inside a [`MarketInfo`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Funding {
+    /// Current funding rate per hour, fixed-point as a decimal string.
+    pub rate_per_hr: String,
+    /// Per-hour funding cap, fixed-point as a decimal string.
+    pub cap_per_hr: String,
+    /// Funding interval in milliseconds.
+    pub interval_ms: u64,
+    /// Next funding payment timestamp (unix ms).
+    pub next_payment_ts: u64,
+}
+
+/// `market_info` response — rich per-market metadata.
 ///
-/// `mark_px` is a decimal STRING: the node emits the raw fixed-point magnitude
-/// (which can exceed JS safe-int range) as a string so no precision is lost on
-/// the wire. `oi` (open interest, u128) is a JSON number today.
+/// Per `api/rest/info.md` (`market_info`). Fixed-point magnitudes
+/// (`tick_size`, `step_size`, `min_order`, ratios, `open_interest`) are
+/// **string** numerics; `asset_id` / `max_leverage` are JSON numbers.
+/// Resolvable by `asset_id` or by `coin` (see [`Info::market_info`] /
+/// [`Info::market_info_by_coin`]).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct MarketInfo {
-    /// Echo of the requested market id.
-    pub market_id: u32,
-    /// Mark price as a decimal string of the raw fixed-point magnitude.
-    pub mark_px: String,
-    /// Last trade timestamp (unix ms); 0 if no trades.
-    pub last_trade_ms: u64,
-    /// Open interest in fixed-point units.
-    pub oi: u128,
+    /// Canonical asset id.
+    pub asset_id: u32,
+    /// Human-readable market name (e.g. `"BTC"`).
+    pub name: String,
+    /// Market kind.
+    pub kind: MarketKind,
+    /// Tick size (smallest price increment), fixed-point string.
+    pub tick_size: String,
+    /// Step size (smallest size increment), fixed-point string.
+    pub step_size: String,
+    /// Minimum order size, fixed-point string.
+    pub min_order: String,
+    /// Maximum leverage multiple.
+    pub max_leverage: u32,
+    /// Maintenance margin ratio, fixed-point string.
+    pub maint_margin_ratio: String,
+    /// Initial margin ratio, fixed-point string.
+    pub init_margin_ratio: String,
+    /// Funding parameters.
+    pub funding: Funding,
+    /// Mark-price source descriptor.
+    pub mark_source: String,
+    /// Whether frequent-batch-auction matching is enabled for this market.
+    pub fba_enabled: bool,
+    /// Open interest, fixed-point as a decimal string.
+    pub open_interest: String,
 }
 
 impl<'a> Info<'a> {
-    /// List all markets and their metadata.
+    /// List all markets and their rich metadata.
     ///
-    /// MTF-native shape: response is a JSON array of [`MarketMeta`] objects.
+    /// Returns a JSON array of [`MarketInfo`] objects (the same record served
+    /// per-market by [`Info::market_info`]).
+    ///
+    /// NOTE: `api/rest/info.md` does not define a bulk `markets` query type —
+    /// only the per-market `market_info`. This method targets a gateway-surface
+    /// `markets` aggregate that mirrors the `market_info` record shape.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn markets(&self) -> Result<Vec<MarketMeta>, ClientError> {
+    pub async fn markets(&self) -> Result<Vec<MarketInfo>, ClientError> {
         self.client
             .post_json("/info", &json!({ "type": "markets" }))
             .await
@@ -222,13 +334,16 @@ impl<'a> Info<'a> {
 
     /// Fetch the L2 book snapshot for a market.
     ///
+    /// Per `api/rest/info.md` (`l2_book`): keyed by `asset_id`, `depth`
+    /// levels per side. The `data` payload is `{ bids, asks }`.
+    ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn l2_book(&self, market: MarketId) -> Result<L2Book, ClientError> {
+    pub async fn l2_book(&self, market: MarketId, depth: u32) -> Result<L2Book, ClientError> {
         self.client
             .post_json(
                 "/info",
-                &json!({ "type": "l2_book", "market_id": market.0 }),
+                &json!({ "type": "l2_book", "asset_id": market.0, "depth": depth }),
             )
             .await
     }
@@ -285,25 +400,27 @@ impl<'a> Info<'a> {
             .await
     }
 
-    /// `account_state` — account snapshot keyed by internal `account_id`.
+    /// `account_state` — rich per-account snapshot keyed by `address`.
     ///
-    /// This is the node-native counterpart to [`Info::user_state`] (which
-    /// targets the gateway's `address`-keyed surface).
+    /// Per `api/rest/info.md` (`account_state`): the request carries the 20-byte
+    /// `address`; the response is the rich [`AccountState`] (equity, margins,
+    /// tier, positions, balances).
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn account_state(&self, account_id: u64) -> Result<AccountState, ClientError> {
+    pub async fn account_state(&self, addr: Address) -> Result<AccountState, ClientError> {
         self.client
             .post_json(
                 "/info",
-                &json!({ "type": "account_state", "account_id": account_id }),
+                &json!({ "type": "account_state", "address": addr }),
             )
             .await
     }
 
-    /// `market_info` — single-market snapshot keyed by `market_id`.
+    /// `market_info` — rich single-market snapshot by canonical `asset_id`.
     ///
-    /// Node-native counterpart to the gateway's `markets` / `l2_book` surface.
+    /// Per `api/rest/info.md` (`market_info`). To resolve by human-readable
+    /// name use [`Info::market_info_by_coin`].
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -311,7 +428,23 @@ impl<'a> Info<'a> {
         self.client
             .post_json(
                 "/info",
-                &json!({ "type": "market_info", "market_id": market.0 }),
+                &json!({ "type": "market_info", "asset_id": market.0 }),
+            )
+            .await
+    }
+
+    /// `market_info` — rich single-market snapshot by human-readable `coin`.
+    ///
+    /// Per `api/rest/info.md`: `asset_id` is canonical, `coin` is a convenience
+    /// alias; both resolve to the same record. See [`Info::market_info`].
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn market_info_by_coin(&self, coin: &str) -> Result<MarketInfo, ClientError> {
+        self.client
+            .post_json(
+                "/info",
+                &json!({ "type": "market_info", "coin": coin }),
             )
             .await
     }
@@ -371,60 +504,127 @@ impl<'a> Info<'a> {
 mod tests {
     use super::*;
 
+    /// Decode the exact `node_info.data` payload from `api/rest/info.md`.
     #[test]
-    fn market_meta_round_trips() {
-        let m = MarketMeta {
-            market_id: MarketId(1),
-            symbol: "BTC".into(),
-            size_decimals: 6,
-            px_decimals: 4,
-            max_leverage: 50,
-            tick_size: 1,
-            min_size: 1,
-        };
-        let j = serde_json::to_string(&m).unwrap();
-        let dec: MarketMeta = serde_json::from_str(&j).unwrap();
-        assert_eq!(m, dec);
-    }
-
-    #[test]
-    fn node_info_round_trips() {
-        let n = NodeInfo {
-            chain_id: 998,
-            epoch: 1,
-            height: 42,
-            peers_connected: 7,
-        };
+    fn node_info_decodes_doc_fixture() {
+        let data = serde_json::json!({
+            "network": "devnet",
+            "chain_id": 31337,
+            "protocol_version": "1.0.0",
+            "validator_index": 3,
+            "build_commit": "deadbeef",
+            "uptime_seconds": 123456u64
+        });
+        let n: NodeInfo = serde_json::from_value(data).unwrap();
+        assert_eq!(n.network, "devnet");
+        assert_eq!(n.chain_id, 31337);
+        assert_eq!(n.protocol_version, "1.0.0");
+        assert_eq!(n.validator_index, 3);
+        assert_eq!(n.uptime_seconds, 123456);
+        // Round-trips.
         let dec: NodeInfo = serde_json::from_str(&serde_json::to_string(&n).unwrap()).unwrap();
         assert_eq!(n, dec);
     }
 
+    /// Decode the exact `market_info.data` payload from `api/rest/info.md`.
     #[test]
-    fn market_info_mark_px_is_a_string_on_the_wire() {
-        let m = MarketInfo {
-            market_id: 1,
-            mark_px: "5000000000000".into(),
-            last_trade_ms: 0,
-            oi: 0,
-        };
+    fn market_info_decodes_doc_fixture() {
+        let data = serde_json::json!({
+            "asset_id": 0,
+            "name": "BTC",
+            "kind": "Perp",
+            "tick_size": "100",
+            "step_size": "10000",
+            "min_order": "10000",
+            "max_leverage": 50,
+            "maint_margin_ratio": "5000",
+            "init_margin_ratio": "10000",
+            "funding": {
+                "rate_per_hr": "1000",
+                "cap_per_hr": "50000",
+                "interval_ms": 3600000u64,
+                "next_payment_ts": 1735693200000u64
+            },
+            "mark_source": "MedianOfOraclesAndMid",
+            "fba_enabled": false,
+            "open_interest": "5000000000"
+        });
+        let m: MarketInfo = serde_json::from_value(data).unwrap();
+        assert_eq!(m.asset_id, 0);
+        assert_eq!(m.name, "BTC");
+        assert_eq!(m.kind, MarketKind::Perp);
+        assert_eq!(m.tick_size, "100");
+        assert_eq!(m.max_leverage, 50);
+        assert_eq!(m.funding.interval_ms, 3_600_000);
+        assert_eq!(m.mark_source, "MedianOfOraclesAndMid");
+        assert_eq!(m.open_interest, "5000000000");
+        // Fixed-point magnitudes serialize back as strings.
         let j = serde_json::to_value(&m).unwrap();
-        assert!(
-            j["mark_px"].is_string(),
-            "mark_px must serialize as a string"
-        );
-        assert!(j["oi"].is_number(), "oi must serialize as a number");
+        assert!(j["tick_size"].is_string());
+        assert!(j["open_interest"].is_string());
+        assert!(j["asset_id"].is_number());
     }
 
+    /// Decode the exact `account_state.data` payload from `api/rest/info.md`.
     #[test]
-    fn account_state_round_trips() {
-        let a = AccountState {
-            account_id: 7,
-            position_count: 3,
-            balance_base: 0,
-            balance_quote: -123,
-        };
+    fn account_state_decodes_doc_fixture() {
+        let data = serde_json::json!({
+            "address": "0x000000000000000000000000000000000000beef",
+            "account_value": "100000000",
+            "free_collateral": "80000000",
+            "maint_margin": "10000000",
+            "init_margin": "20000000",
+            "health": "10000000",
+            "tier": "Safe",
+            "margin_mode": "Cross",
+            "pm_enabled": false,
+            "positions": [{
+                "asset": 0,
+                "size": "100000000",
+                "entry_px": "10000000000",
+                "unrealised_pnl": "500000",
+                "isolated": false,
+                "leverage": 10
+            }],
+            "balances": {
+                "usdc": "100000000",
+                "spot": { "ETH": "5000000000" }
+            }
+        });
+        let a: AccountState = serde_json::from_value(data).unwrap();
+        assert_eq!(a.account_value, "100000000");
+        assert_eq!(a.free_collateral, "80000000");
+        assert_eq!(a.health, "10000000");
+        assert_eq!(a.tier, Tier::Safe);
+        assert_eq!(a.margin_mode, MarginMode::Cross);
+        assert!(!a.pm_enabled);
+        assert_eq!(a.positions.len(), 1);
+        assert_eq!(a.positions[0].asset, 0);
+        assert_eq!(a.positions[0].leverage, 10);
+        assert_eq!(a.balances.usdc, "100000000");
+        assert_eq!(a.balances.spot.get("ETH").map(String::as_str), Some("5000000000"));
+        // Round-trips.
         let dec: AccountState = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
         assert_eq!(a, dec);
+    }
+
+    /// Decode the exact `l2_book.data` payload from `api/rest/info.md`.
+    #[test]
+    fn l2_book_decodes_doc_fixture() {
+        let data = serde_json::json!({
+            "bids": [{ "px": "10049000000", "sz": "100000000", "n_orders": 5 }],
+            "asks": [{ "px": "10051000000", "sz": "200000000", "n_orders": 3 }]
+        });
+        let b: L2Book = serde_json::from_value(data).unwrap();
+        assert_eq!(b.bids.len(), 1);
+        assert_eq!(b.bids[0].px, "10049000000");
+        assert_eq!(b.bids[0].sz, "100000000");
+        assert_eq!(b.bids[0].n_orders, 5);
+        assert_eq!(b.asks[0].n_orders, 3);
+        // px/sz serialize as strings.
+        let j = serde_json::to_value(&b).unwrap();
+        assert!(j["bids"][0]["px"].is_string());
+        assert!(j["bids"][0]["n_orders"].is_number());
     }
 
     #[test]
