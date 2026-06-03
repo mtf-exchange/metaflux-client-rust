@@ -2,8 +2,9 @@
 //! per-order status (oid if it rested, fill detail if it crossed).
 //!
 //! Targets a node at `http://127.0.0.1:8080`. The SDK signs against the
-//! devnet EIP-712 domain chain id (`MTF_CHAIN_ID` = 998); signing against the
-//! wrong chain id makes the node recover a different address and reject (401).
+//! MTF testnet/devnet EIP-712 domain chain id (`MTF_CHAIN_ID` = 114514;
+//! mainnet is 8964); signing against the wrong chain id makes the node
+//! recover a different address and reject (401).
 //!
 //! Dev key (address `0x17c5185167401ed00cf5f5b2fc97d9bbfdb7d025`): pass
 //! `MTF_PRIVATE_KEY=0x4242424242424242424242424242424242424242424242424242424242424242`.

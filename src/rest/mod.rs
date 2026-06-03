@@ -182,10 +182,10 @@ mod tests {
     fn peels_data_from_typed_envelope() {
         let env = serde_json::json!({
             "type": "node_info",
-            "data": { "chain_id": 998, "epoch": 1 }
+            "data": { "chain_id": 114514, "epoch": 1 }
         });
         let inner = super::peel_envelope(env);
-        assert_eq!(inner, serde_json::json!({ "chain_id": 998, "epoch": 1 }));
+        assert_eq!(inner, serde_json::json!({ "chain_id": 114514, "epoch": 1 }));
     }
 
     #[test]
