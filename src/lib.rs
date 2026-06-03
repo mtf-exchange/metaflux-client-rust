@@ -23,6 +23,7 @@
 //! - [`ws`]     — WebSocket subscriptions, reconnect + heartbeat.
 //! - [`grpc`]   — feature-gated tonic client over mTLS (enable `grpc`).
 //! - [`types`]  — MTF-native domain types shared by all transports.
+//! - [`faucet`] — devnet / testnet test-USDC faucet helper.
 //! - [`error`]  — single [`ClientError`] thiserror enum.
 //!
 //! ## Quick start
@@ -45,6 +46,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod error;
+pub mod faucet;
 pub mod mip3;
 pub mod rest;
 pub mod types;
@@ -56,6 +58,7 @@ pub mod ws;
 pub mod grpc;
 
 pub use error::ClientError;
+pub use faucet::{FaucetResponse, request_faucet};
 pub use rest::RestClient;
 pub use types::{MarketId, OrderId, VaultId};
 pub use wallet::Wallet;
