@@ -2,50 +2,67 @@
 //!
 //! Spin up a `wiremock::MockServer`, register MTF-native shaped responses,
 //! and assert the SDK decodes them correctly. No real network involved.
+//!
+//! Every fixture is wrapped in the committed `{ "type": ..., "data": ... }`
+//! envelope (`api/rest/info.md` §Envelope) so these tests also exercise the
+//! REST layer's envelope-unwrap path.
 
 use metaflux_client::{
     Client,
+    rest::info::{MarginMode, MarketKind, Tier},
     types::{MarketId, VaultId},
     wallet::Address,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// Wrap a payload in the committed `{ type, data }` info envelope.
+fn envelope(ty: &str, data: Value) -> Value {
+    json!({ "type": ty, "data": data })
+}
+
 #[tokio::test]
-async fn markets_decodes_array_of_market_meta() {
+async fn markets_decodes_array_of_market_info() {
     let server = MockServer::start().await;
+    let market = |asset_id: u32, name: &str, max_lev: u32| {
+        json!({
+            "asset_id": asset_id,
+            "name": name,
+            "kind": "Perp",
+            "tick_size": "100",
+            "step_size": "10000",
+            "min_order": "10000",
+            "max_leverage": max_lev,
+            "maint_margin_ratio": "5000",
+            "init_margin_ratio": "10000",
+            "funding": {
+                "rate_per_hr": "1000",
+                "cap_per_hr": "50000",
+                "interval_ms": 3_600_000u64,
+                "next_payment_ts": 1_735_693_200_000u64
+            },
+            "mark_source": "MedianOfOraclesAndMid",
+            "fba_enabled": false,
+            "open_interest": "5000000000"
+        })
+    };
     Mock::given(method("POST"))
         .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
-            {
-                "market_id": 1,
-                "symbol": "BTC",
-                "size_decimals": 6,
-                "px_decimals": 4,
-                "max_leverage": 50,
-                "tick_size": 1,
-                "min_size": 1
-            },
-            {
-                "market_id": 2,
-                "symbol": "ETH",
-                "size_decimals": 5,
-                "px_decimals": 4,
-                "max_leverage": 40,
-                "tick_size": 1,
-                "min_size": 1
-            }
-        ])))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "markets",
+            json!([market(0, "BTC", 50), market(1, "ETH", 40)]),
+        )))
         .mount(&server)
         .await;
 
     let client = Client::new(server.uri()).unwrap();
     let markets = client.rest().info().markets().await.unwrap();
     assert_eq!(markets.len(), 2);
-    assert_eq!(markets[0].symbol, "BTC");
-    assert_eq!(markets[0].market_id.0, 1);
-    assert_eq!(markets[1].symbol, "ETH");
+    assert_eq!(markets[0].name, "BTC");
+    assert_eq!(markets[0].asset_id, 0);
+    assert_eq!(markets[0].kind, MarketKind::Perp);
+    assert_eq!(markets[1].name, "ETH");
     assert_eq!(markets[1].max_leverage, 40);
 }
 
@@ -54,21 +71,24 @@ async fn user_state_decodes_positions() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "address": "0x0000000000000000000000000000000000000001",
-            "account_value_cents": 10_000_000i64,
-            "total_unrealised_pnl_cents": 1_234i64,
-            "position_count": 1,
-            "positions": [{
-                "owner": "0x0000000000000000000000000000000000000001",
-                "market": 1,
-                "size": 500,
-                "entry_px": 4_999_500_000_000u64,
-                "unrealised_pnl_cents": 1_234i64,
-                "margin_cents": 500_000u64,
-                "funding_paid_cents": -42i64
-            }]
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "user_state",
+            json!({
+                "address": "0x0000000000000000000000000000000000000001",
+                "account_value_cents": 10_000_000i64,
+                "total_unrealised_pnl_cents": 1_234i64,
+                "position_count": 1,
+                "positions": [{
+                    "owner": "0x0000000000000000000000000000000000000001",
+                    "market": 1,
+                    "size": 500,
+                    "entry_px": 4_999_500_000_000u64,
+                    "unrealised_pnl_cents": 1_234i64,
+                    "margin_cents": 500_000u64,
+                    "funding_paid_cents": -42i64
+                }]
+            }),
+        )))
         .mount(&server)
         .await;
 
@@ -86,17 +106,20 @@ async fn vault_state_decodes_pinned_constants() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "vault_id": 42,
-            "leader": "0x0000000000000000000000000000000000000002",
-            "total_shares": 1_000_000u64,
-            "nav_usd_cents": 5_000_000i64,
-            "paused": false,
-            "management_fee_bps": 1000,
-            "withdrawal_lock_ms": 345_600_000u64,
-            "created_at_ms": 1_700_000_000_000u64,
-            "follower_count": 3
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "vault_state",
+            json!({
+                "vault_id": 42,
+                "leader": "0x0000000000000000000000000000000000000002",
+                "total_shares": 1_000_000u64,
+                "nav_usd_cents": 5_000_000i64,
+                "paused": false,
+                "management_fee_bps": 1000,
+                "withdrawal_lock_ms": 345_600_000u64,
+                "created_at_ms": 1_700_000_000_000u64,
+                "follower_count": 3
+            }),
+        )))
         .mount(&server)
         .await;
 
@@ -113,17 +136,20 @@ async fn fee_schedule_decodes_plan_l_split() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "taker_bps": 45,
-            "maker_bps": 15,
-            "referrer_share_bps": 1000,
-            "builder_cap_bps": 8,
-            "deployer_cap_bps": 5,
-            "burn_bps": 5000,
-            "vault_bps": 2500,
-            "validator_bps": 1500,
-            "treasury_bps": 1000
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "fee_schedule",
+            json!({
+                "taker_bps": 45,
+                "maker_bps": 15,
+                "referrer_share_bps": 1000,
+                "builder_cap_bps": 8,
+                "deployer_cap_bps": 5,
+                "burn_bps": 5000,
+                "vault_bps": 2500,
+                "validator_bps": 1500,
+                "treasury_bps": 1000
+            }),
+        )))
         .mount(&server)
         .await;
 
@@ -144,7 +170,7 @@ async fn error_envelope_surfaces_as_protocol_error() {
     Mock::given(method("POST"))
         .and(path("/info"))
         .respond_with(
-            ResponseTemplate::new(400).set_body_json(json!({"error": "unknown request type: wat"})),
+            ResponseTemplate::new(400).set_body_json(json!({"error": "unknown info type: wat"})),
         )
         .mount(&server)
         .await;
@@ -154,7 +180,7 @@ async fn error_envelope_surfaces_as_protocol_error() {
     match err {
         metaflux_client::ClientError::ProtocolError { code, msg } => {
             assert_eq!(code, 400);
-            assert!(msg.contains("unknown request type"));
+            assert!(msg.contains("unknown info type"));
         }
         other => panic!("expected ProtocolError, got {other:?}"),
     }
@@ -165,63 +191,117 @@ async fn node_info_decodes() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "chain_id": 998,
-            "epoch": 4,
-            "height": 1_234_567u64,
-            "peers_connected": 12
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "node_info",
+            json!({
+                "network": "devnet",
+                "chain_id": 31337,
+                "protocol_version": "1.0.0",
+                "validator_index": 3,
+                "build_commit": "deadbeef",
+                "uptime_seconds": 123_456u64
+            }),
+        )))
         .mount(&server)
         .await;
 
     let client = Client::new(server.uri()).unwrap();
     let n = client.rest().info().node_info().await.unwrap();
-    assert_eq!(n.chain_id, 998);
-    assert_eq!(n.height, 1_234_567);
-    assert_eq!(n.peers_connected, 12);
+    assert_eq!(n.network, "devnet");
+    assert_eq!(n.chain_id, 31337);
+    assert_eq!(n.protocol_version, "1.0.0");
+    assert_eq!(n.validator_index, 3);
 }
 
 #[tokio::test]
-async fn account_state_decodes_by_account_id() {
+async fn account_state_decodes_rich_shape_by_address() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "account_id": 7,
-            "position_count": 2,
-            "balance_base": 0,
-            "balance_quote": 10_000_000i64
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "account_state",
+            json!({
+                "address": "0x000000000000000000000000000000000000beef",
+                "account_value": "100000000",
+                "free_collateral": "80000000",
+                "maint_margin": "10000000",
+                "init_margin": "20000000",
+                "health": "10000000",
+                "tier": "Safe",
+                "margin_mode": "Cross",
+                "pm_enabled": false,
+                "positions": [{
+                    "asset": 0,
+                    "size": "100000000",
+                    "entry_px": "10000000000",
+                    "unrealised_pnl": "500000",
+                    "isolated": false,
+                    "leverage": 10
+                }],
+                "balances": {
+                    "usdc": "100000000",
+                    "spot": { "ETH": "5000000000" }
+                }
+            }),
+        )))
         .mount(&server)
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let a = client.rest().info().account_state(7).await.unwrap();
-    assert_eq!(a.account_id, 7);
-    assert_eq!(a.position_count, 2);
-    assert_eq!(a.balance_quote, 10_000_000);
+    let addr = Address::from_hex("0x000000000000000000000000000000000000beef").unwrap();
+    let a = client.rest().info().account_state(addr).await.unwrap();
+    assert_eq!(a.account_value, "100000000");
+    assert_eq!(a.free_collateral, "80000000");
+    assert_eq!(a.tier, Tier::Safe);
+    assert_eq!(a.margin_mode, MarginMode::Cross);
+    assert!(!a.pm_enabled);
+    assert_eq!(a.positions.len(), 1);
+    assert_eq!(a.positions[0].leverage, 10);
+    assert_eq!(a.balances.usdc, "100000000");
+    assert_eq!(
+        a.balances.spot.get("ETH").map(String::as_str),
+        Some("5000000000")
+    );
 }
 
 #[tokio::test]
-async fn market_info_decodes_mark_px_as_string() {
+async fn market_info_decodes_rich_shape_by_asset_id() {
     let server = MockServer::start().await;
-    // The node renders `mark_px` as a decimal string (precision past 2^53).
     Mock::given(method("POST"))
         .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "market_id": 1,
-            "mark_px": "5000000000000",
-            "last_trade_ms": 1_700_000_000_000u64,
-            "oi": 9_999_999_999_999_999u64
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "market_info",
+            json!({
+                "asset_id": 0,
+                "name": "BTC",
+                "kind": "Perp",
+                "tick_size": "100",
+                "step_size": "10000",
+                "min_order": "10000",
+                "max_leverage": 50,
+                "maint_margin_ratio": "5000",
+                "init_margin_ratio": "10000",
+                "funding": {
+                    "rate_per_hr": "1000",
+                    "cap_per_hr": "50000",
+                    "interval_ms": 3_600_000u64,
+                    "next_payment_ts": 1_735_693_200_000u64
+                },
+                "mark_source": "MedianOfOraclesAndMid",
+                "fba_enabled": false,
+                "open_interest": "5000000000"
+            }),
+        )))
         .mount(&server)
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let m = client.rest().info().market_info(MarketId(1)).await.unwrap();
-    assert_eq!(m.market_id, 1);
-    assert_eq!(m.mark_px, "5000000000000");
-    assert_eq!(m.oi, 9_999_999_999_999_999);
+    let m = client.rest().info().market_info(MarketId(0)).await.unwrap();
+    assert_eq!(m.asset_id, 0);
+    assert_eq!(m.name, "BTC");
+    assert_eq!(m.tick_size, "100");
+    assert_eq!(m.open_interest, "5000000000");
+    assert_eq!(m.funding.interval_ms, 3_600_000);
 }
 
 #[tokio::test]
@@ -229,13 +309,16 @@ async fn staking_state_decodes_by_account_id() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "address": "0x0000000000000000000000000000000000000003",
-            "total_staked": 0,
-            "pending_rewards": 0,
-            "delegations": [],
-            "unbonding": []
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "staking_state",
+            json!({
+                "address": "0x0000000000000000000000000000000000000003",
+                "total_staked": 0,
+                "pending_rewards": 0,
+                "delegations": [],
+                "unbonding": []
+            }),
+        )))
         .mount(&server)
         .await;
 
@@ -250,18 +333,19 @@ async fn l2_book_decodes_levels() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "market_id": 1,
-            "ts_ms": 1_700_000_000_000u64,
-            "bids": [{ "px": 4_990_000_000_000u64, "size": 1000, "n_orders": 3 }],
-            "asks": [{ "px": 5_010_000_000_000u64, "size": 800, "n_orders": 2 }]
-        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "l2_book",
+            json!({
+                "bids": [{ "px": "4990000000000", "sz": "1000", "n_orders": 3 }],
+                "asks": [{ "px": "5010000000000", "sz": "800", "n_orders": 2 }]
+            }),
+        )))
         .mount(&server)
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let book = client.rest().info().l2_book(MarketId(1)).await.unwrap();
+    let book = client.rest().info().l2_book(MarketId(1), 20).await.unwrap();
     assert_eq!(book.bids.len(), 1);
-    assert_eq!(book.bids[0].size, 1000);
+    assert_eq!(book.bids[0].sz, "1000");
     assert_eq!(book.asks[0].n_orders, 2);
 }
