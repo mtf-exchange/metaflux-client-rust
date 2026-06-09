@@ -1,9 +1,7 @@
-//! Cross-chain — outbound bridge messages (PLAN.md §G / field 61).
+//! Cross-chain — outbound bridge messages (action field 61).
 //!
-//! ADR-005 picked a hybrid bridge: USDC over Circle CCTP, other assets over a
-//! third-party bridge (LayerZero / Across / Wormhole — pending S10 eval). The
-//! MTF L1 surfaces a uniform `cross_chain_send` action to the user; the
-//! bridge integration layer dispatches to the right provider per asset.
+//! The MTF L1 surfaces a uniform `cross_chain_send` action to the user; the
+//! bridge integration layer dispatches to the right route per asset.
 
 use serde::{Deserialize, Serialize};
 

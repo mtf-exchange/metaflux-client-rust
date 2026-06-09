@@ -22,8 +22,7 @@ use crate::wallet::key::Wallet;
 /// A 65-byte EIP-712 signature: `r (32) || s (32) || v (1)`.
 ///
 /// `v ∈ {27, 28}` follows the "legacy" Ethereum-style recovery id. The MTF
-/// node's signature verifier expects this layout — see `crates/api-gateway`
-/// in the L1 monorepo for the canonical decoder.
+/// node's signature verifier expects this layout.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Signature {
     /// First 32 bytes of the signature.

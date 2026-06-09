@@ -1,13 +1,10 @@
 //! Server-compatibility cross-check for the MTF-native `/exchange` signing path.
 //!
 //! This is the make-or-break correctness guard: it proves the SDK produces a
-//! 65-byte `r||s||v` signature that the server's `recover_native_action`
-//! (`metaflux/crates/core-state/src/signing.rs`) accepts, recovering the
-//! signing wallet's address.
+//! 65-byte `r||s||v` signature that the server's native-action signature
+//! verifier accepts, recovering the signing wallet's address.
 //!
-//! It mirrors the server's end-to-end reference flow
-//! (`metaflux/crates/api-node/tests/native_order_e2e.rs` and
-//! `crates/devnet-demo/src/main.rs`): the **fixed key `[0x42; 32]`**, the
+//! It mirrors the server's end-to-end reference flow: the **fixed key `[0x42; 32]`**, the
 //! chain-114514 (MTF testnet) MTF domain, and the EXACT `order_json` field shape
 //! (`owner, market, side, kind, size, limit_px, tif, stp_mode, reduce_only`).
 //!
@@ -15,9 +12,8 @@
 //!
 //! 1. `digest_formula_matches_server_kat` — recompute the digest over the
 //!    server's exact committed KAT bytes and assert it equals the server's
-//!    committed value `f7aa10…6e0d` (printed by the server's
-//!    `signing::tests::native_action_kat_vector` for MTF testnet chain
-//!    114514). Pins the FORMULA.
+//!    committed value `f7aa10…6e0d` (printed by the server's native-action
+//!    KAT test for MTF testnet chain 114514). Pins the FORMULA.
 //!
 //! 2. `fixed_key_sign_recover_over_literal_order_json` — sign the digest over
 //!    the literal `order_json` bytes with the fixed key and recover with the
@@ -28,9 +24,9 @@
 //! 3. `sdk_submit_order_path_round_trips` — drive the REAL SDK code path
 //!    (`Order` → `json!` → `ActionSignedDigest` → `Wallet::sign_eip712`) and
 //!    recover the signer. Because the server hashes the RAW posted `action`
-//!    bytes (never a re-serialization — see the `RawValue` handling in
-//!    `api-node/src/rest/exchange.rs`), a self-consistent SDK round-trip is
-//!    exactly what makes the server accept the order. Pins the PRODUCTION path.
+//!    bytes verbatim (never a re-serialization), a self-consistent SDK
+//!    round-trip is exactly what makes the server accept the order. Pins the
+//!    PRODUCTION path.
 
 use k256::ecdsa::{RecoveryId, Signature as K256Sig, SigningKey, VerifyingKey};
 use serde_json::json;
@@ -46,7 +42,7 @@ use metaflux_client::{
     wallet::{Signature, Wallet},
 };
 
-/// The fixed signing key the server's e2e + devnet-demo use (`[0x42; 32]`).
+/// The fixed signing key the server's e2e reference flow uses (`[0x42; 32]`).
 const FIXED_KEY: [u8; 32] = [0x42; 32];
 
 fn keccak(input: &[u8]) -> [u8; 32] {
@@ -116,9 +112,9 @@ fn native_action_digest(chain_id: u64, action_json: &[u8], nonce: u64) -> [u8; 3
     keccak(&d)
 }
 
-/// The literal `order_json` from the server's `native_order_e2e.rs` /
-/// `devnet-demo` — field order and types reproduced EXACTLY. The bytes the
-/// server hashes are these bytes; reordering would change the digest.
+/// The literal `order_json` from the server's e2e reference flow — field
+/// order and types reproduced EXACTLY. The bytes the server hashes are these
+/// bytes; reordering would change the digest.
 fn order_json_literal(owner: &[u8; 20]) -> String {
     format!(
         r#"{{"type":"submit_order","order":{{"owner":"0x{}","market":1,"side":"bid","kind":"limit","size":1000,"limit_px":5000000000000,"tif":"gtc","stp_mode":"cancel_oldest","reduce_only":false}}}}"#,
@@ -163,7 +159,7 @@ fn recover(digest: &[u8; 32], r: &[u8; 32], s: &[u8; 32], v: u8) -> [u8; 20] {
 
 /// (1) The SDK's digest formula must reproduce the server's committed KAT.
 ///
-/// The server's `signing::tests::native_action_kat_vector` prints
+/// The server's native-action KAT test prints
 /// (chain=114514 MTF testnet, nonce=1_700_000_000_000) digest =
 /// `f7aa10…6e0d`. We recompute it here over the server's EXACT committed
 /// action bytes. A drift in the domain (5-field), the
@@ -175,8 +171,8 @@ fn digest_formula_matches_server_kat() {
     let nonce: u64 = 1_700_000_000_000;
     let digest = native_action_digest(MTF_CHAIN_ID, action_json, nonce);
 
-    // Server-committed value (core-state signing::native_action_kat_vector),
-    // recomputed for the MTF testnet chain id 114514.
+    // Server-committed KAT value, recomputed for the MTF testnet chain id
+    // 114514.
     let expected: [u8; 32] = [
         0xf7, 0xaa, 0x10, 0x87, 0xf7, 0x9b, 0x30, 0xfb, 0x3f, 0x13, 0xa1, 0x90, 0x63, 0x6d, 0x32,
         0xb3, 0x27, 0x20, 0xd5, 0x98, 0x41, 0x91, 0x99, 0x2d, 0x70, 0x7e, 0x2a, 0xfb, 0xca, 0x71,

@@ -27,8 +27,8 @@ use crate::wallet::{Address, Wallet};
 
 /// The class of auction the bid targets.
 ///
-/// Each class has its own current price + round duration. See PLAN.md §F.7
-/// for the per-class economics; defaults are pinned but governance-tunable.
+/// Each class has its own current price + round duration. Per-class
+/// economics: defaults are pinned but governance-tunable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuctionKind {

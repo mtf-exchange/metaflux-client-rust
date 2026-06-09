@@ -1,4 +1,4 @@
-//! User-vault types (PLAN.md §I-bis).
+//! User-vault types.
 //!
 //! The `vault_state` endpoint returns one [`VaultState`] per vault id. Each
 //! vault has a leader (controlling account), follower-supplied capital, and
@@ -11,8 +11,7 @@ use crate::wallet::Address;
 
 /// Snapshot of a user vault returned by `info: { type: "vault_state" }`.
 ///
-/// Field shape matches the MTF-native /info handler in `crates/api-node`
-/// (see ADR-019 and `crates/api-node/src/rest/info.rs`).
+/// Field shape matches the node's MTF-native `/info` `vault_state` response.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct VaultState {
@@ -27,9 +26,9 @@ pub struct VaultState {
     pub nav_usd_cents: i64,
     /// Whether the leader has paused the vault.
     pub paused: bool,
-    /// Leader management fee in bps (PLAN.md §I-bis.1 pins to 1000 = 10%).
+    /// Leader management fee in bps (protocol pins this to 1000 = 10%).
     pub management_fee_bps: u16,
-    /// Follower withdrawal lock duration in milliseconds (§I-bis.1: 4 days =
+    /// Follower withdrawal lock duration in milliseconds (4 days =
     /// 345_600_000 ms).
     pub withdrawal_lock_ms: u64,
     /// Vault creation timestamp.

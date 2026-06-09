@@ -1,7 +1,7 @@
 //! `/info` — read-only MTF-native queries.
 //!
-//! No signing required. Discriminator is `type` per the MTF-native handler
-//! in `crates/api-node/src/rest/info.rs`; payload fields are snake_case.
+//! No signing required. Discriminator is `type` per the node's MTF-native
+//! `/info` handler; payload fields are snake_case.
 //!
 //! Two tiers of query:
 //!
@@ -131,7 +131,7 @@ pub struct UnbondingEntry {
 
 // ── node-native `/info` shapes ──────────────────────────────────────────────
 //
-// The handlers in `crates/api-node/src/rest/info.rs` are the source of truth
+// The node's `/info` handlers are the source of truth
 // for what the NODE serves directly. They are keyed by internal numeric ids
 // (`account_id`, `market_id`, `vault_id`) — the gateway's HL-compat layer is
 // what translates `user: 0x…` ↔ `account_id`. The richer `address`-keyed
@@ -447,8 +447,8 @@ impl<'a> Info<'a> {
     /// Fetch the staking state for an account.
     ///
     /// The node keys this query by internal `account_id` (the gateway HL-compat
-    /// layer translates `user: 0x…` → `account_id`). Mirrors
-    /// `handle_staking_state` in `crates/api-node/src/rest/info.rs`.
+    /// layer translates `user: 0x…` → `account_id`). Mirrors the node's
+    /// `staking_state` `/info` handler.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -814,7 +814,7 @@ mod tests {
         let j = serde_json::to_string(&f).unwrap();
         let dec: FeeSchedule = serde_json::from_str(&j).unwrap();
         assert_eq!(f, dec);
-        // PLAN.md §L.2 split sums to 10000 bps.
+        // Fee split sums to 10000 bps.
         let sum = u64::from(f.burn_bps)
             + u64::from(f.vault_bps)
             + u64::from(f.validator_bps)

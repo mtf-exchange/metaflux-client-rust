@@ -1,4 +1,4 @@
-//! FBA — Frequent Batch Auction (PLAN.md microstructure; field 59).
+//! FBA — Frequent Batch Auction (action field 59).
 //!
 //! Per-market FBA mode: instead of continuous matching, orders accumulate
 //! into a batch over a fixed window (typically 100-500 ms) and are matched

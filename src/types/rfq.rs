@@ -1,4 +1,4 @@
-//! RFQ — Request-for-Quote (PLAN.md microstructure / §F.x; S11 surface).
+//! RFQ — Request-for-Quote.
 //!
 //! RFQ flow:
 //!
@@ -8,8 +8,8 @@
 //!    crosses the trade against the chosen MM.
 //! 4. Window expires → session closes; status -> `Expired`.
 //!
-//! Wire shape (snake_case) matches the L1 monorepo's
-//! `crates/core-state/src/state/mtf_extensions.rs` field 58.
+//! Wire shape (snake_case) matches the node's native RFQ action encoding
+//! (action field 58).
 
 use serde::{Deserialize, Serialize};
 

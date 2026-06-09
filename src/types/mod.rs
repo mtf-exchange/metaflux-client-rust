@@ -49,8 +49,7 @@ pub struct MarketId(pub u32);
 
 /// User-vault identifier.
 ///
-/// Assigned at vault creation; see `crates/core-state/src/state/user_vault.rs`
-/// in the L1 monorepo for the canonical creation flow.
+/// Assigned by the node at vault creation.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
