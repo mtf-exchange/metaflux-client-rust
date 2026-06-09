@@ -42,6 +42,7 @@ use crate::types::{
     order::{CancelOrder, Order, OrderResponse},
     pm::{PmEnroll, PmRebalance, PmUnenroll},
     rfq::{RfqAccept, RfqRequest},
+    spot::{SpotCancel, SpotOrder},
     vault::{VaultCreate, VaultDistribute, VaultWithdraw},
 };
 use crate::wallet::{Eip712, Signature, Wallet};
@@ -128,6 +129,58 @@ impl<'a> Exchange<'a> {
             )));
         }
         let action = json!({ "type": "cancel_order", "cancel": cancel });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Toggle the signing account's position mode (hedge / two-way vs one-way).
+    ///
+    /// `hedge = true` switches to two-way mode (independent long + short legs
+    /// per market); `hedge = false` reverts to one-way. The node only accepts
+    /// the switch while the account is **flat on every market** — otherwise it
+    /// rejects the action. The signer authorizes the change; the params carry
+    /// no address (the recovered signer is the target account).
+    ///
+    /// Once in hedge mode, every perp order MUST set
+    /// [`crate::types::order::Order::position_side`].
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn set_position_mode(
+        &self,
+        wallet: &Wallet,
+        hedge: bool,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "set_position_mode", "params": { "hedge": hedge } });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Submit a spot CLOB order (SE-0).
+    ///
+    /// The signing account is the order owner — the spot order body carries no
+    /// owner field; the node binds the order to the recovered signer. v0 is IOC
+    /// limit only (`tif = ioc`, `limit_px > 0`); see [`SpotOrder::ioc_limit`].
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_order(
+        &self,
+        wallet: &Wallet,
+        order: &SpotOrder,
+    ) -> Result<OrderResponse, ClientError> {
+        let action = json!({ "type": "spot_order", "order": order });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Cancel a resting spot order by `oid`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_cancel(
+        &self,
+        wallet: &Wallet,
+        cancel: &SpotCancel,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "spot_cancel", "cancel": cancel });
         self.post_signed(wallet, action).await
     }
 
