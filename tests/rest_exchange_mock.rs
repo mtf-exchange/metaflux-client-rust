@@ -52,13 +52,13 @@ fn sample_wallet() -> Wallet {
 #[tokio::test]
 async fn submit_order_envelope_includes_valid_signature() {
     let server = MockServer::start().await;
-    // Doc shape: Order action returns the per-order status union, wrapped in
-    // the committed `{ type, data }` envelope. One resting order here.
+    // The /exchange order path returns the ExchangeResponse body DIRECTLY (NOT
+    // the `{type,data}` envelope — that is the /info read contract): the per-order
+    // status union is a top-level `statuses` array. One resting order here.
     let captor = CapturingResponder {
         last: Arc::new(Mutex::new(None)),
         response: json!({
-            "type": "Order",
-            "data": [
+            "statuses": [
                 { "resting": { "oid": 1234, "cloid": "0x000102030405060708090a0b0c0d0e0f" } }
             ]
         }),
