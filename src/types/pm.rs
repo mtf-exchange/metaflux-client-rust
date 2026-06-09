@@ -1,6 +1,6 @@
-//! Portfolio margin (PM) — SPAN-like cross-asset margin (PLAN.md §C / RFC-001 field 57).
+//! Portfolio margin (PM) — SPAN-like cross-asset margin (action field 57).
 //!
-//! Eligibility: account net equity ≥ $100K USDC (per RFC-001 §C.2).
+//! Eligibility: account net equity ≥ $100K USDC.
 //!
 //! Enrolling moves a user from isolated-margin to portfolio-margin: instead of
 //! per-position margin requirements, the maintenance margin is computed

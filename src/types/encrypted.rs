@@ -1,4 +1,4 @@
-//! Encrypted orders (PLAN.md microstructure / field 60) — threshold-encrypted
+//! Encrypted orders (action field 60) — threshold-encrypted
 //! MEV-resistant order submissions.
 //!
 //! Flow:

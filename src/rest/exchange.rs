@@ -27,7 +27,7 @@
 //! ```
 //!
 //! The per-action struct hash is computed from the action's typed-data
-//! schema (matches the `crates/api-gateway` decoder in the L1 monorepo).
+//! schema (matches the gateway's signed-action decoder).
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -381,7 +381,7 @@ impl<'a> Exchange<'a> {
         // `/exchange` is the node's MTF-native signed-action front door. The
         // `{action, nonce, signature}` envelope + EIP-712-over-canonical-JSON
         // digest match the server's handler byte-for-byte (cross-impl KAT in
-        // this module + `core-state/src/signing.rs`).
+        // this module pins it).
         self.client.post_json("/exchange", &envelope).await
     }
 }
@@ -405,8 +405,7 @@ struct ActionSignedDigest<'a> {
 impl Eip712 for ActionSignedDigest<'_> {
     fn domain_separator(&self) -> [u8; 32] {
         // EIP712Domain typeHash and the encoded domain struct. 5-field form,
-        // byte-for-byte mirroring the server `EipDomain::separator()` in
-        // metaflux/crates/core-state/src/signing.rs.
+        // byte-for-byte mirroring the server's domain separator.
         //
         // typeHash = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")
         // domain   = keccak256( typeHash || keccak256(name) || keccak256(version) || chainId || verifyingContract )
@@ -555,8 +554,8 @@ mod tests {
     }
 
     /// Cross-impl known-answer vector. Pins the SDK's EIP-712 domain (now
-    /// 5-field) + digest FORMULA against the server's committed value
-    /// (`metaflux/crates/core-state/src/signing.rs::native_action_kat_vector`).
+    /// 5-field) + digest FORMULA against the server's committed native-action
+    /// KAT value.
     ///
     /// We hash the LITERAL action_json bytes via the keccak primitives directly
     /// — NOT through `ActionSignedDigest`, which serializes a `serde_json::Value`
@@ -593,8 +592,8 @@ mod tests {
         d_buf.extend_from_slice(&struct_hash);
         let digest = keccak(&d_buf);
 
-        // Server's committed value (core-state signing::native_action_kat_vector),
-        // recomputed for the MTF testnet chain id 114514 (MTF_CHAIN_ID):
+        // Server's committed native-action KAT value, recomputed for the MTF
+        // testnet chain id 114514 (MTF_CHAIN_ID):
         // f7aa1087f79b30fb3f13a190636d32b32720d5984191992d707e2afbca716e0d
         let expected: [u8; 32] = [
             0xf7, 0xaa, 0x10, 0x87, 0xf7, 0x9b, 0x30, 0xfb, 0x3f, 0x13, 0xa1, 0x90, 0x63, 0x6d,

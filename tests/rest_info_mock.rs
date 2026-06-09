@@ -161,7 +161,7 @@ async fn fee_schedule_decodes_plan_l_split() {
         + u64::from(f.vault_bps)
         + u64::from(f.validator_bps)
         + u64::from(f.treasury_bps);
-    assert_eq!(sum, 10_000, "PLAN.md §L.2 split must sum to 10000 bps");
+    assert_eq!(sum, 10_000, "fee split must sum to 10000 bps");
 }
 
 #[tokio::test]
