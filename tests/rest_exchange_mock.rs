@@ -83,6 +83,7 @@ async fn submit_order_envelope_includes_valid_signature() {
         reduce_only: false,
         cloid: None,
         builder: None,
+        position_side: None,
     };
     let resp = client
         .exchange()
@@ -194,6 +195,7 @@ async fn submit_order_rejects_mismatched_owner_locally() {
         reduce_only: false,
         cloid: None,
         builder: None,
+        position_side: None,
     };
     let err = client
         .exchange()

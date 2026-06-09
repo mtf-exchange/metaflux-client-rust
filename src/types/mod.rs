@@ -22,6 +22,7 @@ pub mod order;
 pub mod pm;
 pub mod position;
 pub mod rfq;
+pub mod spot;
 pub mod vault;
 
 // ---- ID newtypes ----

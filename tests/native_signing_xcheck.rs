@@ -40,7 +40,8 @@ use metaflux_client::{
     rest::exchange::{_action_digest_for_test, _recover_for_test, MTF_CHAIN_ID},
     types::{
         MarketId,
-        order::{Order, OrderKind, Side, StpMode, TimeInForce},
+        order::{Order, OrderKind, PositionSide, Side, StpMode, TimeInForce},
+        spot::{SpotCancel, SpotOrder},
     },
     wallet::{Signature, Wallet},
 };
@@ -247,6 +248,7 @@ fn sdk_submit_order_path_round_trips() {
         reduce_only: false,
         cloid: None,
         builder: None,
+        position_side: None,
     };
     // This is exactly the Value the SDK's `Exchange::submit_order` builds and
     // both signs over and POSTs (the server hashes the identical bytes).
@@ -270,5 +272,141 @@ fn sdk_submit_order_path_round_trips() {
         &via_server_mirror,
         wallet.address().as_bytes(),
         "server-mirror recover over the SDK's production digest must yield the wallet owner"
+    );
+}
+
+/// Drive the SDK's production digest over `action` + sign with the fixed key,
+/// then recover via BOTH the SDK helper and the server-mirror recover. Asserts
+/// both yield the fixed-key owner. This is the same contract
+/// `sdk_submit_order_path_round_trips` proves, factored for the new actions.
+fn assert_action_round_trips(action: &serde_json::Value) {
+    let wallet = Wallet::from_bytes(FIXED_KEY).expect("wallet");
+    let nonce: u64 = 7;
+    let digest = _action_digest_for_test(action, nonce);
+    let sig: Signature = wallet.sign_digest(&digest).expect("sign");
+
+    let via_sdk = _recover_for_test(&digest, &sig).expect("sdk recover");
+    assert_eq!(via_sdk, wallet.address(), "SDK round-trip must recover wallet");
+
+    let via_server_mirror = recover(&digest, &sig.r, &sig.s, sig.v);
+    assert_eq!(
+        &via_server_mirror,
+        wallet.address().as_bytes(),
+        "server-mirror recover must yield the wallet owner"
+    );
+}
+
+/// `set_position_mode` — sender-authorized hedge toggle. The signed action
+/// envelope is `{"type":"set_position_mode","params":{"hedge":<bool>}}`; the
+/// node binds it to the recovered signer (no address in the body).
+#[test]
+fn sdk_set_position_mode_path_round_trips() {
+    for hedge in [true, false] {
+        let action = json!({ "type": "set_position_mode", "params": { "hedge": hedge } });
+        assert_action_round_trips(&action);
+    }
+    // Pin the exact bytes the node hashes. NOTE: the SDK signs + POSTs a
+    // `serde_json::Value`, whose object keys serialize in BTreeMap (alphabetical)
+    // order — `params` before `type` — and the node hashes those identical
+    // posted bytes, so this is the canonical signed form.
+    let action = json!({ "type": "set_position_mode", "params": { "hedge": true } });
+    assert_eq!(
+        serde_json::to_string(&action).unwrap(),
+        r#"{"params":{"hedge":true},"type":"set_position_mode"}"#
+    );
+}
+
+/// `spot_order` (SE-0) — owner is the recovered signer; the body carries no
+/// owner field. Drives the real `SpotOrder` → `json!` → digest path.
+#[test]
+fn sdk_spot_order_path_round_trips() {
+    let mut order = SpotOrder::ioc_limit(3, Side::Bid, 1000, 5_000_000_000);
+    order.stp_mode = StpMode::CancelNewest;
+    let action = json!({ "type": "spot_order", "order": order });
+    assert_action_round_trips(&action);
+
+    // Pin the canonical signed bytes: ioc tif, 1e8 px plane, no cloid key when
+    // None. Object keys are BTreeMap (alphabetical) — the form the SDK signs +
+    // POSTs and the node hashes verbatim.
+    let order = SpotOrder::ioc_limit(3, Side::Bid, 1000, 5_000_000_000);
+    let action = json!({ "type": "spot_order", "order": order });
+    assert_eq!(
+        serde_json::to_string(&action).unwrap(),
+        r#"{"order":{"limit_px":5000000000,"pair":3,"side":"bid","size":1000,"stp_mode":"cancel_oldest","tif":"ioc"},"type":"spot_order"}"#
+    );
+}
+
+/// `spot_cancel` — cancel a resting spot order by `(pair, oid)`.
+#[test]
+fn sdk_spot_cancel_path_round_trips() {
+    let cancel = SpotCancel { pair: 3, oid: 12345 };
+    let action = json!({ "type": "spot_cancel", "cancel": cancel });
+    assert_action_round_trips(&action);
+
+    // BTreeMap (alphabetical) key order — the SDK-signed + posted form.
+    assert_eq!(
+        serde_json::to_string(&action).unwrap(),
+        r#"{"cancel":{"oid":12345,"pair":3},"type":"spot_cancel"}"#
+    );
+}
+
+/// A hedge-mode perp order carries `position_side`; the round-trip must hold and
+/// the field must appear in the canonical bytes the node hashes.
+#[test]
+fn sdk_hedge_perp_order_path_round_trips() {
+    let wallet = Wallet::from_bytes(FIXED_KEY).expect("wallet");
+    let order = Order {
+        owner: wallet.address(),
+        market: MarketId(1),
+        side: Side::Bid,
+        kind: OrderKind::Limit,
+        size: 1000,
+        limit_px: 5_000_000_000_000,
+        tif: TimeInForce::Gtc,
+        stp_mode: StpMode::CancelOldest,
+        reduce_only: false,
+        cloid: None,
+        builder: None,
+        position_side: Some(PositionSide::Long),
+    };
+    let action = json!({ "type": "submit_order", "order": order });
+    assert_action_round_trips(&action);
+
+    let s = serde_json::to_string(&action).unwrap();
+    assert!(
+        s.contains(r#""position_side":"long""#),
+        "hedge order must serialize position_side; got {s}"
+    );
+}
+
+/// A one-way perp order (default) omits `position_side`, so the `Order` struct
+/// serializes byte-identically to the pre-hedge-mode shape — the exact body the
+/// server KAT (`digest_formula_matches_server_kat`) hashes. This proves adding
+/// the optional field did not perturb the legacy one-way order bytes.
+#[test]
+fn one_way_perp_order_bytes_match_legacy_kat_shape() {
+    let order = Order {
+        owner: metaflux_client::wallet::Address::from_hex(
+            "0x000000000000000000000000000000000000beef",
+        )
+        .unwrap(),
+        market: MarketId(1),
+        side: Side::Bid,
+        kind: OrderKind::Limit,
+        size: 1000,
+        limit_px: 5_000_000_000_000,
+        tif: TimeInForce::Gtc,
+        stp_mode: StpMode::CancelOldest,
+        reduce_only: false,
+        cloid: None,
+        builder: None,
+        position_side: None,
+    };
+    // Serialize the struct directly (declaration order) — this is the `order`
+    // sub-object the server KAT pins. `position_side: None` must NOT appear.
+    assert_eq!(
+        serde_json::to_string(&order).unwrap(),
+        r#"{"owner":"0x000000000000000000000000000000000000beef","market":1,"side":"bid","kind":"limit","size":1000,"limit_px":5000000000000,"tif":"gtc","stp_mode":"cancel_oldest","reduce_only":false}"#,
+        "one-way order body must equal the committed server KAT order shape"
     );
 }

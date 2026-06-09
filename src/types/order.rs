@@ -67,6 +67,23 @@ pub enum TimeInForce {
     Alo,
 }
 
+/// Hedge-mode side selector for a perp order.
+///
+/// OMITTED on a one-way (default) account — the SDK leaves
+/// [`Order::position_side`] as `None`, so a one-way order's signed bytes are
+/// byte-identical to the pre-hedge-mode shape. REQUIRED on a hedge / two-way
+/// account, where each market carries an independent long and short leg and the
+/// order must name which leg it acts on. Toggle the account mode with
+/// [`crate::rest::exchange::Exchange::set_position_mode`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PositionSide {
+    /// Acts on the long leg.
+    Long,
+    /// Acts on the short leg.
+    Short,
+}
+
 /// Self-trade prevention mode (ADR-009 chose `CancelOldest` as default).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,6 +126,11 @@ pub struct Order {
     /// Optional builder-code fee attribution (RFC-009 Stage 2b).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub builder: Option<Builder>,
+    /// Hedge-mode leg selector. `None` (omitted) on a one-way account — REQUIRED
+    /// on a hedge / two-way account. Omitting it keeps one-way payloads
+    /// byte-identical to the pre-hedge-mode shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position_side: Option<PositionSide>,
 }
 
 /// Builder-code fee attribution riding inside a signed order (RFC-009 Stage 2b).
@@ -243,6 +265,7 @@ mod tests {
             reduce_only: false,
             cloid: None,
             builder: None,
+            position_side: None,
         }
     }
 
@@ -308,6 +331,50 @@ mod tests {
         let o = sample_order();
         let j = serde_json::to_value(&o).unwrap();
         assert!(j.get("builder").is_none());
+    }
+
+    #[test]
+    fn order_omits_none_position_side() {
+        // One-way account: position_side is None and MUST NOT appear on the
+        // wire — this keeps the signed bytes byte-identical to the
+        // pre-hedge-mode order shape.
+        let o = sample_order();
+        let j = serde_json::to_value(&o).unwrap();
+        assert!(j.get("position_side").is_none());
+    }
+
+    #[test]
+    fn one_way_order_bytes_unchanged_by_position_side_field() {
+        // Adding the optional `position_side` field must not perturb the
+        // canonical-JSON bytes the node hashes for a one-way order.
+        let o = sample_order();
+        let s = serde_json::to_string(&o).unwrap();
+        assert_eq!(
+            s,
+            r#"{"owner":"0x0000000000000000000000000000000000000000","market":1,"side":"bid","kind":"limit","size":1000,"limit_px":5000000000000,"tif":"gtc","stp_mode":"cancel_oldest","reduce_only":false}"#
+        );
+    }
+
+    #[test]
+    fn hedge_order_serializes_position_side() {
+        for (ps, expected) in [(PositionSide::Long, "long"), (PositionSide::Short, "short")] {
+            let mut o = sample_order();
+            o.position_side = Some(ps);
+            let j = serde_json::to_value(&o).unwrap();
+            assert_eq!(j["position_side"], serde_json::json!(expected));
+        }
+    }
+
+    #[test]
+    fn position_side_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&PositionSide::Long).unwrap(),
+            "\"long\""
+        );
+        assert_eq!(
+            serde_json::to_string(&PositionSide::Short).unwrap(),
+            "\"short\""
+        );
     }
 
     #[test]
