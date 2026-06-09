@@ -165,6 +165,83 @@ async fn fee_schedule_decodes_plan_l_split() {
 }
 
 #[tokio::test]
+async fn spot_meta_decodes_pairs_and_tokens() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "spot_meta",
+            json!({
+                "pairs": [{
+                    "id": 101,
+                    "name": "BTC/USDC",
+                    "base": 0,
+                    "quote": 100,
+                    "taker_fee_bps": 5,
+                    "min_notional": "1000",
+                    "active": true
+                }],
+                "tokens": [
+                    { "id": 0, "name": "BTC", "sz_decimals": 5, "wei_decimals": 8 },
+                    { "id": 100, "name": "USDC", "sz_decimals": 2, "wei_decimals": 6 }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let m = client.rest().info().spot_meta().await.unwrap();
+    assert_eq!(m.pairs.len(), 1);
+    // `name` is the derived `{base}/{quote}` display name; `id` is the numeric
+    // pair id spot prints carry as `coin` on the WS feeds.
+    assert_eq!(m.pairs[0].id, 101);
+    assert_eq!(m.pairs[0].name, "BTC/USDC");
+    assert_eq!(m.pairs[0].base, 0);
+    assert_eq!(m.pairs[0].quote, 100);
+    assert_eq!(m.pairs[0].taker_fee_bps, 5);
+    assert_eq!(m.pairs[0].min_notional, "1000");
+    assert!(m.pairs[0].active);
+    assert_eq!(m.tokens.len(), 2);
+    assert_eq!(m.tokens[0].name, "BTC");
+    assert_eq!(m.tokens[0].sz_decimals, 5);
+    assert_eq!(m.tokens[1].name, "USDC");
+    assert_eq!(m.tokens[1].wei_decimals, 6);
+}
+
+#[tokio::test]
+async fn spot_clearinghouse_state_decodes_balances_by_address() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "spot_clearinghouse_state",
+            json!({
+                "address": "0x4242424242424242424242424242424242424242",
+                "balances": [
+                    { "asset": 101, "name": "BTC/USDC", "balance": "500" }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let addr = Address::from_hex("0x4242424242424242424242424242424242424242").unwrap();
+    let s = client
+        .rest()
+        .info()
+        .spot_clearinghouse_state(addr)
+        .await
+        .unwrap();
+    assert_eq!(s.address, addr);
+    assert_eq!(s.balances.len(), 1);
+    assert_eq!(s.balances[0].asset, 101);
+    assert_eq!(s.balances[0].name, "BTC/USDC");
+    assert_eq!(s.balances[0].balance, "500");
+}
+
+#[tokio::test]
 async fn error_envelope_surfaces_as_protocol_error() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

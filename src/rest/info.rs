@@ -7,8 +7,10 @@
 //!
 //! - **Node-native** ([`Info::node_info`], [`Info::account_state`],
 //!   [`Info::market_info`], [`Info::vault_state`], [`Info::staking_state`],
-//!   [`Info::fee_schedule`]) — 1:1 with the node's `handle_info` dispatch.
-//!   Keyed by internal numeric ids (`account_id` / `market_id` / `vault_id`).
+//!   [`Info::fee_schedule`], [`Info::spot_meta`],
+//!   [`Info::spot_clearinghouse_state`]) — 1:1 with the node's `handle_info`
+//!   dispatch. Keyed by internal numeric ids (`account_id` / `market_id` /
+//!   `vault_id`) or by 20-byte `address`.
 //! - **Gateway-surface** ([`Info::markets`], [`Info::l2_book`],
 //!   [`Info::user_state`], [`Info::pm_state`], [`Info::rfq_state`]) — richer
 //!   `address`-keyed / aggregate shapes served by the gateway's MTF-native
@@ -314,6 +316,77 @@ pub struct MarketInfo {
     pub open_interest: String,
 }
 
+/// One spot pair inside a [`SpotMeta`].
+///
+/// `id` is the numeric pair id — the SAME compact `coin` label spot prints
+/// carry on the WS `trades` / `candles` / `fills` channels. `name` is the
+/// human-readable `{base}/{quote}` display name derived from the token
+/// registry; use this record to map between the two.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotPair {
+    /// Numeric pair id (the WS `coin` label for spot prints).
+    pub id: u32,
+    /// Display name, derived as `{base}/{quote}` from the token registry.
+    pub name: String,
+    /// Base asset id.
+    pub base: u32,
+    /// Quote asset id.
+    pub quote: u32,
+    /// Taker fee in bps; `0` if unset.
+    pub taker_fee_bps: u16,
+    /// Minimum order notional (USDC cents) as a decimal string; `"0"` if unset.
+    pub min_notional: String,
+    /// Whether the pair is active for trading.
+    pub active: bool,
+}
+
+/// One token registry entry inside a [`SpotMeta`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotToken {
+    /// Token asset id.
+    pub id: u32,
+    /// Human token name (e.g. `"BTC"`).
+    pub name: String,
+    /// Display / size precision (decimals shown on the spot book).
+    pub sz_decimals: u8,
+    /// Native (ERC-20-style) token decimals (e.g. USDC = 6, BTC = 8).
+    pub wei_decimals: u8,
+}
+
+/// `spot_meta` response — spot pair universe + token registry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotMeta {
+    /// Registered spot pairs (token-registration sentinels excluded).
+    pub pairs: Vec<SpotPair>,
+    /// Token registry with per-token decimals.
+    pub tokens: Vec<SpotToken>,
+}
+
+/// One spot balance inside a [`SpotClearinghouseState`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotBalance {
+    /// Spot asset id.
+    pub asset: u32,
+    /// Human name for the asset, else `asset:<id>`.
+    pub name: String,
+    /// Balance as a decimal string (truncated toward zero).
+    pub balance: String,
+}
+
+/// `spot_clearinghouse_state` response — per-account spot token balances.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotClearinghouseState {
+    /// Echo of the requested address.
+    pub address: Address,
+    /// Spot balances held by the account.
+    pub balances: Vec<SpotBalance>,
+}
+
 impl<'a> Info<'a> {
     /// List all markets and their rich metadata.
     ///
@@ -456,6 +529,37 @@ impl<'a> Info<'a> {
     pub async fn fee_schedule(&self) -> Result<FeeSchedule, ClientError> {
         self.client
             .post_json("/info", &json!({ "type": "fee_schedule" }))
+            .await
+    }
+
+    /// `spot_meta` — spot pair universe + token registry. No parameters.
+    ///
+    /// Each [`SpotPair`]'s `name` is derived as `{base}/{quote}` from the
+    /// token registry; the numeric `id` is the compact `coin` label spot
+    /// prints carry on the WS `trades` / `candles` / `fills` channels.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_meta(&self) -> Result<SpotMeta, ClientError> {
+        self.client
+            .post_json("/info", &json!({ "type": "spot_meta" }))
+            .await
+    }
+
+    /// `spot_clearinghouse_state` — per-account spot token balances keyed by
+    /// `address` (0x hex).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_clearinghouse_state(
+        &self,
+        addr: Address,
+    ) -> Result<SpotClearinghouseState, ClientError> {
+        self.client
+            .post_json(
+                "/info",
+                &json!({ "type": "spot_clearinghouse_state", "address": addr }),
+            )
             .await
     }
 
@@ -625,6 +729,73 @@ mod tests {
         let j = serde_json::to_value(&b).unwrap();
         assert!(j["bids"][0]["px"].is_string());
         assert!(j["bids"][0]["n_orders"].is_number());
+    }
+
+    /// Decode the exact `spot_meta.data` payload the node serves: pair `name`
+    /// derived as `{base}/{quote}`, numeric `id` (the WS spot `coin` label),
+    /// `min_notional` as a string, plus the token registry.
+    #[test]
+    fn spot_meta_decodes_node_fixture() {
+        let data = serde_json::json!({
+            "pairs": [{
+                "id": 101,
+                "name": "BTC/USDC",
+                "base": 0,
+                "quote": 100,
+                "taker_fee_bps": 5,
+                "min_notional": "1000",
+                "active": true
+            }],
+            "tokens": [
+                { "id": 0, "name": "BTC", "sz_decimals": 5, "wei_decimals": 8 },
+                { "id": 100, "name": "USDC", "sz_decimals": 2, "wei_decimals": 6 }
+            ]
+        });
+        let m: SpotMeta = serde_json::from_value(data).unwrap();
+        assert_eq!(m.pairs.len(), 1);
+        assert_eq!(m.pairs[0].id, 101);
+        assert_eq!(m.pairs[0].name, "BTC/USDC");
+        assert_eq!(m.pairs[0].base, 0);
+        assert_eq!(m.pairs[0].quote, 100);
+        assert_eq!(m.pairs[0].taker_fee_bps, 5);
+        assert_eq!(m.pairs[0].min_notional, "1000");
+        assert!(m.pairs[0].active);
+        assert_eq!(m.tokens.len(), 2);
+        assert_eq!(m.tokens[0].name, "BTC");
+        assert_eq!(m.tokens[0].wei_decimals, 8);
+        assert_eq!(m.tokens[1].id, 100);
+        assert_eq!(m.tokens[1].sz_decimals, 2);
+        // `min_notional` stays a string on the wire; ids stay numbers.
+        let j = serde_json::to_value(&m).unwrap();
+        assert!(j["pairs"][0]["min_notional"].is_string());
+        assert!(j["pairs"][0]["id"].is_number());
+        // Round-trips.
+        let dec: SpotMeta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(m, dec);
+    }
+
+    /// Decode the exact `spot_clearinghouse_state.data` payload the node serves.
+    #[test]
+    fn spot_clearinghouse_state_decodes_node_fixture() {
+        let data = serde_json::json!({
+            "address": "0x4242424242424242424242424242424242424242",
+            "balances": [
+                { "asset": 101, "name": "BTC/USDC", "balance": "500" }
+            ]
+        });
+        let s: SpotClearinghouseState = serde_json::from_value(data).unwrap();
+        assert_eq!(s.balances.len(), 1);
+        assert_eq!(s.balances[0].asset, 101);
+        assert_eq!(s.balances[0].name, "BTC/USDC");
+        assert_eq!(s.balances[0].balance, "500");
+        // `balance` stays a string on the wire.
+        let j = serde_json::to_value(&s).unwrap();
+        assert!(j["balances"][0]["balance"].is_string());
+        assert!(j["balances"][0]["asset"].is_number());
+        // Round-trips.
+        let dec: SpotClearinghouseState =
+            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(s, dec);
     }
 
     #[test]

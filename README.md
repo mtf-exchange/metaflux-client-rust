@@ -68,6 +68,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Spot trading
+
+The spot CLOB (v0 = IOC limit only, `limit_px > 0` on the 1e8 price plane) is a
+separate book from the perp engine, keyed by a numeric **pair id**. Discover
+pairs via `spot_meta()`, trade with `spot_order` / `spot_cancel`, and read
+balances back with `spot_clearinghouse_state(address)`:
+
+```rust,ignore
+use metaflux_client::types::{
+    order::Side,
+    spot::{SpotCancel, SpotOrder},
+};
+
+// `client` and `wallet` as in the Quick start above.
+
+// 1. Discover pairs. `name` is derived as "{base}/{quote}" from the token
+//    registry; `id` is the numeric pair id.
+let meta = client.rest().info().spot_meta().await?;
+let pair = meta
+    .pairs
+    .iter()
+    .find(|p| p.name == "BTC/USDC")
+    .expect("pair listed");
+
+// 2. Place an IOC limit spot order (signed, POST /exchange).
+let order = SpotOrder::ioc_limit(pair.id, Side::Bid, 1_000, 5_000_000_000);
+let resp = client.exchange().spot_order(&wallet, &order).await?;
+println!("spot order: {resp:?}");
+
+// 3. Read balances back.
+let bals = client
+    .rest()
+    .info()
+    .spot_clearinghouse_state(wallet.address())
+    .await?;
+for b in &bals.balances {
+    println!("{} ({}) = {}", b.name, b.asset, b.balance);
+}
+
+// 4. Cancel a resting order by oid.
+client
+    .exchange()
+    .spot_cancel(&wallet, &SpotCancel { pair: pair.id, oid: 12345 })
+    .await?;
+```
+
+On the WebSocket `trades` / `candles` / `fills` channels, spot prints carry the
+**numeric pair id** as the `coin` label (e.g. `"101"`), not the display name —
+use `spot_meta()` to map `id` to its `"{base}/{quote}"` name.
+
 ## Module overview
 
 | Module | Purpose |
