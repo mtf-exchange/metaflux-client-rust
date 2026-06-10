@@ -1,7 +1,26 @@
 # metaflux-client
 
+[![crates.io](https://img.shields.io/crates/v/metaflux-client.svg)](https://crates.io/crates/metaflux-client)
+[![docs.rs](https://img.shields.io/docsrs/metaflux-client)](https://docs.rs/metaflux-client)
+[![CI](https://github.com/mtf-exchange/metaflux-client-rust/actions/workflows/ci.yml/badge.svg)](https://github.com/mtf-exchange/metaflux-client-rust/actions/workflows/ci.yml)
+[![license](https://img.shields.io/crates/l/metaflux-client.svg)](./LICENSE)
+
 Rust SDK for the MetaFlux derivatives L1 — REST + WebSocket, EIP-712 signing,
 and typed builders for the node's full signed-action surface.
+
+## Installation
+
+Published on [crates.io](https://crates.io/crates/metaflux-client):
+
+```toml
+[dependencies]
+metaflux-client = "0.1"
+```
+
+or `cargo add metaflux-client`. The crate is imported as `metaflux_client`.
+
+A short alias crate, [`metaflux`](https://crates.io/crates/metaflux), re-exports
+the entire API — `metaflux = "0.1"` and `use metaflux::...` work identically.
 
 ## What it does
 
