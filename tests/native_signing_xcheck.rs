@@ -282,7 +282,11 @@ fn assert_action_round_trips(action: &serde_json::Value) {
     let sig: Signature = wallet.sign_digest(&digest).expect("sign");
 
     let via_sdk = _recover_for_test(&digest, &sig).expect("sdk recover");
-    assert_eq!(via_sdk, wallet.address(), "SDK round-trip must recover wallet");
+    assert_eq!(
+        via_sdk,
+        wallet.address(),
+        "SDK round-trip must recover wallet"
+    );
 
     let via_server_mirror = recover(&digest, &sig.r, &sig.s, sig.v);
     assert_eq!(
@@ -335,7 +339,10 @@ fn sdk_spot_order_path_round_trips() {
 /// `spot_cancel` — cancel a resting spot order by `(pair, oid)`.
 #[test]
 fn sdk_spot_cancel_path_round_trips() {
-    let cancel = SpotCancel { pair: 3, oid: 12345 };
+    let cancel = SpotCancel {
+        pair: 3,
+        oid: 12345,
+    };
     let action = json!({ "type": "spot_cancel", "cancel": cancel });
     assert_action_round_trips(&action);
 

@@ -513,10 +513,7 @@ impl<'a> Info<'a> {
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn market_info_by_coin(&self, coin: &str) -> Result<MarketInfo, ClientError> {
         self.client
-            .post_json(
-                "/info",
-                &json!({ "type": "market_info", "coin": coin }),
-            )
+            .post_json("/info", &json!({ "type": "market_info", "coin": coin }))
             .await
     }
 
@@ -704,7 +701,10 @@ mod tests {
         assert_eq!(a.positions[0].asset, 0);
         assert_eq!(a.positions[0].leverage, 10);
         assert_eq!(a.balances.usdc, "100000000");
-        assert_eq!(a.balances.spot.get("ETH").map(String::as_str), Some("5000000000"));
+        assert_eq!(
+            a.balances.spot.get("ETH").map(String::as_str),
+            Some("5000000000")
+        );
         // Round-trips.
         let dec: AccountState = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
         assert_eq!(a, dec);
