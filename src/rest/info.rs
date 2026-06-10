@@ -39,7 +39,7 @@ pub struct Info<'a> {
 
 /// One level of the L2 book.
 ///
-/// Per `api/rest/info.md` (`l2_book`): `px` / `sz` are 8-decimal fixed-point
+/// Per the `/info` contract (`l2_book`): `px` / `sz` are 8-decimal fixed-point
 /// **u128 strings** (precision past 2^53), `n_orders` is a JSON number.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -54,7 +54,7 @@ pub struct L2Level {
 
 /// L2 book snapshot.
 ///
-/// Per `api/rest/info.md` (`l2_book`) the `data` payload is exactly
+/// Per the `/info` contract (`l2_book`) the `data` payload is exactly
 /// `{ "bids": [...], "asks": [...] }`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -65,7 +65,7 @@ pub struct L2Book {
     pub asks: Vec<L2Level>,
 }
 
-/// `fee_schedule` response — pinned to the L1 §L.2 / §L.5 splits.
+/// `fee_schedule` response — the protocol fee splits.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct FeeSchedule {
@@ -77,7 +77,7 @@ pub struct FeeSchedule {
     pub referrer_share_bps: u16,
     /// Max additional builder code fee in bps.
     pub builder_cap_bps: u16,
-    /// Max additional MIP-3 deployer fee in bps.
+    /// Max additional deployer fee in bps.
     pub deployer_cap_bps: u16,
     /// Burn fraction of the non-referrer remainder, in bps.
     pub burn_bps: u16,
@@ -131,16 +131,15 @@ pub struct UnbondingEntry {
 
 // ── node-native `/info` shapes ──────────────────────────────────────────────
 //
-// The node's `/info` handlers are the source of truth
-// for what the NODE serves directly. They are keyed by internal numeric ids
-// (`account_id`, `market_id`, `vault_id`) — the gateway's HL-compat layer is
-// what translates `user: 0x…` ↔ `account_id`. The richer `address`-keyed
-// methods above target that gateway surface; the methods below hit the node
-// 1:1 so a `Client` pointed straight at a node works today.
+// These read types mirror what the node serves directly. They are keyed by
+// numeric ids (`account_id`, `market_id`, `vault_id`); a gateway translates
+// `user: 0x…` ↔ `account_id` for the richer `address`-keyed methods above. The
+// methods below hit the node 1:1, so a `Client` pointed straight at a node
+// works without a gateway.
 
 /// `node_info` response — static node identity + protocol version.
 ///
-/// Per `api/rest/info.md` (`node_info`). No request parameters.
+/// Per the `/info` contract (`node_info`). No request parameters.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct NodeInfo {
@@ -188,7 +187,7 @@ pub enum MarginMode {
 ///
 /// Distinct from [`crate::types::position::Position`] (the `user_state`
 /// element): this is the `account_state.positions[*]` shape from
-/// `api/rest/info.md`. `size` / `entry_px` / `unrealised_pnl` are fixed-point
+/// the `/info` contract. `size` / `entry_px` / `unrealised_pnl` are fixed-point
 /// **string** numerics; `leverage` is an integer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -224,7 +223,7 @@ pub struct Balances {
 
 /// `account_state` response — rich per-account snapshot keyed by `address`.
 ///
-/// Per `api/rest/info.md` (`account_state`). All monetary magnitudes are
+/// Per the `/info` contract (`account_state`). All monetary magnitudes are
 /// fixed-point **string** numerics (USDC base units / 8-decimal fixed-point)
 /// to survive JS-safe-integer limits; `health` may be negative.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,7 +279,7 @@ pub struct Funding {
 
 /// `market_info` response — rich per-market metadata.
 ///
-/// Per `api/rest/info.md` (`market_info`). Fixed-point magnitudes
+/// Per the `/info` contract (`market_info`). Fixed-point magnitudes
 /// (`tick_size`, `step_size`, `min_order`, ratios, `open_interest`) are
 /// **string** numerics; `asset_id` / `max_leverage` are JSON numbers.
 /// Resolvable by `asset_id` or by `coin` (see [`Info::market_info`] /
@@ -393,7 +392,7 @@ impl<'a> Info<'a> {
     /// Returns a JSON array of [`MarketInfo`] objects (the same record served
     /// per-market by [`Info::market_info`]).
     ///
-    /// NOTE: `api/rest/info.md` does not define a bulk `markets` query type —
+    /// NOTE: the `/info` contract does not define a bulk `markets` query type —
     /// only the per-market `market_info`. This method targets a gateway-surface
     /// `markets` aggregate that mirrors the `market_info` record shape.
     ///
@@ -407,7 +406,7 @@ impl<'a> Info<'a> {
 
     /// Fetch the L2 book snapshot for a market.
     ///
-    /// Per `api/rest/info.md` (`l2_book`): keyed by `asset_id`, `depth`
+    /// Per the `/info` contract (`l2_book`): keyed by `asset_id`, `depth`
     /// levels per side. The `data` payload is `{ bids, asks }`.
     ///
     /// # Errors
@@ -446,9 +445,8 @@ impl<'a> Info<'a> {
 
     /// Fetch the staking state for an account.
     ///
-    /// The node keys this query by internal `account_id` (the gateway HL-compat
-    /// layer translates `user: 0x…` → `account_id`). Mirrors the node's
-    /// `staking_state` `/info` handler.
+    /// The node keys this query by numeric `account_id` (a gateway translates
+    /// `user: 0x…` → `account_id`). Mirrors the node's `staking_state` read.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -475,7 +473,7 @@ impl<'a> Info<'a> {
 
     /// `account_state` — rich per-account snapshot keyed by `address`.
     ///
-    /// Per `api/rest/info.md` (`account_state`): the request carries the 20-byte
+    /// Per the `/info` contract (`account_state`): the request carries the 20-byte
     /// `address`; the response is the rich [`AccountState`] (equity, margins,
     /// tier, positions, balances).
     ///
@@ -492,7 +490,7 @@ impl<'a> Info<'a> {
 
     /// `market_info` — rich single-market snapshot by canonical `asset_id`.
     ///
-    /// Per `api/rest/info.md` (`market_info`). To resolve by human-readable
+    /// Per the `/info` contract (`market_info`). To resolve by human-readable
     /// name use [`Info::market_info_by_coin`].
     ///
     /// # Errors
@@ -508,7 +506,7 @@ impl<'a> Info<'a> {
 
     /// `market_info` — rich single-market snapshot by human-readable `coin`.
     ///
-    /// Per `api/rest/info.md`: `asset_id` is canonical, `coin` is a convenience
+    /// Per the `/info` contract: `asset_id` is canonical, `coin` is a convenience
     /// alias; both resolve to the same record. See [`Info::market_info`].
     ///
     /// # Errors
@@ -608,7 +606,7 @@ impl<'a> Info<'a> {
 mod tests {
     use super::*;
 
-    /// Decode the exact `node_info.data` payload from `api/rest/info.md`.
+    /// Decode the exact `node_info.data` payload from the `/info` contract.
     #[test]
     fn node_info_decodes_doc_fixture() {
         let data = serde_json::json!({
@@ -630,7 +628,7 @@ mod tests {
         assert_eq!(n, dec);
     }
 
-    /// Decode the exact `market_info.data` payload from `api/rest/info.md`.
+    /// Decode the exact `market_info.data` payload from the `/info` contract.
     #[test]
     fn market_info_decodes_doc_fixture() {
         let data = serde_json::json!({
@@ -669,7 +667,7 @@ mod tests {
         assert!(j["asset_id"].is_number());
     }
 
-    /// Decode the exact `account_state.data` payload from `api/rest/info.md`.
+    /// Decode the exact `account_state.data` payload from the `/info` contract.
     #[test]
     fn account_state_decodes_doc_fixture() {
         let data = serde_json::json!({
@@ -712,7 +710,7 @@ mod tests {
         assert_eq!(a, dec);
     }
 
-    /// Decode the exact `l2_book.data` payload from `api/rest/info.md`.
+    /// Decode the exact `l2_book.data` payload from the `/info` contract.
     #[test]
     fn l2_book_decodes_doc_fixture() {
         let data = serde_json::json!({

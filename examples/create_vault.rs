@@ -6,7 +6,12 @@
 //! MTF_PRIVATE_KEY=0x... cargo run --example create_vault
 //! ```
 
-use metaflux_client::{Client, types::VaultId, types::vault::VaultCreate, wallet::Wallet};
+use metaflux_client::{
+    Client,
+    types::VaultId,
+    types::vault::{CreateVault, VaultKind},
+    wallet::Wallet,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -15,13 +20,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wallet = Wallet::from_hex(&priv_hex)?;
     let client = Client::new("https://api.mtf.exchange")?;
 
-    let create = VaultCreate {
-        leader: wallet.address(),
-        seed_cents: 1_000_000, // $10,000
-        management_fee_bps: 1000,
+    // The signing wallet becomes the vault leader.
+    let create = CreateVault {
+        name: "my-vault".into(),
+        lock_period_secs: 4 * 86_400, // 4-day follower lock
+        parent: None,
+        kind: VaultKind::User,
     };
-    let resp = client.exchange().vault_create(&wallet, &create).await?;
-    println!("vault_create response: {resp:?}");
+    let resp = client.exchange().create_vault(&wallet, &create).await?;
+    println!("create_vault response: {resp:?}");
 
     // Try to query the newly created vault's NAV.
     // The action response typically carries the assigned vault_id; we

@@ -1,32 +1,30 @@
 # metaflux-client
 
-Rust SDK for the MetaFlux derivatives L1 — **MTF-native** protocol (REST + WS +
-gRPC), EIP-712 signing, full feature surface incl. RFQ / FBA / PM / CrossChain
-/ EncryptedOrder.
+Rust SDK for the MetaFlux derivatives L1 — REST + WebSocket, EIP-712 signing,
+and typed builders for the node's full signed-action surface.
 
-## Identity (ADR-019)
+## What it does
 
-This SDK speaks **only the MTF-native protocol**:
+- **REST** `/info` / `/exchange` / `/explorer` — snake_case JSON, plain-integer
+  numerics (sizes / prices on fixed-point planes), `market_id` rather than `coin`.
+- **WebSocket** subscriptions — reconnect with backoff + heartbeat.
+- **EIP-712 signing** — secp256k1 with deterministic (RFC-6979) nonces.
 
-- REST `/info` / `/exchange` / `/explorer` — snake_case JSON fields, plain
-  integer numerics (no decimal-string convention).
-- WebSocket subscriptions — MTF-native shape (snake_case channel discriminators,
-  `market_id` not `coin`).
-- gRPC over mTLS — for power users; gated behind the `grpc` feature flag.
+The `/exchange` surface is fully typed. Every signed action the node accepts has
+a first-class request type and an `Exchange` method, including:
 
-It exposes every MTF differentiation feature with first-class types:
-
-- **RFQ** — request-for-quote sessions
-- **FBA** — frequent batch auctions
-- **PM** — portfolio margin enroll / rebalance
-- **CrossChain** — outbound bridge messages
-- **EncryptedOrder** — threshold-encrypted MEV-resistant orders
-- **batch-2 endpoints** — `vault_state` / `staking_state` / `fee_schedule`
-
-There is **no HL-compat code path** in this SDK. HL migrants should keep using
-[`hyperliquid-rust-sdk`](https://github.com/hyperliquid-dex/hyperliquid-rust-sdk)
-against the MTF gateway URL `https://api.mtf.exchange/hl-compat/` — the gateway
-translates between HL surface and MTF internals at the protocol layer.
+- **Orders** — submit / cancel / cancel-by-cloid / modify, plus batched
+  variants, schedule-cancel and cancel-all.
+- **TWAP** — sliced orders and cancellation.
+- **Leverage & margin** — update leverage, isolated-margin adjust / top-up,
+  portfolio-margin enroll.
+- **Vaults** — create, transfer, modify, follower withdraw.
+- **Staking** — delegate / undelegate, claim rewards, link staking user.
+- **Spot & Earn** — spot CLOB orders, leveraged spot margin, Earn lending.
+- **Account & agents** — display name, referrer, agent approval, builder-fee
+  approval, multisig conversion, abstraction settings, priority bids.
+- **Encrypted orders** — threshold-encrypted, MEV-resistant submissions.
+- **MetaBridge** — cross-collateral withdrawals to other chains.
 
 ## Quick start
 
@@ -44,12 +42,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wallet = Wallet::from_hex(&priv_key_hex)?;
     println!("wallet address: 0x{}", hex::encode(wallet.address()));
 
-    // 2. Construct the client (MTF testnet).
+    // 2. Construct the client.
     let client = Client::new("https://api.mtf.exchange")?;
 
-    // 3. Build + sign + submit a limit order.
+    // 3. Build + sign + submit a limit order. The node assigns the oid and
+    //    returns it in the response — the submit shape never declares one.
     let order = Order {
-        oid: 0, // assigned by node
         owner: wallet.address(),
         market: metaflux_client::types::MarketId(1), // BTC-PERP
         side: Side::Bid,
@@ -59,7 +57,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tif: TimeInForce::Gtc,
         stp_mode: metaflux_client::types::order::StpMode::CancelOldest,
         reduce_only: false,
-        client_order_id: None,
+        cloid: None,
+        builder: None,
+        position_side: None,
     };
 
     let resp = client.exchange().submit_order(&wallet, &order).await?;
@@ -174,37 +174,29 @@ borrowed / idle / share_value, plus your shares when `user` is supplied).
 | Module | Purpose |
 |--------|---------|
 | [`wallet`] | secp256k1 keypair management + EIP-712 signing (RFC-6979 deterministic nonces) |
-| [`rest`]   | `RestClient` — `/info`, `/exchange`, `/explorer` MTF-native endpoints |
-| [`ws`]     | `WsClient` — MTF-native subscriptions with reconnect-with-backoff |
-| [`grpc`]   | tonic-based gRPC client (feature-gated) for high-throughput consumers |
-| [`types`]  | Domain types: `Order`, `Position`, `Vault`, RFQ / FBA / PM / CrossChain / EncryptedOrder |
+| [`rest`]   | `RestClient` — `/info`, `/exchange`, `/explorer` endpoints |
+| [`ws`]     | `WsClient` — subscriptions with reconnect-with-backoff |
+| [`types`]  | Domain types: orders, TWAP, margin, vaults, staking, spot / Earn |
 
 [`wallet`]: ./src/wallet/mod.rs
 [`rest`]: ./src/rest/mod.rs
 [`ws`]: ./src/ws/mod.rs
-[`grpc`]: ./src/grpc/mod.rs
 [`types`]: ./src/types/mod.rs
-
-## Feature flags
-
-| Flag | Default | Effect |
-|------|:-------:|--------|
-| `grpc` | off | pulls in `tonic` + `prost` and exposes [`grpc::Client`] |
 
 ## Examples
 
-Three runnable examples live under [`examples/`](./examples/):
+Runnable examples live under [`examples/`](./examples/):
 
 - `submit_limit_order.rs` — fetches `markets()`, signs a limit order, posts to `/exchange`.
 - `stream_trades.rs` — opens a WS connection, subscribes to BTC-PERP trades, prints first 10.
-- `create_vault.rs` — creates a user vault, seeds it, queries NAV.
+- `create_vault.rs` — creates a vault, queries its state.
 
 Run with `cargo run --example <name>`. Examples expect `MTF_PRIVATE_KEY` env var.
 
 ## Versioning
 
 Pre-1.0: **minor bumps may break**. We will follow strict SemVer once we tag
-`v1.0`. The wire schema is governed by the gateway, not this SDK — the SDK
+`v1.0`. The wire schema is governed by the node, not this SDK — the SDK
 re-exposes wire types verbatim, so wire-breaking changes upstream cascade.
 
 ## License

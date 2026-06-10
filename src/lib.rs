@@ -1,28 +1,21 @@
-//! # metaflux-client — MTF-native Rust SDK
+//! # metaflux-client — Rust SDK for the MetaFlux L1
 //!
-//! This crate is the flagship Rust client for the MetaFlux (MTF) L1. It is
-//! **MTF-native only** per [ADR-019]: every type, request shape and channel
-//! discriminator follows the MTF-native wire convention (snake_case JSON,
-//! plain-integer numerics, `market_id` not `coin`, etc).
+//! A typed client for the MetaFlux (MTF) derivatives L1. Every type, request
+//! shape, and channel discriminator follows the wire convention: snake_case
+//! JSON, plain-integer numerics (sizes / prices on fixed-point planes), and
+//! `market_id` rather than `coin`.
 //!
-//! It exposes every MTF differentiation feature with first-class types:
-//! RFQ ([`types::rfq`]), FBA ([`types::fba`]), portfolio margin
-//! ([`types::pm`]), cross-chain ([`types::cross_chain`]), encrypted orders
-//! ([`types::encrypted`]) plus the batch-2 endpoints (`vault_state`,
-//! `staking_state`, `fee_schedule`).
-//!
-//! HL migrants are **not** served by this SDK. Per [ADR-019] they should
-//! keep their existing `hyperliquid-rust-sdk` dependency and point it at
-//! the MTF gateway URL `https://api.mtf.exchange/hl-compat/`. The gateway does
-//! the surface translation at the protocol layer.
+//! The SDK signs and submits the node's full signed-action surface — perp and
+//! spot orders, TWAP, modify / batch, leverage and margin, vaults, staking,
+//! agent / account settings, and spot-margin / Earn — and reads market and
+//! account state over REST and WebSocket.
 //!
 //! ## Modules
 //!
-//! - [`wallet`] — secp256k1 keypair + EIP-712 signer (RFC-6979 deterministic).
+//! - [`wallet`] — secp256k1 keypair + EIP-712 signer (deterministic nonces).
 //! - [`rest`]   — `/info`, `/exchange`, `/explorer` HTTP endpoints.
 //! - [`ws`]     — WebSocket subscriptions, reconnect + heartbeat.
-//! - [`grpc`]   — feature-gated tonic client over mTLS (enable `grpc`).
-//! - [`types`]  — MTF-native domain types shared by all transports.
+//! - [`types`]  — domain types shared by all transports.
 //! - [`faucet`] — devnet / testnet test-USDC faucet helper.
 //! - [`error`]  — single [`ClientError`] thiserror enum.
 //!
@@ -39,8 +32,6 @@
 //! # let _ = wallet; Ok(())
 //! # }
 //! ```
-//!
-//! [ADR-019]: https://github.com/mtf-exchange/metaflux/blob/main/docs/adr/ADR-019-client-rust-mtf-native-only.md
 
 #![deny(missing_docs)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -53,10 +44,6 @@ pub mod types;
 pub mod wallet;
 pub mod ws;
 
-#[cfg(feature = "grpc")]
-#[cfg_attr(docsrs, doc(cfg(feature = "grpc")))]
-pub mod grpc;
-
 pub use error::ClientError;
 pub use faucet::{FaucetResponse, request_faucet};
 pub use rest::RestClient;
@@ -65,8 +52,8 @@ pub use wallet::Wallet;
 
 /// Top-level convenience bundle.
 ///
-/// Holds a single [`RestClient`] and a base URL re-used to construct WS /
-/// gRPC clients on demand. The fields are owned and `Clone`able cheaply so a
+/// Holds a single [`RestClient`] and a base URL re-used to construct WS
+/// clients on demand. The fields are owned and `Clone`able cheaply so a
 /// long-lived `Client` instance is the recommended pattern.
 #[derive(Debug, Clone)]
 pub struct Client {

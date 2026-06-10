@@ -1,45 +1,16 @@
-//! Portfolio margin (PM) — SPAN-like cross-asset margin (action field 57).
+//! Portfolio margin (PM) — SPAN-like cross-asset margin read types.
 //!
-//! Eligibility: account net equity ≥ $100K USDC.
-//!
-//! Enrolling moves a user from isolated-margin to portfolio-margin: instead of
-//! per-position margin requirements, the maintenance margin is computed
-//! against a scenario grid (price ± N steps, vol ± M steps) and netted across
-//! all positions.
+//! Under portfolio margin the maintenance requirement is computed against a
+//! scenario grid (price ± N steps, vol ± M steps) and netted across all
+//! positions, rather than summed per position. Enroll / unenroll via the
+//! `user_portfolio_margin` action; this module models the state read back over
+//! `/info`.
 
 use serde::{Deserialize, Serialize};
 
 use crate::wallet::Address;
 
-/// Action — enrol the signing user into portfolio margin.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct PmEnroll {
-    /// Address of the user being enrolled (must equal the signer).
-    pub user: Address,
-}
-
-/// Action — opt out of portfolio margin and revert to isolated.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct PmUnenroll {
-    /// Address of the user being un-enrolled.
-    pub user: Address,
-}
-
-/// Action — force a fresh margin computation against the current scenario grid.
-///
-/// Mostly used by risk dashboards / liquidators; regular users don't need to
-/// call this since the engine reruns on every block where the user's exposure
-/// changes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct PmRebalance {
-    /// Address whose PM state should be recomputed.
-    pub user: Address,
-}
-
-/// PM state snapshot returned by `info: { type: "pm_state", user: 0x... }`.
+/// PM state snapshot returned over `/info` for a user.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PmState {

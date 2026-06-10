@@ -6,7 +6,7 @@ rust-version = "1.85"
 resolver = "3"
 authors = ["MTF Exchange contributors"]
 license = "MIT"
-description = "Rust SDK for the MetaFlux derivatives L1 — MTF-native protocol (REST + WS + gRPC), EIP-712 signing, full feature surface (RFQ / FBA / PM / CrossChain / EncryptedOrder)."
+description = "Rust SDK for the MetaFlux derivatives L1 — REST + WebSocket, EIP-712 signing, and typed builders for the full signed-action surface (orders, TWAP, margin, vaults, staking, spot/Earn)."
 repository = "https://github.com/mtf-exchange/metaflux-client-rust"
 homepage = "https://github.com/mtf-exchange/metaflux-client-rust"
 documentation = "https://docs.rs/metaflux-client"
@@ -14,12 +14,8 @@ readme = "README.md"
 keywords = ["metaflux", "mtf", "crypto", "perpetuals", "sdk"]
 categories = ["api-bindings", "cryptography::cryptocurrencies"]
 
-# Per ADR-019: MTF-native only. HL migrants use `hyperliquid-rust-sdk` with
-# base url https://api.mtf.exchange/hl-compat/. We do not carry HL-shape schema.
-
 [features]
 default = ["cli"]
-grpc = ["dep:tonic", "dep:prost", "dep:tonic-build"]
 # Compiles the `mip3-deploy` CLI binary. On by default so `cargo install
 # metaflux-client` ships the binary; library-only users can opt out via
 # `default-features = false`.
@@ -55,19 +51,12 @@ bytes = "1"
 # users don't pull it in transitively).
 clap = { version = "4", features = ["derive"], optional = true }
 
-# Optional — gRPC (gated)
-tonic = { version = "0.12", optional = true }
-prost = { version = "0.13", optional = true }
-
 [dev-dependencies]
 proptest = "1"
 wiremock = "0.6"
 tokio-test = "0.4"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "test-util", "time", "net"] }
 assert_cmd = "2"
-
-[build-dependencies]
-tonic-build = { version = "0.12", optional = true }
 
 [[example]]
 name = "submit_limit_order"

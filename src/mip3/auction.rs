@@ -1,6 +1,6 @@
 //! MIP-3 gas auction helpers (client-side polling + submission).
 //!
-//! The L1 implements a Dutch-style gas auction (see ADR-012): each round
+//! The L1 implements a Dutch-style gas auction: each round
 //! emits a "credit window" during which the highest unique bidder receives
 //! a `pending_deploy_credit` that lets them submit the deploy sequence.
 //!

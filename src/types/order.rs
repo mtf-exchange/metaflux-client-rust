@@ -22,7 +22,7 @@
 //! and returned in [`OrderResponse`]. A client never declares it.
 //!
 //! Numerics are plain integers (u64 / i64). Sizes / prices use **fixed-point
-//! tick units** — the SDK does not adopt the HL decimal-string convention.
+//! tick units** rather than decimal strings.
 
 use serde::{Deserialize, Serialize};
 
@@ -84,7 +84,7 @@ pub enum PositionSide {
     Short,
 }
 
-/// Self-trade prevention mode (ADR-009 chose `CancelOldest` as default).
+/// Self-trade prevention mode (`CancelOldest` is the default).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StpMode {
@@ -116,14 +116,14 @@ pub struct Order {
     pub limit_px: u64,
     /// Time-in-force policy.
     pub tif: TimeInForce,
-    /// STP mode (ADR-009).
+    /// STP mode.
     pub stp_mode: StpMode,
     /// Reduce-only flag — order may only reduce an existing position.
     pub reduce_only: bool,
     /// Optional client-supplied identifier for idempotency.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloid: Option<Cloid>,
-    /// Optional builder-code fee attribution (RFC-009 Stage 2b).
+    /// Optional builder-code fee attribution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub builder: Option<Builder>,
     /// Hedge-mode leg selector. `None` (omitted) on a one-way account — REQUIRED
@@ -133,7 +133,7 @@ pub struct Order {
     pub position_side: Option<PositionSide>,
 }
 
-/// Builder-code fee attribution riding inside a signed order (RFC-009 Stage 2b).
+/// Builder-code fee attribution riding inside a signed order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Builder {
@@ -159,9 +159,95 @@ pub struct CancelOrder {
     pub cloid: Option<Cloid>,
 }
 
+/// Action — amend a resting order's price and/or size in place.
+///
+/// A `None` field leaves that attribute unchanged. Sender-authorized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Modify {
+    /// Target market id.
+    pub market: MarketId,
+    /// Order id to amend.
+    pub oid: OrderId,
+    /// New limit price in tick units (`None` = unchanged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_px: Option<u64>,
+    /// New size in tick units (`None` = unchanged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_size: Option<u64>,
+}
+
+/// Action — apply N [`Modify`]s under one signature.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct BatchModify {
+    /// Modifications, applied in order.
+    pub modifications: Vec<Modify>,
+}
+
+/// Order grouping semantics for a [`BatchOrder`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OrderGrouping {
+    /// No grouping (independent orders).
+    #[default]
+    Na,
+    /// A normal order with attached take-profit / stop-loss children.
+    NormalTpsl,
+    /// A position-level take-profit / stop-loss group.
+    PositionTpsl,
+}
+
+/// Action — place N [`Order`]s under one signature.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct BatchOrder {
+    /// Orders to place, in priority order. Each order's `owner` must equal the
+    /// signing wallet.
+    pub orders: Vec<Order>,
+    /// Grouping semantics.
+    #[serde(default)]
+    pub grouping: OrderGrouping,
+}
+
+/// Action — apply N [`CancelOrder`]s under one signature.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct BatchCancel {
+    /// Cancels to apply, in order. Each cancel requires an `oid`.
+    pub cancels: Vec<CancelOrder>,
+}
+
+/// Action — cancel a resting order by its client order id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CancelByCloid {
+    /// Target asset / market id.
+    pub asset: MarketId,
+    /// Client order id to cancel.
+    pub cloid: Cloid,
+}
+
+/// Action — schedule a cancel-all of the sender's open orders at a future block.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ScheduleCancel {
+    /// Block height at which all of the sender's open orders are cancelled.
+    pub cancel_at_block: u64,
+}
+
+/// Action — cancel all of the sender's open orders, optionally for one asset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CancelAllOrders {
+    /// Asset filter. `None` cancels across all assets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset: Option<MarketId>,
+}
+
 /// Per-order status entry returned by `/exchange` for an `Order` action.
 ///
-/// Per the committed contract (`api/rest/exchange.md` — `Order` →
+/// Per the committed contract (the `/exchange` contract — `Order` →
 /// **Response status entries**), each submitted order resolves to one of three
 /// outcomes, emitted in submission order:
 ///
@@ -417,7 +503,7 @@ mod tests {
         assert!(j.get("cloid").is_none());
     }
 
-    // ── OrderStatus union (api/rest/exchange.md — Order response entries) ──
+    // ── OrderStatus union (per-order response entries) ──
 
     #[test]
     fn order_status_decodes_resting() {
@@ -479,9 +565,9 @@ mod tests {
 
     #[test]
     fn order_response_decodes_statuses_object() {
-        // Real server shape: ExchangeResponse `{ statuses: [<per-order union>] }`
-        // (api/rest/exchange.md) — an object with a `statuses` array, NOT a bare
-        // array. The order path returns exactly this.
+        // Real server shape: `{ statuses: [<per-order union>] }` — an object
+        // with a `statuses` array, NOT a bare array. The order path returns
+        // exactly this.
         let j = serde_json::json!({ "statuses": [
             { "resting": { "oid": 12345, "cloid": "0x000102030405060708090a0b0c0d0e0f" } },
             { "filled":  { "total_sz": "100000000", "avg_px": "10050000000", "oid": 12346 } },
@@ -513,5 +599,46 @@ mod tests {
         assert!(j.is_object() && j.get("statuses").is_some(), "OrderResponse wraps the per-order array under `statuses`");
         let dec: OrderResponse = serde_json::from_value(j).unwrap();
         assert_eq!(resp, dec);
+    }
+
+    // ── order-management actions ──
+
+    #[test]
+    fn modify_omits_none_fields() {
+        let m = Modify { market: MarketId(3), oid: OrderId(42), new_px: Some(1234), new_size: None };
+        let j = serde_json::to_value(m).unwrap();
+        assert_eq!(j["new_px"], serde_json::json!(1234));
+        assert!(j.get("new_size").is_none());
+        assert!(j["oid"].is_number(), "oid is a plain integer");
+    }
+
+    #[test]
+    fn order_grouping_serializes_camel_case() {
+        assert_eq!(serde_json::to_string(&OrderGrouping::Na).unwrap(), "\"na\"");
+        assert_eq!(
+            serde_json::to_string(&OrderGrouping::NormalTpsl).unwrap(),
+            "\"normalTpsl\""
+        );
+        assert_eq!(
+            serde_json::to_string(&OrderGrouping::PositionTpsl).unwrap(),
+            "\"positionTpsl\""
+        );
+        assert_eq!(OrderGrouping::default(), OrderGrouping::Na);
+    }
+
+    #[test]
+    fn cancel_by_cloid_serializes_hex_cloid() {
+        let c = CancelByCloid { asset: MarketId(7), cloid: Cloid([0xAB; 16]) };
+        let j = serde_json::to_value(c).unwrap();
+        assert_eq!(j["asset"], serde_json::json!(7));
+        assert_eq!(j["cloid"], serde_json::json!("0xabababababababababababababababab"));
+    }
+
+    #[test]
+    fn cancel_all_orders_omits_none_asset() {
+        let all = CancelAllOrders { asset: None };
+        assert!(serde_json::to_value(all).unwrap().get("asset").is_none());
+        let one = CancelAllOrders { asset: Some(MarketId(3)) };
+        assert_eq!(serde_json::to_value(one).unwrap()["asset"], serde_json::json!(3));
     }
 }
