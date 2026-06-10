@@ -1,4 +1,4 @@
-# metaflux-client
+# MetaFlux client rust
 
 [![crates.io](https://img.shields.io/crates/v/metaflux-client.svg)](https://crates.io/crates/metaflux-client)
 [![docs.rs](https://img.shields.io/docsrs/metaflux-client)](https://docs.rs/metaflux-client)
@@ -62,7 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("wallet address: 0x{}", hex::encode(wallet.address()));
 
     // 2. Construct the client.
-    let client = Client::new("https://api.mtf.exchange")?;
+    let client = Client::new("https://devnet-gateway.mtf.exchange")?;
 
     // 3. Build + sign + submit a limit order. The node assigns the oid and
     //    returns it in the response — the submit shape never declares one.

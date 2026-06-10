@@ -17,7 +17,7 @@
 //! # };
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let wallet = Wallet::from_hex(&std::env::var("MTF_PRIVATE_KEY")?)?;
-//! let client = Client::new("https://api.mtf.exchange")?;
+//! let client = Client::new("https://devnet-gateway.mtf.exchange")?;
 //!
 //! // 1. Bid in the gas auction.
 //! let receipt = client.submit_gas_auction_bid(&wallet, AuctionBid {
