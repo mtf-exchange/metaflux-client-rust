@@ -31,4 +31,4 @@ For documentation, examples, and the full feature surface, see the
 
 ## License
 
-MIT — see [LICENSE](../LICENSE).
+MIT — see [LICENSE](./LICENSE).
