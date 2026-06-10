@@ -16,7 +16,7 @@
 //!
 //! Notes:
 //! - All fee bps are stored ×10 internally (so 4.5 bps is `45`).
-//! - Deployer fee is the MIP-3 builder's take (per ADR-012, capped at 5 bps i.e. `50`).
+//! - Deployer fee is the builder's take (capped at 5 bps, i.e. `50`).
 //! - The `long_tail_default` excludes Coinbase + Kraken because they
 //!   rarely list long-tail / new assets quickly, so their data would be
 //!   stale; better to drop them and let the medianizer use the listed venues.

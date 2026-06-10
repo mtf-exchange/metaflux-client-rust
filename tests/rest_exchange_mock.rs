@@ -12,8 +12,10 @@ use metaflux_client::{
     rest::exchange::{_action_digest_for_test, _recover_for_test},
     types::{
         MarketId, OrderId,
-        order::{CancelOrder, Order, OrderKind, OrderStatus, Side, StpMode, TimeInForce},
+        account::UpdateLeverage,
+        order::{BatchOrder, CancelOrder, Order, OrderKind, OrderStatus, Side, StpMode, TimeInForce},
         spot::{EarnWithdraw, SpotMarginOpen},
+        vault::{CreateVault, VaultKind},
     },
     wallet::Wallet,
 };
@@ -291,6 +293,118 @@ async fn earn_withdraw_keeps_fractional_shares_as_string() {
     let sig = decode_sig(body["signature"].as_str().unwrap());
     let recovered = _recover_for_test(&digest, &sig).expect("recover");
     assert_eq!(recovered, wallet.address());
+}
+
+#[tokio::test]
+async fn update_leverage_posts_sender_authorized_envelope() {
+    let server = MockServer::start().await;
+    let captor = CapturingResponder {
+        last: Arc::new(Mutex::new(None)),
+        response: json!({ "accepted": true }),
+    };
+    Mock::given(method("POST"))
+        .and(path("/exchange"))
+        .respond_with(captor.clone())
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let wallet = sample_wallet();
+    let params = UpdateLeverage { asset: MarketId(2), leverage: 10, is_isolated: false };
+    let resp: Value = client
+        .exchange()
+        .update_leverage(&wallet, &params)
+        .await
+        .unwrap();
+    assert_eq!(resp["accepted"], true);
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("update_leverage"));
+    let p = &action["params"];
+    assert_eq!(p["asset"], json!(2));
+    assert_eq!(p["leverage"], json!(10));
+    assert_eq!(p["is_isolated"], json!(false));
+    assert!(action.get("owner").is_none(), "sender-authorized: no owner field");
+
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _action_digest_for_test(&action, nonce);
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(_recover_for_test(&digest, &sig).unwrap(), wallet.address());
+}
+
+#[tokio::test]
+async fn create_vault_posts_signed_params_envelope() {
+    let server = MockServer::start().await;
+    let captor = CapturingResponder {
+        last: Arc::new(Mutex::new(None)),
+        response: json!({ "accepted": true }),
+    };
+    Mock::given(method("POST"))
+        .and(path("/exchange"))
+        .respond_with(captor.clone())
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let wallet = sample_wallet();
+    let create = CreateVault {
+        name: "v".into(),
+        lock_period_secs: 345_600,
+        parent: None,
+        kind: VaultKind::User,
+    };
+    let resp: Value = client.exchange().create_vault(&wallet, &create).await.unwrap();
+    assert_eq!(resp["accepted"], true);
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("create_vault"));
+    assert_eq!(action["params"]["name"], json!("v"));
+    assert_eq!(action["params"]["kind"], json!("User"));
+    assert!(action["params"].get("parent").is_none(), "None parent omitted");
+
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _action_digest_for_test(&action, nonce);
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(_recover_for_test(&digest, &sig).unwrap(), wallet.address());
+}
+
+#[tokio::test]
+async fn batch_order_rejects_mismatched_owner_locally() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/exchange"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let wallet = sample_wallet();
+    let other =
+        Wallet::from_hex("1111111111111111111111111111111111111111111111111111111111111111")
+            .unwrap();
+    let mk = |owner| Order {
+        owner,
+        market: MarketId(1),
+        side: Side::Bid,
+        kind: OrderKind::Limit,
+        size: 1,
+        limit_px: 1,
+        tif: TimeInForce::Gtc,
+        stp_mode: StpMode::CancelOldest,
+        reduce_only: false,
+        cloid: None,
+        builder: None,
+        position_side: None,
+    };
+    // Second order is owned by a different address → local validation rejects.
+    let batch = BatchOrder {
+        orders: vec![mk(wallet.address()), mk(other.address())],
+        grouping: Default::default(),
+    };
+    let err = client.exchange().batch_order(&wallet, &batch).await.unwrap_err();
+    assert!(matches!(err, metaflux_client::ClientError::Validation(_)));
 }
 
 fn decode_sig(hex_str: &str) -> metaflux_client::wallet::Signature {

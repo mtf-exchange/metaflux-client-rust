@@ -1,12 +1,12 @@
-//! Encrypted orders (action field 60) — threshold-encrypted
-//! MEV-resistant order submissions.
+//! Encrypted orders — threshold-encrypted, MEV-resistant order submissions.
 //!
 //! Flow:
-//! 1. Trader encrypts an order against the validator-committee public key.
-//! 2. Trader submits the ciphertext to `/exchange` with type `encrypted_order_submit`.
-//! 3. Once the configured number of validators sign decryption shares
-//!    (`threshold` per protocol), the ciphertext is decrypted and the
-//!    revealed order is matched.
+//! 1. The trader encrypts an order against the validator-committee public key
+//!    and commits to the plaintext.
+//! 2. The trader submits the ciphertext + commitment to `/exchange` with type
+//!    `submit_encrypted_order`.
+//! 3. Once `threshold` validators publish decryption shares, the ciphertext is
+//!    decrypted and the revealed order is matched (bound to the commitment).
 
 use serde::{Deserialize, Serialize};
 
@@ -14,19 +14,22 @@ use crate::wallet::Address;
 
 /// Action — submit a threshold-encrypted order ciphertext.
 ///
-/// The decryption shares accumulate over subsequent blocks until the
-/// threshold is met; the order is then revealed and matched.
+/// Sender-authorized: the recovered signer is the submitter. Decryption shares
+/// accumulate over subsequent blocks until `threshold` is met; the order is
+/// then revealed (and checked against `commitment`) and matched.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct EncryptedOrderSubmit {
-    /// Submitter on MTF (used for slot accounting; not necessarily the trader).
-    pub submitter: Address,
+pub struct SubmitEncryptedOrder {
     /// Ciphertext bytes (committee-encrypted).
     pub ciphertext: Vec<u8>,
-    /// Threshold of decryption shares required (e.g. 2/3 of `n` validators).
+    /// 32-byte `keccak(plaintext‖salt)` commitment binding the revealed order.
+    pub commitment: [u8; 32],
+    /// Threshold of decryption shares required to reveal (`≥ 1`).
     pub threshold: u8,
     /// Earliest block at which the ciphertext can be revealed.
     pub target_block: u64,
+    /// Deadline (unix ms) by which the order must be revealed, else it expires.
+    pub reveal_deadline_ms: u64,
 }
 
 /// Snapshot of a pending encrypted-order entry (returned by
@@ -53,15 +56,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn encrypted_order_submit_round_trips() {
-        let s = EncryptedOrderSubmit {
-            submitter: Address::ZERO,
+    fn submit_encrypted_order_round_trips() {
+        let s = SubmitEncryptedOrder {
             ciphertext: vec![0xAB; 64],
+            commitment: [0u8; 32],
             threshold: 5,
             target_block: 1_000_000,
+            reveal_deadline_ms: 5_000,
         };
         let j = serde_json::to_string(&s).unwrap();
-        let dec: EncryptedOrderSubmit = serde_json::from_str(&j).unwrap();
+        let dec: SubmitEncryptedOrder = serde_json::from_str(&j).unwrap();
         assert_eq!(s, dec);
     }
 
