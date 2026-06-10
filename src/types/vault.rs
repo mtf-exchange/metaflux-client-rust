@@ -37,38 +37,77 @@ pub struct VaultState {
     pub follower_count: u32,
 }
 
-/// Action — create a new user vault.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct VaultCreate {
-    /// Leader address. Must match the signing wallet.
-    pub leader: Address,
-    /// Initial seed deposit in USD cents (must be ≥ minimum per §I-bis.1).
-    pub seed_cents: u64,
-    /// Initial management fee in bps; capped at 1000 (10%) per §I-bis.1.
-    pub management_fee_bps: u16,
+/// Kind of vault created by [`CreateVault`]. Serializes in PascalCase to match
+/// the node's vault-kind enum (`"User"` / `"Metaliquidity"`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VaultKind {
+    /// A regular user-led vault.
+    #[default]
+    User,
+    /// A metaliquidity-provider vault (operator-driven).
+    Metaliquidity,
 }
 
-/// Action — distribute realised PnL to followers (leader-only).
+/// Action — create a new vault. The signing wallet becomes the leader.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct VaultDistribute {
-    /// Vault id.
+pub struct CreateVault {
+    /// Display name.
+    pub name: String,
+    /// Follower withdrawal lock period in seconds.
+    pub lock_period_secs: u64,
+    /// Optional parent vault id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<VaultId>,
+    /// Vault kind (defaults to [`VaultKind::User`]).
+    #[serde(default)]
+    pub kind: VaultKind,
+}
+
+/// Action — leader moves capital into (`deposit = true`) or out of
+/// (`deposit = false`) a vault. `amount` is a decimal USD string.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct VaultTransfer {
+    /// Target vault id.
     pub vault_id: VaultId,
-    /// Amount to distribute in USD cents.
-    pub amount_cents: u64,
+    /// `true` = deposit (leader → vault), `false` = withdraw (vault → leader).
+    pub deposit: bool,
+    /// Amount in USD as a decimal string.
+    pub amount: String,
 }
 
-/// Action — follower withdraws from the vault.
+/// Action — leader updates vault configuration. A `None` field is unchanged.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct VaultModify {
+    /// Target vault id.
+    pub vault_id: VaultId,
+    /// New display name (`None` = unchanged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_name: Option<String>,
+    /// New lock period in seconds (`None` = unchanged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_lock_period_secs: Option<u64>,
+    /// New management fee in bps (`None` = unchanged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_management_fee_bps: Option<u16>,
+    /// New paused flag (`None` = unchanged).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_paused: Option<bool>,
+}
+
+/// Action — follower redeems shares from a vault.
 ///
-/// Subject to the per-vault `withdrawal_lock_ms` cooldown.
+/// Subject to the per-vault `withdrawal_lock_ms` cooldown. `shares` is a decimal
+/// string.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct VaultWithdraw {
     /// Vault id.
     pub vault_id: VaultId,
-    /// Number of shares to redeem.
-    pub shares: u128,
+    /// Shares to redeem, as a decimal string.
+    pub shares: String,
 }
 
 #[cfg(test)]
@@ -119,5 +158,28 @@ mod tests {
         ] {
             assert!(j.get(forbidden).is_none(), "wire leak: {forbidden}");
         }
+    }
+
+    #[test]
+    fn create_vault_defaults_kind_and_omits_parent() {
+        let c = CreateVault {
+            name: "mlp".into(),
+            lock_period_secs: 604_800,
+            parent: None,
+            kind: VaultKind::default(),
+        };
+        let j = serde_json::to_value(&c).unwrap();
+        assert!(j.get("parent").is_none());
+        assert_eq!(j["kind"], serde_json::json!("User"));
+        let c2 = CreateVault { kind: VaultKind::Metaliquidity, ..c };
+        assert_eq!(serde_json::to_value(&c2).unwrap()["kind"], serde_json::json!("Metaliquidity"));
+    }
+
+    #[test]
+    fn vault_withdraw_shares_is_string() {
+        let w = VaultWithdraw { vault_id: VaultId(4), shares: "250".into() };
+        let j = serde_json::to_value(&w).unwrap();
+        assert!(j["shares"].is_string(), "shares must be a decimal JSON string");
+        assert_eq!(w, serde_json::from_value(j).unwrap());
     }
 }

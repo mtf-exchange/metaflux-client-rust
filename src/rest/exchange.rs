@@ -36,25 +36,29 @@ use tiny_keccak::{Hasher, Keccak};
 use crate::error::ClientError;
 use crate::rest::RestClient;
 use crate::types::{
-    cross_chain::CrossChainSend,
-    encrypted::EncryptedOrderSubmit,
-    fba::FbaSubmit,
-    order::{CancelOrder, Order, OrderResponse},
-    pm::{PmEnroll, PmRebalance, PmUnenroll},
-    rfq::{RfqAccept, RfqRequest},
-    spot::{
-        EarnDeposit, EarnWithdraw, SpotCancel, SpotMarginClose, SpotMarginDeposit,
-        SpotMarginOpen, SpotMarginWithdraw, SpotOrder,
+    account::{
+        AgentSetAbstraction, ApproveAgent, ApproveBuilderFee, ConvertToMultiSigUser, PriorityBid,
+        SetDisplayName, SetReferrer, TopUpIsolatedOnlyMargin, UpdateIsolatedMargin, UpdateLeverage,
+        UserDexAbstraction, UserPortfolioMargin, UserSetAbstraction,
     },
-    vault::{VaultCreate, VaultDistribute, VaultWithdraw},
+    encrypted::SubmitEncryptedOrder,
+    governance::{REDACTED, SetMetaliquidityWhitelist},
+    meta_bridge::MbWithdraw,
+    order::{
+        BatchCancel, BatchModify, BatchOrder, CancelAllOrders, CancelByCloid, CancelOrder, Modify,
+        Order, OrderResponse, ScheduleCancel,
+    },
+    spot::{
+        EarnDeposit, EarnWithdraw, SpotCancel, SpotMarginClose, SpotMarginDeposit, SpotMarginOpen,
+        SpotMarginWithdraw, SpotOrder,
+    },
+    staking::{ClaimRewards, LinkStakingUser, TokenDelegate},
+    twap::{TwapCancel, TwapOrder},
+    vault::{CreateVault, VaultModify, VaultTransfer, VaultWithdraw},
 };
 use crate::wallet::{Eip712, Signature, Wallet};
 
-/// MTF EIP-712 domain chain ids.
-///
-/// MetaFlux runs its own verified-unregistered chain ids, distinct from
-/// Hyperliquid's testnet `998` (retired here to avoid a competitor
-/// collision — signing with `998` would land in HL's domain, not ours):
+/// MetaFlux EIP-712 domain chain ids.
 ///
 /// - **mainnet** `8964` (`0x2304`)
 /// - **testnet** `114514` (`0x1bf52`) — the live devnet/testnet runs this,
@@ -157,7 +161,7 @@ impl<'a> Exchange<'a> {
         self.post_signed(wallet, action).await
     }
 
-    /// Submit a spot CLOB order (SE-0).
+    /// Submit a spot CLOB order.
     ///
     /// The signing account is the order owner — the spot order body carries no
     /// owner field; the node binds the order to the recovered signer. v0 is IOC
@@ -289,175 +293,473 @@ impl<'a> Exchange<'a> {
         self.post_signed(wallet, action).await
     }
 
-    /// Create a new user vault. Signer must equal `vault.leader`.
-    ///
-    /// # Errors
-    /// See [`Exchange::submit_order`].
-    pub async fn vault_create(
-        &self,
-        wallet: &Wallet,
-        vault: &VaultCreate,
-    ) -> Result<Value, ClientError> {
-        if vault.leader != wallet.address() {
-            return Err(ClientError::Validation(format!(
-                "vault.leader {} != wallet address {}",
-                vault.leader,
-                wallet.address()
-            )));
-        }
-        let action = json!({ "type": "vault_create", "vault": vault });
-        self.post_signed(wallet, action).await
-    }
+    // ---- order management ----
 
-    /// Distribute realised PnL to followers (leader-only).
+    /// Cancel a resting order by its client order id.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn vault_distribute(
+    pub async fn cancel_by_cloid(
         &self,
         wallet: &Wallet,
-        d: &VaultDistribute,
+        params: &CancelByCloid,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "vault_distribute", "params": d });
+        let action = json!({ "type": "cancel_by_cloid", "params": params });
         self.post_signed(wallet, action).await
     }
 
-    /// Withdraw shares from a vault (subject to the per-vault lock).
+    /// Amend a resting order's price and/or size in place.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn modify(&self, wallet: &Wallet, params: &Modify) -> Result<Value, ClientError> {
+        let action = json!({ "type": "modify", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Apply N modifications under one signature.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn batch_modify(
+        &self,
+        wallet: &Wallet,
+        params: &BatchModify,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "batch_modify", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Place N orders under one signature.
+    ///
+    /// Each order's `owner` MUST equal the wallet address. Unlike
+    /// [`Exchange::submit_order`], a batch returns the admission envelope (not a
+    /// synchronous per-order status); observe fills via `/info` / WS.
+    ///
+    /// # Errors
+    /// - [`ClientError::Validation`] if any order's `owner != wallet.address()`.
+    /// - HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn batch_order(
+        &self,
+        wallet: &Wallet,
+        batch: &BatchOrder,
+    ) -> Result<Value, ClientError> {
+        for (i, o) in batch.orders.iter().enumerate() {
+            if o.owner != wallet.address() {
+                return Err(ClientError::Validation(format!(
+                    "batch order[{i}].owner {} != wallet address {}",
+                    o.owner,
+                    wallet.address()
+                )));
+            }
+        }
+        let action = json!({ "type": "batch_order", "params": batch });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Apply N cancels under one signature. Each cancel's `owner` MUST equal the
+    /// wallet address.
+    ///
+    /// # Errors
+    /// - [`ClientError::Validation`] if any cancel's `owner != wallet.address()`.
+    /// - HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn batch_cancel(
+        &self,
+        wallet: &Wallet,
+        batch: &BatchCancel,
+    ) -> Result<Value, ClientError> {
+        for (i, c) in batch.cancels.iter().enumerate() {
+            if c.owner != wallet.address() {
+                return Err(ClientError::Validation(format!(
+                    "batch cancel[{i}].owner {} != wallet address {}",
+                    c.owner,
+                    wallet.address()
+                )));
+            }
+        }
+        let action = json!({ "type": "batch_cancel", "params": batch });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Schedule a cancel-all of the sender's open orders at a future block.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn schedule_cancel(
+        &self,
+        wallet: &Wallet,
+        params: &ScheduleCancel,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "schedule_cancel", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Cancel all of the sender's open orders (optionally for a single asset).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn cancel_all_orders(
+        &self,
+        wallet: &Wallet,
+        params: &CancelAllOrders,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "cancel_all_orders", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    // ---- TWAP ----
+
+    /// Submit a sliced (TWAP) order.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn twap_order(
+        &self,
+        wallet: &Wallet,
+        params: &TwapOrder,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "twap_order", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Cancel a running TWAP parent by id.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn twap_cancel(
+        &self,
+        wallet: &Wallet,
+        params: &TwapCancel,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "twap_cancel", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    // ---- leverage & margin ----
+
+    /// Set the per-asset leverage (and optionally flip to isolated margin).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn update_leverage(
+        &self,
+        wallet: &Wallet,
+        params: &UpdateLeverage,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "update_leverage", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Add or remove isolated margin on an open position.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn update_isolated_margin(
+        &self,
+        wallet: &Wallet,
+        params: &UpdateIsolatedMargin,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "update_isolated_margin", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Top up the margin of a strict-isolated-only position.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn top_up_isolated_only_margin(
+        &self,
+        wallet: &Wallet,
+        params: &TopUpIsolatedOnlyMargin,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "top_up_isolated_only_margin", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Enroll into or out of portfolio margin.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn user_portfolio_margin(
+        &self,
+        wallet: &Wallet,
+        params: &UserPortfolioMargin,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "user_portfolio_margin", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    // ---- account & agent settings ----
+
+    /// Set the account display name (handle).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn set_display_name(
+        &self,
+        wallet: &Wallet,
+        params: &SetDisplayName,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "set_display_name", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Set the account referrer (one-time, immutable once set).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn set_referrer(
+        &self,
+        wallet: &Wallet,
+        params: &SetReferrer,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "set_referrer", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Approve an agent wallet to sign on behalf of this account.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn approve_agent(
+        &self,
+        wallet: &Wallet,
+        params: &ApproveAgent,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "approve_agent", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Approve a builder to charge a fee (up to `max_bps`) on this account's
+    /// orders. `max_bps = 0` revokes.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn approve_builder_fee(
+        &self,
+        wallet: &Wallet,
+        params: &ApproveBuilderFee,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "approve_builder_fee", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Convert the account to an M-of-N multisig.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn convert_to_multi_sig_user(
+        &self,
+        wallet: &Wallet,
+        params: &ConvertToMultiSigUser,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "convert_to_multi_sig_user", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Toggle the account's DEX-abstraction opt-in flag.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn user_dex_abstraction(
+        &self,
+        wallet: &Wallet,
+        params: &UserDexAbstraction,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "user_dex_abstraction", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Set a self-scoped abstraction config value.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn user_set_abstraction(
+        &self,
+        wallet: &Wallet,
+        params: &UserSetAbstraction,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "user_set_abstraction", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// As an approved agent, set an abstraction config value for `params.user`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn agent_set_abstraction(
+        &self,
+        wallet: &Wallet,
+        params: &AgentSetAbstraction,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "agent_set_abstraction", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Pay a priority fee (bps) for block-front placement on an asset.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn priority_bid(
+        &self,
+        wallet: &Wallet,
+        params: &PriorityBid,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "priority_bid", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    // ---- staking ----
+
+    /// Delegate stake to a validator, or queue an undelegation.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn token_delegate(
+        &self,
+        wallet: &Wallet,
+        params: &TokenDelegate,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "token_delegate", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Claim accrued staking rewards.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn claim_rewards(
+        &self,
+        wallet: &Wallet,
+        params: &ClaimRewards,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "claim_rewards", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Alias another account as this account's staking target.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn link_staking_user(
+        &self,
+        wallet: &Wallet,
+        params: &LinkStakingUser,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "link_staking_user", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    // ---- encrypted orders ----
+
+    /// Submit a threshold-encrypted order ciphertext.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn submit_encrypted_order(
+        &self,
+        wallet: &Wallet,
+        params: &SubmitEncryptedOrder,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "submit_encrypted_order", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    // ---- vaults ----
+
+    /// Create a new vault. The signing wallet becomes the leader.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn create_vault(
+        &self,
+        wallet: &Wallet,
+        params: &CreateVault,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "create_vault", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Leader moves capital into or out of a vault.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn vault_transfer(
+        &self,
+        wallet: &Wallet,
+        params: &VaultTransfer,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "vault_transfer", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Leader updates vault configuration.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn vault_modify(
+        &self,
+        wallet: &Wallet,
+        params: &VaultModify,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "vault_modify", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Follower redeems shares from a vault (subject to the per-vault lock).
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn vault_withdraw(
         &self,
         wallet: &Wallet,
-        w: &VaultWithdraw,
+        params: &VaultWithdraw,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "vault_withdraw", "params": w });
+        let action = json!({ "type": "vault_withdraw", "params": params });
         self.post_signed(wallet, action).await
     }
 
-    /// Enrol into portfolio margin.
-    ///
-    /// # Errors
-    /// See [`Exchange::submit_order`].
-    pub async fn pm_enroll(&self, wallet: &Wallet, e: &PmEnroll) -> Result<Value, ClientError> {
-        if e.user != wallet.address() {
-            return Err(ClientError::Validation(format!(
-                "pm.user {} != wallet address {}",
-                e.user,
-                wallet.address()
-            )));
-        }
-        let action = json!({ "type": "pm_enroll", "params": e });
-        self.post_signed(wallet, action).await
-    }
+    // ---- MetaBridge ----
 
-    /// Un-enrol from portfolio margin.
-    ///
-    /// # Errors
-    /// See [`Exchange::submit_order`].
-    pub async fn pm_unenroll(&self, wallet: &Wallet, e: &PmUnenroll) -> Result<Value, ClientError> {
-        if e.user != wallet.address() {
-            return Err(ClientError::Validation(format!(
-                "pm.user {} != wallet address {}",
-                e.user,
-                wallet.address()
-            )));
-        }
-        let action = json!({ "type": "pm_unenroll", "params": e });
-        self.post_signed(wallet, action).await
-    }
-
-    /// Trigger a PM margin recompute.
+    /// Withdraw cross-collateral to a destination chain.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn pm_rebalance(
+    pub async fn mb_withdraw(
         &self,
         wallet: &Wallet,
-        e: &PmRebalance,
+        params: &MbWithdraw,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "pm_rebalance", "params": e });
+        let action = json!({ "type": "mb_withdraw", "params": params });
         self.post_signed(wallet, action).await
     }
 
-    /// Open an RFQ session as the taker.
-    ///
-    /// # Errors
-    /// See [`Exchange::submit_order`].
-    pub async fn rfq_request(&self, wallet: &Wallet, r: &RfqRequest) -> Result<Value, ClientError> {
-        if r.taker != wallet.address() {
-            return Err(ClientError::Validation(format!(
-                "rfq.taker {} != wallet address {}",
-                r.taker,
-                wallet.address()
-            )));
-        }
-        let action = json!({ "type": "rfq_request", "rfq": r });
-        self.post_signed(wallet, action).await
-    }
+    // ---- governance / operator ----
 
-    /// Accept an MM quote and cross the trade.
+    /// Set a metaliquidity-provider whitelist membership (validator-authorized).
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn rfq_accept(&self, wallet: &Wallet, a: &RfqAccept) -> Result<Value, ClientError> {
-        let action = json!({ "type": "rfq_accept", "accept": a });
-        self.post_signed(wallet, action).await
-    }
-
-    /// Submit an order into an FBA batch.
-    ///
-    /// # Errors
-    /// See [`Exchange::submit_order`].
-    pub async fn fba_submit(&self, wallet: &Wallet, s: &FbaSubmit) -> Result<Value, ClientError> {
-        if s.owner != wallet.address() {
-            return Err(ClientError::Validation(format!(
-                "fba.owner {} != wallet address {}",
-                s.owner,
-                wallet.address()
-            )));
-        }
-        let action = json!({ "type": "fba_submit", "submit": s });
-        self.post_signed(wallet, action).await
-    }
-
-    /// Send a cross-chain message.
-    ///
-    /// # Errors
-    /// See [`Exchange::submit_order`].
-    pub async fn cross_chain_send(
+    pub async fn REDACTED(
         &self,
         wallet: &Wallet,
-        s: &CrossChainSend,
+        params: &SetMetaliquidityWhitelist,
     ) -> Result<Value, ClientError> {
-        if s.sender != wallet.address() {
-            return Err(ClientError::Validation(format!(
-                "cross_chain.sender {} != wallet address {}",
-                s.sender,
-                wallet.address()
-            )));
-        }
-        let action = json!({ "type": "cross_chain_send", "msg": s });
+        let action = json!({ "type": "REDACTED", "params": params });
         self.post_signed(wallet, action).await
     }
 
-    /// Submit a threshold-encrypted order ciphertext.
+    /// Register or revoke an external strategy operator for a vault
+    /// (vault-leader-authorized).
     ///
     /// # Errors
-    /// See [`Exchange::submit_order`].
-    pub async fn encrypted_order_submit(
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn REDACTED(
         &self,
         wallet: &Wallet,
-        e: &EncryptedOrderSubmit,
+        params: &REDACTED,
     ) -> Result<Value, ClientError> {
-        if e.submitter != wallet.address() {
-            return Err(ClientError::Validation(format!(
-                "encrypted.submitter {} != wallet address {}",
-                e.submitter,
-                wallet.address()
-            )));
-        }
-        let action = json!({ "type": "encrypted_order_submit", "encrypted": e });
+        let action = json!({ "type": "REDACTED", "params": params });
         self.post_signed(wallet, action).await
     }
 

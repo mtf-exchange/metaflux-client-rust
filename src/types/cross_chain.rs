@@ -1,31 +1,14 @@
-//! Cross-chain — outbound bridge messages (action field 61).
+//! Cross-chain — outbound bridge message read types.
 //!
-//! The MTF L1 surfaces a uniform `cross_chain_send` action to the user; the
-//! bridge integration layer dispatches to the right route per asset.
+//! Withdrawals to other chains queue an outbound message (see the `mb_withdraw`
+//! action in [`crate::types::meta_bridge`]); this module models the message
+//! snapshot read back over `/info`.
 
 use serde::{Deserialize, Serialize};
 
 use crate::wallet::Address;
 
-/// Action — send a cross-chain message / value transfer.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct CrossChainSend {
-    /// Sender on MTF.
-    pub sender: Address,
-    /// Destination chain id (EVM chain id; CCTP-domain id for USDC routes).
-    pub dst_chain: u32,
-    /// Destination address on the target chain (20-byte EVM).
-    pub dst_address: Address,
-    /// Asset symbol (e.g. `"USDC"`, `"ETH"`). Length ≤ 12 bytes per protocol limits.
-    pub asset: String,
-    /// Amount in base units of the asset (e.g. USDC = 6 decimals; ETH = 18).
-    pub amount: u128,
-    /// Anti-replay nonce — must be strictly monotonic per sender.
-    pub nonce: u64,
-}
-
-/// Snapshot of an outbound cross-chain message (returned by `info: cross_chain_msg`).
+/// Snapshot of an outbound cross-chain message (returned over `/info`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CrossChainMsg {
@@ -48,36 +31,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cross_chain_send_round_trips() {
-        let s = CrossChainSend {
-            sender: Address::ZERO,
-            dst_chain: 8453, // Base
-            dst_address: Address::ZERO,
-            asset: "USDC".into(),
-            amount: 1_000_000, // 1 USDC at 6 decimals
+    fn cross_chain_msg_round_trips() {
+        let m = CrossChainMsg {
+            dst_chain: 8453,
+            payload: vec![1, 2, 3],
             nonce: 1,
-        };
-        let j = serde_json::to_string(&s).unwrap();
-        let dec: CrossChainSend = serde_json::from_str(&j).unwrap();
-        assert_eq!(s, dec);
-    }
-
-    #[test]
-    fn cross_chain_send_uses_snake_case() {
-        let s = CrossChainSend {
             sender: Address::ZERO,
-            dst_chain: 1,
-            dst_address: Address::ZERO,
-            asset: "ETH".into(),
-            amount: 1_000_000_000_000_000_000,
-            nonce: 0,
+            ts_ms: 1_700_000_000_000,
+            status: "pending".into(),
         };
-        let j = serde_json::to_value(&s).unwrap();
-        for key in ["dst_chain", "dst_address"] {
+        let j = serde_json::to_value(&m).unwrap();
+        for key in ["dst_chain", "ts_ms"] {
             assert!(j.get(key).is_some());
         }
-        for key in ["dstChain", "dstAddress"] {
+        for key in ["dstChain", "tsMs"] {
             assert!(j.get(key).is_none());
         }
+        let dec: CrossChainMsg = serde_json::from_value(j).unwrap();
+        assert_eq!(m, dec);
     }
 }

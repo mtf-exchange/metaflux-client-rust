@@ -100,9 +100,9 @@ impl RestClient {
     /// On HTTP error status, attempts to decode the MTF-native error
     /// envelope (`{"error": "..."}`) into a [`ClientError::ProtocolError`].
     ///
-    /// Peels the MTF-native `{ "type": ..., "data": ... }` response envelope
-    /// (committed in `api/rest/info.md` / `exchange.md`): every `/info` and
-    /// `/exchange` reply wraps the payload under `data`. See [`peel_envelope`].
+    /// Peels the `{ "type": ..., "data": ... }` response envelope: every
+    /// `/info` and `/exchange` reply wraps the payload under `data`. See
+    /// [`peel_envelope`].
     pub(crate) async fn post_json<Req, Resp>(
         &self,
         path: &str,
@@ -142,9 +142,8 @@ impl RestClient {
 /// Peel the MTF-native `{ "type": <query>, "data": <payload> }` response
 /// envelope, returning the inner `data` payload.
 ///
-/// Per the committed contract (`api/rest/info.md` §Envelope and
-/// `api/rest/exchange.md`) every `/info` and `/exchange` success response is
-/// wrapped. We unwrap on the canonical shape — an object carrying a `data`
+/// Every `/info` and `/exchange` success response is wrapped. We unwrap on the
+/// canonical shape — an object carrying a `data`
 /// key alongside `type`. Anything else (a bare object, the `/exchange` 202
 /// `{accepted,...}` admission ack, `/explorer` replies which are not
 /// enveloped) is returned verbatim so the typed decode still applies. This
