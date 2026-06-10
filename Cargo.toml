@@ -3,7 +3,6 @@ name = "metaflux-client"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-resolver = "3"
 authors = ["MTF Exchange contributors"]
 license = "MIT"
 description = "Rust SDK for the MetaFlux derivatives L1 — REST + WebSocket, EIP-712 signing, and typed builders for the full signed-action surface (orders, TWAP, margin, vaults, staking, spot/Earn)."
@@ -13,6 +12,12 @@ documentation = "https://docs.rs/metaflux-client"
 readme = "README.md"
 keywords = ["metaflux", "mtf", "crypto", "perpetuals", "sdk"]
 categories = ["api-bindings", "cryptography::cryptocurrencies"]
+
+# `metaflux-client` is the primary crate; `facade/` publishes the short
+# `metaflux` alias which simply re-exports this crate.
+[workspace]
+resolver = "3"
+members = ["facade"]
 
 [features]
 default = ["cli"]
