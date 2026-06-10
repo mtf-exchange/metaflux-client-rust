@@ -11,7 +11,7 @@
 //! The full perp deploy sequence is **8 actions** in this order:
 //!
 //! 1. `register_asset`     — book the asset name / symbol / size decimals.
-//! 2. `set_oracle`         — pin the 10-source subset for the oracle (ADR-018).
+//! 2. `set_oracle`         — pin the 10-source subset for the oracle.
 //! 3. `set_leverage`       — max leverage (1..=50).
 //! 4. `set_fees`           — taker/maker bps + the deployer's MIP-3 fee.
 //! 5. `set_min_order_size` — floor on size in post-decimal units.
@@ -35,13 +35,13 @@ use serde_json::{Value, json};
 
 use crate::error::ClientError;
 
-// ---- Oracle source enum (10 sources, ADR-018) ----
+// ---- Oracle source enum (10 sources) ----
 
 /// One oracle price source the deployer can include in the perp's price feed.
 ///
 /// MTF maintains 10 candidate sources; the deployer picks a subset and the
 /// L1 medianizer uses governance-weighted aggregation across the selected
-/// subset (per ADR-018). The deployer cannot set weights — only inclusion.
+/// subset. The deployer cannot set weights — only inclusion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OracleSource {
@@ -128,7 +128,7 @@ pub enum Action {
         taker_fee_bps: i16,
         /// Maker fee in bps × 10. Negative = rebate, floor -2.
         maker_fee_bps: i16,
-        /// Deployer fee in bps × 10 (≤ 5 per ADR-012).
+        /// Deployer fee in bps × 10 (≤ 5).
         deployer_fee_bps: u16,
     },
     /// Set minimum order size in size-decimal units (sub-action 5/8).
@@ -327,7 +327,7 @@ pub struct PerpDeployBuilder {
     pub asset_symbol: String,
     /// Decimals for size (typical 8).
     pub decimals: u8,
-    /// Subset of the 10 supported oracle sources (ADR-018).
+    /// Subset of the 10 supported oracle sources.
     pub oracle_sources: Vec<OracleSource>,
     /// Max leverage, in `1..=50`.
     pub max_leverage: u8,
@@ -337,7 +337,7 @@ pub struct PerpDeployBuilder {
     pub maker_fee_bps: i16,
     /// Minimum order size in size-decimal units.
     pub min_order_size: u128,
-    /// MIP-3 deployer fee in bps × 10 (≤ 5 per ADR-012).
+    /// Deployer fee in bps × 10 (≤ 5).
     pub deployer_fee_bps: u16,
 }
 
@@ -447,7 +447,7 @@ impl PerpDeployBuilder {
     /// - max_leverage outside `1..=50`
     /// - taker_fee_bps > 100 (10 bps) or < 0  — same `bps × 10` convention as `fee_schedule`
     /// - maker_fee_bps > 100 or < -20 (rebate floor -2 bps)
-    /// - deployer_fee_bps > 50 (5 bps per ADR-012, scaled ×10)
+    /// - deployer_fee_bps > 50 (5 bps, scaled ×10)
     /// - oracle_sources empty or contains duplicates
     /// - decimals > 18
     ///
@@ -489,7 +489,7 @@ impl PerpDeployBuilder {
         }
         if self.deployer_fee_bps > 50 {
             return Err(ClientError::Validation(format!(
-                "deployer_fee_bps {} exceeds 5 bps cap (50 in bps×10) per ADR-012",
+                "deployer_fee_bps {} exceeds 5 bps cap (50 in bps×10)",
                 self.deployer_fee_bps
             )));
         }

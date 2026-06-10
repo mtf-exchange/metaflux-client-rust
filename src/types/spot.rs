@@ -1,6 +1,6 @@
-//! Spot CLOB types — SE-0 spot order / cancel (MTF-native `/exchange`).
+//! Spot CLOB types — spot order / cancel (`/exchange`).
 //!
-//! The spot order engine (SE-0) is a separate CLOB from the perp book: orders
+//! The spot order engine is a separate CLOB from the perp book: orders
 //! reference a spot `pair` id (not a perp `market` id) and trade raw base lots
 //! against a quote. v0 is **IOC limit only** — `tif` must be `ioc` and
 //! `limit_px > 0`; the node rejects `gtc` / `alo` and a market (`limit_px = 0`)
@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::Cloid;
 use crate::types::order::{Side, StpMode, TimeInForce};
 
-/// A single spot CLOB order submission (SE-0).
+/// A single spot CLOB order submission.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SpotOrder {

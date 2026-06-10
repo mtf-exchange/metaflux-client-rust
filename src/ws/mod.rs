@@ -11,9 +11,7 @@
 //! { "method": "unsubscribe", "subscription": { "type": "l2_book", "market_id": 1 } }
 //! ```
 //!
-//! This is **NOT** the HL `coin: "BTC"` shape — MTF-native uses `market_id`
-//! integers. Per ADR-019, HL migrants should use `hyperliquid-rust-sdk`
-//! against the gateway's `/hl-compat/` URL instead.
+//! Subscriptions are keyed by integer `market_id`, not a `coin` symbol.
 //!
 //! ## Heartbeat
 //!

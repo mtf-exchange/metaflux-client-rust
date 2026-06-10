@@ -1,9 +1,9 @@
-//! MTF-native domain types.
+//! Domain types shared by all transports.
 //!
-//! All types use `#[serde(rename_all = "snake_case")]` per the MTF-native
-//! wire convention (ADR-019). Numeric fields are plain integers (u64 /
-//! i64 / u128) — **not** decimal strings, which is the HL convention we
-//! explicitly do not adopt.
+//! Types use `#[serde(rename_all = "snake_case")]` to match the wire
+//! convention. Sizes / prices / ids are plain-integer fields on fixed-point
+//! planes; fractional magnitudes (margin deltas, stake, vault amounts) ride the
+//! wire as decimal **strings** to preserve precision.
 //!
 //! ## ID newtypes
 //!
@@ -11,18 +11,23 @@
 //!
 //! - [`OrderId`] — server-assigned order identifier (`u64`).
 //! - [`MarketId`] — internal market id (`u32`), sequentially allocated.
-//! - [`VaultId`] — user-vault id (`u64`), assigned by `createVault` action.
+//! - [`VaultId`] — vault id (`u64`), assigned at vault creation.
 
 use serde::{Deserialize, Serialize};
 
+pub mod account;
 pub mod cross_chain;
 pub mod encrypted;
 pub mod fba;
+pub mod governance;
+pub mod meta_bridge;
 pub mod order;
 pub mod pm;
 pub mod position;
 pub mod rfq;
 pub mod spot;
+pub mod staking;
+pub mod twap;
 pub mod vault;
 
 // ---- ID newtypes ----
@@ -37,10 +42,9 @@ pub mod vault;
 #[serde(transparent)]
 pub struct OrderId(pub u64);
 
-/// Internal market identifier.
+/// Market identifier.
 ///
-/// Sequentially allocated from genesis; MIP-3 permissionless deploys get
-/// fresh ids per `perpDeploy` action.
+/// Sequentially allocated; permissionless perp deploys receive fresh ids.
 #[derive(
     Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]

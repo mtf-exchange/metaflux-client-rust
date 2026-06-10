@@ -1,15 +1,13 @@
-//! FBA — Frequent Batch Auction (action field 59).
+//! FBA — Frequent Batch Auction read types.
 //!
-//! Per-market FBA mode: instead of continuous matching, orders accumulate
-//! into a batch over a fixed window (typically 100-500 ms) and are matched
-//! uniformly at the end of each window. This removes the speed advantage of
-//! co-located makers.
+//! Under per-market FBA mode, orders accumulate into a batch over a fixed
+//! window (typically 100-500 ms) and match uniformly at the end of each window,
+//! removing the speed advantage of co-located makers. These types model the FBA
+//! config and cleared-batch results read back over `/info`.
 
 use serde::{Deserialize, Serialize};
 
 use crate::types::MarketId;
-use crate::types::order::Side;
-use crate::wallet::Address;
 
 /// FBA configuration per market.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,25 +21,6 @@ pub struct FbaConfig {
     pub next_auction_at_ms: u64,
     /// Whether FBA is enabled for this market (otherwise CLOB-only).
     pub enabled: bool,
-}
-
-/// Action — submit an order into the current FBA batch window.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct FbaSubmit {
-    /// Submitter address.
-    pub owner: Address,
-    /// Market id (must have FBA enabled).
-    pub market: MarketId,
-    /// Side.
-    pub side: Side,
-    /// Size in fixed-point tick units (≥ `min_lot`).
-    pub size: u64,
-    /// Limit price in tick units — FBA submissions are always limit-priced.
-    pub limit_px: u64,
-    /// Batch window id this submission is targeting. The server validates
-    /// this matches the open batch; stale submissions are rejected.
-    pub batch_id: u64,
 }
 
 /// FBA batch result published after the auction clears.
@@ -75,22 +54,6 @@ mod tests {
         let j = serde_json::to_string(&c).unwrap();
         let dec: FbaConfig = serde_json::from_str(&j).unwrap();
         assert_eq!(c, dec);
-    }
-
-    #[test]
-    fn fba_submit_serializes_snake_case() {
-        let s = FbaSubmit {
-            owner: Address::ZERO,
-            market: MarketId(2),
-            side: Side::Bid,
-            size: 100,
-            limit_px: 5_000_000_000_000,
-            batch_id: 42,
-        };
-        let j = serde_json::to_value(&s).unwrap();
-        assert!(j.get("limit_px").is_some());
-        assert!(j.get("batch_id").is_some());
-        assert!(j.get("limitPx").is_none());
     }
 
     #[test]
