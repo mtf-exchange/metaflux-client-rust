@@ -13,7 +13,9 @@ use metaflux_client::{
     types::{
         MarketId, OrderId,
         account::UpdateLeverage,
-        order::{BatchOrder, CancelOrder, Order, OrderKind, OrderStatus, Side, StpMode, TimeInForce},
+        order::{
+            BatchOrder, CancelOrder, Order, OrderKind, OrderStatus, Side, StpMode, TimeInForce,
+        },
         spot::{EarnWithdraw, SpotMarginOpen},
         vault::{CreateVault, VaultKind},
     },
@@ -248,7 +250,10 @@ async fn spot_margin_open_posts_signed_sender_authorized_envelope() {
     assert_eq!(p["limit_px"], json!(200_000_000));
     assert_eq!(p["borrow"], json!("400"));
     assert!(p["borrow"].is_string(), "borrow must ride as a JSON string");
-    assert!(action.get("owner").is_none(), "sender-authorized: no owner field");
+    assert!(
+        action.get("owner").is_none(),
+        "sender-authorized: no owner field"
+    );
 
     // The signature recovers to the wallet (the actor is the signer).
     let nonce = body["nonce"].as_u64().unwrap();
@@ -274,7 +279,10 @@ async fn earn_withdraw_keeps_fractional_shares_as_string() {
 
     let client = Client::new(server.uri()).unwrap();
     let wallet = sample_wallet();
-    let wd = EarnWithdraw { asset: 100, shares: "1234.5".into() };
+    let wd = EarnWithdraw {
+        asset: 100,
+        shares: "1234.5".into(),
+    };
     let resp: Value = client.exchange().earn_withdraw(&wallet, &wd).await.unwrap();
     assert_eq!(resp["accepted"], true);
 
@@ -310,7 +318,11 @@ async fn update_leverage_posts_sender_authorized_envelope() {
 
     let client = Client::new(server.uri()).unwrap();
     let wallet = sample_wallet();
-    let params = UpdateLeverage { asset: MarketId(2), leverage: 10, is_isolated: false };
+    let params = UpdateLeverage {
+        asset: MarketId(2),
+        leverage: 10,
+        is_isolated: false,
+    };
     let resp: Value = client
         .exchange()
         .update_leverage(&wallet, &params)
@@ -325,7 +337,10 @@ async fn update_leverage_posts_sender_authorized_envelope() {
     assert_eq!(p["asset"], json!(2));
     assert_eq!(p["leverage"], json!(10));
     assert_eq!(p["is_isolated"], json!(false));
-    assert!(action.get("owner").is_none(), "sender-authorized: no owner field");
+    assert!(
+        action.get("owner").is_none(),
+        "sender-authorized: no owner field"
+    );
 
     let nonce = body["nonce"].as_u64().unwrap();
     let digest = _action_digest_for_test(&action, nonce);
@@ -354,7 +369,11 @@ async fn create_vault_posts_signed_params_envelope() {
         parent: None,
         kind: VaultKind::User,
     };
-    let resp: Value = client.exchange().create_vault(&wallet, &create).await.unwrap();
+    let resp: Value = client
+        .exchange()
+        .create_vault(&wallet, &create)
+        .await
+        .unwrap();
     assert_eq!(resp["accepted"], true);
 
     let body = captor.last.lock().await.clone().expect("body captured");
@@ -362,7 +381,10 @@ async fn create_vault_posts_signed_params_envelope() {
     assert_eq!(action["type"].as_str(), Some("create_vault"));
     assert_eq!(action["params"]["name"], json!("v"));
     assert_eq!(action["params"]["kind"], json!("User"));
-    assert!(action["params"].get("parent").is_none(), "None parent omitted");
+    assert!(
+        action["params"].get("parent").is_none(),
+        "None parent omitted"
+    );
 
     let nonce = body["nonce"].as_u64().unwrap();
     let digest = _action_digest_for_test(&action, nonce);
@@ -403,7 +425,11 @@ async fn batch_order_rejects_mismatched_owner_locally() {
         orders: vec![mk(wallet.address()), mk(other.address())],
         grouping: Default::default(),
     };
-    let err = client.exchange().batch_order(&wallet, &batch).await.unwrap_err();
+    let err = client
+        .exchange()
+        .batch_order(&wallet, &batch)
+        .await
+        .unwrap_err();
     assert!(matches!(err, metaflux_client::ClientError::Validation(_)));
 }
 

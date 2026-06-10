@@ -40,7 +40,10 @@ mod tests {
     #[test]
     fn mb_chain_serializes_pascal_case() {
         assert_eq!(serde_json::to_string(&MbChain::Base).unwrap(), "\"Base\"");
-        assert_eq!(serde_json::to_string(&MbChain::Solana).unwrap(), "\"Solana\"");
+        assert_eq!(
+            serde_json::to_string(&MbChain::Solana).unwrap(),
+            "\"Solana\""
+        );
     }
 
     #[test]

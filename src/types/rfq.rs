@@ -93,7 +93,12 @@ mod tests {
             side: Side::Bid,
             size: 1_000,
             expires_at_ms: 1_700_000_000_000,
-            quotes: vec![MmQuote { rfq_id: RfqId(7), mm: Address::ZERO, price: 100, size: 500 }],
+            quotes: vec![MmQuote {
+                rfq_id: RfqId(7),
+                mm: Address::ZERO,
+                price: 100,
+                size: 500,
+            }],
             status: RfqStatus::Open,
         };
         let j = serde_json::to_string(&s).unwrap();
