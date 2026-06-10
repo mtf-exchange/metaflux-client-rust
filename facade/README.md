@@ -1,5 +1,8 @@
 # metaflux
 
+[![crates.io](https://img.shields.io/crates/v/metaflux.svg)](https://crates.io/crates/metaflux)
+[![docs.rs](https://img.shields.io/docsrs/metaflux)](https://docs.rs/metaflux)
+
 A short alias for [`metaflux-client`](https://crates.io/crates/metaflux-client) —
 the Rust SDK for the MetaFlux derivatives L1.
 
