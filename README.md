@@ -118,6 +118,57 @@ On the WebSocket `trades` / `candles` / `fills` channels, spot prints carry the
 **numeric pair id** as the `coin` label (e.g. `"101"`), not the display name —
 use `spot_meta()` to map `id` to its `"{base}/{quote}"` name.
 
+### Spot margin & Earn (devnet preview)
+
+Leveraged spot borrows quote from the **Earn** lending pool. It is **available on
+devnet (preview)**: the full deposit → borrow → leveraged-buy → close loop works,
+but forced-liquidation settlement is not yet wired and per-pair maintenance ratios
+are still being calibrated — don't treat it as production-ready. All six actions
+are sender-authorized (the signer is the actor) and return the `202 Accepted`
+admission envelope, not a synchronous oid; observe committed state via `/info`
+`spot_margin_state` / `earn_state`. Decimal amounts (`amount` / `borrow` /
+`shares`) are passed as **strings**; `size` / `limit_px` are integers on the
+raw-lot / 1e8 planes.
+
+```rust,ignore
+use metaflux_client::types::spot::{
+    EarnDeposit, SpotMarginClose, SpotMarginDeposit, SpotMarginOpen,
+};
+
+// `client`, `wallet`, `pair` as above.
+
+// Supply side: a lender funds the pool (asset = the pair's quote token id).
+client
+    .exchange()
+    .earn_deposit(&wallet, &EarnDeposit { asset: pair.quote, amount: "5000".into() })
+    .await?;
+
+// Borrow side: post collateral, then open a leveraged long.
+client
+    .exchange()
+    .spot_margin_deposit(&wallet, &SpotMarginDeposit { pair: pair.id, amount: "100".into() })
+    .await?;
+client
+    .exchange()
+    .spot_margin_open(
+        &wallet,
+        &SpotMarginOpen { pair: pair.id, size: 200, limit_px: 200_000_000, borrow: "400".into() },
+    )
+    .await?;
+
+// Close the position (sells the held base, repays principal + interest to the
+// Earn pool, returns the remainder; a partial fill keeps the account open).
+client
+    .exchange()
+    .spot_margin_close(&wallet, &SpotMarginClose { pair: pair.id, limit_px: 200_000_000 })
+    .await?;
+```
+
+Read the committed state over `POST /info` with `{ "type": "spot_margin_state",
+"user": "0x.." }` (collateral / borrowed / base_held / current_debt per margin
+account) and `{ "type": "earn_state", "user": "0x.." }` (per-pool supplied /
+borrowed / idle / share_value, plus your shares when `user` is supplied).
+
 ## Module overview
 
 | Module | Purpose |

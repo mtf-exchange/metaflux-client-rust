@@ -86,6 +86,105 @@ pub struct SpotCancel {
     pub oid: u64,
 }
 
+// ---- Spot margin (leveraged spot) + Earn (lending pool) ----
+//
+// Available on devnet (preview). Leveraged spot is isolated per `(account,
+// pair)`: posted quote collateral is a loss buffer, the borrow funds the buy
+// 100%, and the bought base is held segregated on the margin account. Earn is
+// the supply side that funds the borrows. All actions are sender-authorized
+// (the recovered signer is the actor — no owner field). Decimal magnitudes
+// (`amount` / `borrow` / `shares`) ride the wire as JSON **strings** to preserve
+// fractional precision; `size` / `limit_px` are plain integers on the raw-lot /
+// 1e8 planes, like a [`SpotOrder`].
+
+/// Post quote (USDC) collateral into the `(account, pair)` margin account.
+///
+/// Margin must be enabled for the pair (per-pair risk params present), else the
+/// node rejects with `spot margin not enabled for pair`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotMarginDeposit {
+    /// Spot pair id.
+    pub pair: u32,
+    /// Quote collateral to post (whole units), as a decimal string (`> 0`).
+    pub amount: String,
+}
+
+/// Withdraw free collateral from the `(account, pair)` margin account back to
+/// the spendable quote balance.
+///
+/// Full collateral is withdrawable while flat; an open position gates the
+/// withdraw at the initial-margin requirement.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotMarginWithdraw {
+    /// Spot pair id.
+    pub pair: u32,
+    /// Collateral to withdraw (whole quote units), as a decimal string (`> 0`).
+    pub amount: String,
+}
+
+/// Open a leveraged long: borrow quote from the pair's Earn pool and IOC-buy
+/// `size` base at up to `limit_px`.
+///
+/// The borrow funds the buy 100%; the bought base is held segregated. Any
+/// unspent borrow is repaid instantly. Gated by the initial-margin requirement
+/// on the worst-case cost (`limit_px × size`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotMarginOpen {
+    /// Spot pair id.
+    pub pair: u32,
+    /// Buy size in base-asset raw lots (`10^sz_decimals` per whole unit).
+    pub size: u64,
+    /// Limit price on the 1e8 fixed-point price plane (`> 0`).
+    pub limit_px: u64,
+    /// Quote principal to draw from the Earn pool (whole units), as a decimal
+    /// string (`> 0`).
+    pub borrow: String,
+}
+
+/// Close the position: IOC-sell the held base at no less than `limit_px`, repay
+/// principal + accrued interest to the Earn pool, return the remainder.
+///
+/// A partial fill keeps the account open (unsold base stays segregated,
+/// collateral untouched).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotMarginClose {
+    /// Spot pair id.
+    pub pair: u32,
+    /// Floor price for the close sell, on the 1e8 plane (`> 0`).
+    pub limit_px: u64,
+}
+
+/// Supply quote into an Earn lending pool for pool shares.
+///
+/// 1:1 on a fresh pool, else priced off pool NAV. The pool auto-creates on the
+/// first deposit for any asset that is the quote of a registered spot pair.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EarnDeposit {
+    /// Lendable asset id (a spot pair's quote) — the pool key.
+    pub asset: u32,
+    /// Quote to supply (whole units), as a decimal string (`> 0`).
+    pub amount: String,
+}
+
+/// Redeem pool shares back to quote.
+///
+/// The payout is clamped to the pool's idle liquidity (`supplied − borrowed`):
+/// a redemption larger than idle pays exactly idle and burns proportionally
+/// fewer shares.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EarnWithdraw {
+    /// Lendable asset id (the pool key).
+    pub asset: u32,
+    /// Pool shares to redeem, as a decimal string (`> 0`, owned by the sender).
+    pub shares: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +246,61 @@ mod tests {
         assert_eq!(j["oid"], serde_json::json!(12345));
         let dec: SpotCancel = serde_json::from_value(j).unwrap();
         assert_eq!(c, dec);
+    }
+
+    #[test]
+    fn spot_margin_deposit_decimal_rides_as_json_string() {
+        let d = SpotMarginDeposit { pair: 200, amount: "100".into() };
+        let j = serde_json::to_value(&d).unwrap();
+        assert_eq!(j["pair"], serde_json::json!(200));
+        assert!(j["amount"].is_string(), "decimal amount must be a JSON string");
+        assert_eq!(j["amount"], serde_json::json!("100"));
+        let dec: SpotMarginDeposit = serde_json::from_value(j).unwrap();
+        assert_eq!(d, dec);
+    }
+
+    #[test]
+    fn spot_margin_open_mixes_integer_planes_and_decimal_string() {
+        let o = SpotMarginOpen {
+            pair: 200,
+            size: 200,
+            limit_px: 200_000_000,
+            borrow: "400".into(),
+        };
+        let j = serde_json::to_value(&o).unwrap();
+        assert!(j["size"].is_number(), "size is a raw-lot integer");
+        assert!(j["limit_px"].is_number(), "limit_px is a 1e8-plane integer");
+        assert_eq!(j["limit_px"], serde_json::json!(200_000_000));
+        assert!(j["borrow"].is_string(), "borrow is a decimal JSON string");
+        assert!(j.get("limitPx").is_none(), "no camelCase leak");
+        let dec: SpotMarginOpen = serde_json::from_value(j).unwrap();
+        assert_eq!(o, dec);
+    }
+
+    #[test]
+    fn spot_margin_close_serializes_snake_case() {
+        let c = SpotMarginClose { pair: 200, limit_px: 190_000_000 };
+        let j = serde_json::to_value(c).unwrap();
+        assert_eq!(j["pair"], serde_json::json!(200));
+        assert_eq!(j["limit_px"], serde_json::json!(190_000_000));
+        let dec: SpotMarginClose = serde_json::from_value(j).unwrap();
+        assert_eq!(c, dec);
+    }
+
+    #[test]
+    fn earn_actions_serialize_asset_and_decimal_string() {
+        let d = EarnDeposit { asset: 100, amount: "5000".into() };
+        let jd = serde_json::to_value(&d).unwrap();
+        assert_eq!(jd["asset"], serde_json::json!(100));
+        assert_eq!(jd["amount"], serde_json::json!("5000"));
+        assert!(jd["amount"].is_string());
+        assert_eq!(d, serde_json::from_value::<EarnDeposit>(jd).unwrap());
+
+        let w = EarnWithdraw { asset: 100, shares: "1234.5".into() };
+        let jw = serde_json::to_value(&w).unwrap();
+        assert_eq!(jw["asset"], serde_json::json!(100));
+        assert_eq!(jw["shares"], serde_json::json!("1234.5"));
+        assert!(jw["shares"].is_string(), "fractional shares must survive as a string");
+        assert_eq!(w, serde_json::from_value::<EarnWithdraw>(jw).unwrap());
     }
 }

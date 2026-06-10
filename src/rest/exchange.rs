@@ -42,7 +42,10 @@ use crate::types::{
     order::{CancelOrder, Order, OrderResponse},
     pm::{PmEnroll, PmRebalance, PmUnenroll},
     rfq::{RfqAccept, RfqRequest},
-    spot::{SpotCancel, SpotOrder},
+    spot::{
+        EarnDeposit, EarnWithdraw, SpotCancel, SpotMarginClose, SpotMarginDeposit,
+        SpotMarginOpen, SpotMarginWithdraw, SpotOrder,
+    },
     vault::{VaultCreate, VaultDistribute, VaultWithdraw},
 };
 use crate::wallet::{Eip712, Signature, Wallet};
@@ -181,6 +184,108 @@ impl<'a> Exchange<'a> {
         cancel: &SpotCancel,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "spot_cancel", "cancel": cancel });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Post quote collateral into a spot-margin account (spot margin / Earn,
+    /// devnet preview).
+    ///
+    /// Sender-authorized: the recovered signer is the actor (no owner field).
+    /// Margin must be enabled for the pair, else the node rejects. Returns the
+    /// `202 Accepted` admission envelope — confirm via `/info` `spot_margin_state`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_margin_deposit(
+        &self,
+        wallet: &Wallet,
+        params: &SpotMarginDeposit,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "spot_margin_deposit", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Withdraw free collateral from a spot-margin account.
+    ///
+    /// Sender-authorized. Full collateral is withdrawable while flat; an open
+    /// position gates the withdraw at the initial-margin requirement.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_margin_withdraw(
+        &self,
+        wallet: &Wallet,
+        params: &SpotMarginWithdraw,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "spot_margin_withdraw", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Open a leveraged spot position: borrow quote from the pair's Earn pool
+    /// and IOC-buy base on leverage.
+    ///
+    /// Sender-authorized. The borrow funds the buy 100%; the bought base is held
+    /// segregated. Gated by the initial-margin requirement on the worst-case
+    /// cost (`limit_px × size`). Returns the `202 Accepted` admission envelope.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_margin_open(
+        &self,
+        wallet: &Wallet,
+        params: &SpotMarginOpen,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "spot_margin_open", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Close a leveraged spot position: IOC-sell the held base, repay principal
+    /// + interest to the Earn pool, return the remainder.
+    ///
+    /// Sender-authorized. A partial fill keeps the account open.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_margin_close(
+        &self,
+        wallet: &Wallet,
+        params: &SpotMarginClose,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "spot_margin_close", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Supply quote into an Earn lending pool for pool shares (devnet preview).
+    ///
+    /// Sender-authorized. 1:1 on a fresh pool, else priced off pool NAV; the
+    /// pool auto-creates on the first deposit. Returns the `202 Accepted`
+    /// admission envelope — confirm via `/info` `earn_state`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn earn_deposit(
+        &self,
+        wallet: &Wallet,
+        params: &EarnDeposit,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "earn_deposit", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Redeem Earn pool shares back to quote.
+    ///
+    /// Sender-authorized. The payout is clamped to the pool's idle liquidity
+    /// (`supplied − borrowed`); a redemption larger than idle pays exactly idle
+    /// and burns proportionally fewer shares.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn earn_withdraw(
+        &self,
+        wallet: &Wallet,
+        params: &EarnWithdraw,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "earn_withdraw", "params": params });
         self.post_signed(wallet, action).await
     }
 
