@@ -575,7 +575,10 @@ mod tests {
         ]});
         let resp: OrderResponse = serde_json::from_value(j).unwrap();
         assert_eq!(resp.statuses.len(), 3);
-        assert_eq!(resp.first().and_then(OrderStatus::oid), Some(OrderId(12345)));
+        assert_eq!(
+            resp.first().and_then(OrderStatus::oid),
+            Some(OrderId(12345))
+        );
         assert!(resp.statuses[2].is_error());
     }
 
@@ -596,7 +599,10 @@ mod tests {
             ],
         };
         let j = serde_json::to_value(&resp).unwrap();
-        assert!(j.is_object() && j.get("statuses").is_some(), "OrderResponse wraps the per-order array under `statuses`");
+        assert!(
+            j.is_object() && j.get("statuses").is_some(),
+            "OrderResponse wraps the per-order array under `statuses`"
+        );
         let dec: OrderResponse = serde_json::from_value(j).unwrap();
         assert_eq!(resp, dec);
     }
@@ -605,7 +611,12 @@ mod tests {
 
     #[test]
     fn modify_omits_none_fields() {
-        let m = Modify { market: MarketId(3), oid: OrderId(42), new_px: Some(1234), new_size: None };
+        let m = Modify {
+            market: MarketId(3),
+            oid: OrderId(42),
+            new_px: Some(1234),
+            new_size: None,
+        };
         let j = serde_json::to_value(m).unwrap();
         assert_eq!(j["new_px"], serde_json::json!(1234));
         assert!(j.get("new_size").is_none());
@@ -628,17 +639,28 @@ mod tests {
 
     #[test]
     fn cancel_by_cloid_serializes_hex_cloid() {
-        let c = CancelByCloid { asset: MarketId(7), cloid: Cloid([0xAB; 16]) };
+        let c = CancelByCloid {
+            asset: MarketId(7),
+            cloid: Cloid([0xAB; 16]),
+        };
         let j = serde_json::to_value(c).unwrap();
         assert_eq!(j["asset"], serde_json::json!(7));
-        assert_eq!(j["cloid"], serde_json::json!("0xabababababababababababababababab"));
+        assert_eq!(
+            j["cloid"],
+            serde_json::json!("0xabababababababababababababababab")
+        );
     }
 
     #[test]
     fn cancel_all_orders_omits_none_asset() {
         let all = CancelAllOrders { asset: None };
         assert!(serde_json::to_value(all).unwrap().get("asset").is_none());
-        let one = CancelAllOrders { asset: Some(MarketId(3)) };
-        assert_eq!(serde_json::to_value(one).unwrap()["asset"], serde_json::json!(3));
+        let one = CancelAllOrders {
+            asset: Some(MarketId(3)),
+        };
+        assert_eq!(
+            serde_json::to_value(one).unwrap()["asset"],
+            serde_json::json!(3)
+        );
     }
 }

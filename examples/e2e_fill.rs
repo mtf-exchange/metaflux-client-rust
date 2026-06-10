@@ -42,7 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // a single request avoids the per-IP rate limit (both would share one IP via
     // the tunnel).
     let r = request_faucet(&base, &b.address().to_string(), None).await?;
-    println!("faucet B {}: usdc={} mtf={} {}", r.address, r.usdc, r.mtf, r.status);
+    println!(
+        "faucet B {}: usdc={} mtf={} {}",
+        r.address, r.usdc, r.mtf, r.status
+    );
     // Faucet credit lands on the NEXT block; give it a couple blocks.
     tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
 

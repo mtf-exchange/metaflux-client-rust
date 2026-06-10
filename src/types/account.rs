@@ -148,7 +148,11 @@ mod tests {
 
     #[test]
     fn update_leverage_serializes_snake_case_integers() {
-        let a = UpdateLeverage { asset: MarketId(2), leverage: 10, is_isolated: true };
+        let a = UpdateLeverage {
+            asset: MarketId(2),
+            leverage: 10,
+            is_isolated: true,
+        };
         let j = serde_json::to_value(a).unwrap();
         assert_eq!(j["asset"], serde_json::json!(2));
         assert_eq!(j["leverage"], serde_json::json!(10));
@@ -158,15 +162,25 @@ mod tests {
 
     #[test]
     fn isolated_margin_delta_rides_as_string() {
-        let a = UpdateIsolatedMargin { asset: MarketId(1), delta: "-12.5".into() };
+        let a = UpdateIsolatedMargin {
+            asset: MarketId(1),
+            delta: "-12.5".into(),
+        };
         let j = serde_json::to_value(&a).unwrap();
-        assert!(j["delta"].is_string(), "signed decimal must be a JSON string");
+        assert!(
+            j["delta"].is_string(),
+            "signed decimal must be a JSON string"
+        );
         assert_eq!(j["delta"], serde_json::json!("-12.5"));
     }
 
     #[test]
     fn approve_agent_omits_optional_fields() {
-        let a = ApproveAgent { agent: Address::ZERO, name: None, expires_at_ms: None };
+        let a = ApproveAgent {
+            agent: Address::ZERO,
+            name: None,
+            expires_at_ms: None,
+        };
         let j = serde_json::to_value(&a).unwrap();
         assert!(j.get("name").is_none());
         assert!(j.get("expires_at_ms").is_none());

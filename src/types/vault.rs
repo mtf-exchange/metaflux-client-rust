@@ -171,15 +171,27 @@ mod tests {
         let j = serde_json::to_value(&c).unwrap();
         assert!(j.get("parent").is_none());
         assert_eq!(j["kind"], serde_json::json!("User"));
-        let c2 = CreateVault { kind: VaultKind::Metaliquidity, ..c };
-        assert_eq!(serde_json::to_value(&c2).unwrap()["kind"], serde_json::json!("Metaliquidity"));
+        let c2 = CreateVault {
+            kind: VaultKind::Metaliquidity,
+            ..c
+        };
+        assert_eq!(
+            serde_json::to_value(&c2).unwrap()["kind"],
+            serde_json::json!("Metaliquidity")
+        );
     }
 
     #[test]
     fn vault_withdraw_shares_is_string() {
-        let w = VaultWithdraw { vault_id: VaultId(4), shares: "250".into() };
+        let w = VaultWithdraw {
+            vault_id: VaultId(4),
+            shares: "250".into(),
+        };
         let j = serde_json::to_value(&w).unwrap();
-        assert!(j["shares"].is_string(), "shares must be a decimal JSON string");
+        assert!(
+            j["shares"].is_string(),
+            "shares must be a decimal JSON string"
+        );
         assert_eq!(w, serde_json::from_value(j).unwrap());
     }
 }
