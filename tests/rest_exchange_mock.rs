@@ -13,6 +13,7 @@ use metaflux_client::{
     types::{
         MarketId, OrderId,
         order::{CancelOrder, Order, OrderKind, OrderStatus, Side, StpMode, TimeInForce},
+        spot::{EarnWithdraw, SpotMarginOpen},
     },
     wallet::Wallet,
 };
@@ -203,6 +204,93 @@ async fn submit_order_rejects_mismatched_owner_locally() {
         .await
         .unwrap_err();
     assert!(matches!(err, metaflux_client::ClientError::Validation(_)));
+}
+
+#[tokio::test]
+async fn spot_margin_open_posts_signed_sender_authorized_envelope() {
+    let server = MockServer::start().await;
+    // Non-order actions get the 202 admission envelope, not a synchronous oid.
+    let captor = CapturingResponder {
+        last: Arc::new(Mutex::new(None)),
+        response: json!({ "accepted": true, "action_hash": "0xabc", "mempool_depth": 1 }),
+    };
+    Mock::given(method("POST"))
+        .and(path("/exchange"))
+        .respond_with(captor.clone())
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let wallet = sample_wallet();
+    let open = SpotMarginOpen {
+        pair: 200,
+        size: 200,
+        limit_px: 200_000_000,
+        borrow: "400".into(),
+    };
+    let resp: Value = client
+        .exchange()
+        .spot_margin_open(&wallet, &open)
+        .await
+        .unwrap();
+    assert_eq!(resp["accepted"], true);
+
+    // Confirm the action shape: sender-authorized params body, decimal-string
+    // borrow, integer-plane size / limit_px, no owner field.
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("spot_margin_open"));
+    let p = &action["params"];
+    assert_eq!(p["pair"], json!(200));
+    assert_eq!(p["size"], json!(200));
+    assert_eq!(p["limit_px"], json!(200_000_000));
+    assert_eq!(p["borrow"], json!("400"));
+    assert!(p["borrow"].is_string(), "borrow must ride as a JSON string");
+    assert!(action.get("owner").is_none(), "sender-authorized: no owner field");
+
+    // The signature recovers to the wallet (the actor is the signer).
+    let nonce = body["nonce"].as_u64().unwrap();
+    let sig_hex = body["signature"].as_str().unwrap();
+    let digest = _action_digest_for_test(&action, nonce);
+    let sig = decode_sig(sig_hex);
+    let recovered = _recover_for_test(&digest, &sig).expect("recover");
+    assert_eq!(recovered, wallet.address());
+}
+
+#[tokio::test]
+async fn earn_withdraw_keeps_fractional_shares_as_string() {
+    let server = MockServer::start().await;
+    let captor = CapturingResponder {
+        last: Arc::new(Mutex::new(None)),
+        response: json!({ "accepted": true }),
+    };
+    Mock::given(method("POST"))
+        .and(path("/exchange"))
+        .respond_with(captor.clone())
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let wallet = sample_wallet();
+    let wd = EarnWithdraw { asset: 100, shares: "1234.5".into() };
+    let resp: Value = client.exchange().earn_withdraw(&wallet, &wd).await.unwrap();
+    assert_eq!(resp["accepted"], true);
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("earn_withdraw"));
+    assert_eq!(action["params"]["asset"], json!(100));
+    assert_eq!(action["params"]["shares"], json!("1234.5"));
+    assert!(
+        action["params"]["shares"].is_string(),
+        "fractional shares must survive as a decimal string"
+    );
+
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _action_digest_for_test(&action, nonce);
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    let recovered = _recover_for_test(&digest, &sig).expect("recover");
+    assert_eq!(recovered, wallet.address());
 }
 
 fn decode_sig(hex_str: &str) -> metaflux_client::wallet::Signature {
