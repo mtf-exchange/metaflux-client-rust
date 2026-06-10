@@ -240,7 +240,10 @@ mod tests {
 
     #[test]
     fn spot_cancel_serializes_snake_case() {
-        let c = SpotCancel { pair: 3, oid: 12345 };
+        let c = SpotCancel {
+            pair: 3,
+            oid: 12345,
+        };
         let j = serde_json::to_value(c).unwrap();
         assert_eq!(j["pair"], serde_json::json!(3));
         assert_eq!(j["oid"], serde_json::json!(12345));
@@ -250,10 +253,16 @@ mod tests {
 
     #[test]
     fn spot_margin_deposit_decimal_rides_as_json_string() {
-        let d = SpotMarginDeposit { pair: 200, amount: "100".into() };
+        let d = SpotMarginDeposit {
+            pair: 200,
+            amount: "100".into(),
+        };
         let j = serde_json::to_value(&d).unwrap();
         assert_eq!(j["pair"], serde_json::json!(200));
-        assert!(j["amount"].is_string(), "decimal amount must be a JSON string");
+        assert!(
+            j["amount"].is_string(),
+            "decimal amount must be a JSON string"
+        );
         assert_eq!(j["amount"], serde_json::json!("100"));
         let dec: SpotMarginDeposit = serde_json::from_value(j).unwrap();
         assert_eq!(d, dec);
@@ -279,7 +288,10 @@ mod tests {
 
     #[test]
     fn spot_margin_close_serializes_snake_case() {
-        let c = SpotMarginClose { pair: 200, limit_px: 190_000_000 };
+        let c = SpotMarginClose {
+            pair: 200,
+            limit_px: 190_000_000,
+        };
         let j = serde_json::to_value(c).unwrap();
         assert_eq!(j["pair"], serde_json::json!(200));
         assert_eq!(j["limit_px"], serde_json::json!(190_000_000));
@@ -289,18 +301,27 @@ mod tests {
 
     #[test]
     fn earn_actions_serialize_asset_and_decimal_string() {
-        let d = EarnDeposit { asset: 100, amount: "5000".into() };
+        let d = EarnDeposit {
+            asset: 100,
+            amount: "5000".into(),
+        };
         let jd = serde_json::to_value(&d).unwrap();
         assert_eq!(jd["asset"], serde_json::json!(100));
         assert_eq!(jd["amount"], serde_json::json!("5000"));
         assert!(jd["amount"].is_string());
         assert_eq!(d, serde_json::from_value::<EarnDeposit>(jd).unwrap());
 
-        let w = EarnWithdraw { asset: 100, shares: "1234.5".into() };
+        let w = EarnWithdraw {
+            asset: 100,
+            shares: "1234.5".into(),
+        };
         let jw = serde_json::to_value(&w).unwrap();
         assert_eq!(jw["asset"], serde_json::json!(100));
         assert_eq!(jw["shares"], serde_json::json!("1234.5"));
-        assert!(jw["shares"].is_string(), "fractional shares must survive as a string");
+        assert!(
+            jw["shares"].is_string(),
+            "fractional shares must survive as a string"
+        );
         assert_eq!(w, serde_json::from_value::<EarnWithdraw>(jw).unwrap());
     }
 }

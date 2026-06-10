@@ -40,9 +40,15 @@ mod tests {
 
     #[test]
     fn whitelist_round_trips() {
-        let a = SetMetaliquidityWhitelist { address: Address::ZERO, allowed: true };
+        let a = SetMetaliquidityWhitelist {
+            address: Address::ZERO,
+            allowed: true,
+        };
         let j = serde_json::to_string(&a).unwrap();
-        assert_eq!(serde_json::from_str::<SetMetaliquidityWhitelist>(&j).unwrap(), a);
+        assert_eq!(
+            serde_json::from_str::<SetMetaliquidityWhitelist>(&j).unwrap(),
+            a
+        );
     }
 
     #[test]
