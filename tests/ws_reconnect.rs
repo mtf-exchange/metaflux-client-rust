@@ -71,6 +71,7 @@ async fn client_reconnects_and_replays_subscriptions() {
         initial_backoff: Duration::from_millis(50),
         max_backoff: Duration::from_millis(200),
         channel_capacity: 64,
+        post_timeout: Duration::from_secs(10),
     };
     let client = WsClient::connect_with(url, config).await.unwrap();
     client.subscribe_l2_book(MarketId(1)).await.unwrap();

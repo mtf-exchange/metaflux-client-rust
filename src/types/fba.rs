@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::MarketId;
+use crate::types::rfq::CoreSide;
 
 /// FBA configuration per market.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,9 +40,58 @@ pub struct FbaBatchResult {
     pub closed_at_ms: u64,
 }
 
+/// Action — `fba_submit`: submit an order into a market's frequent-batch-auction
+/// pool.
+///
+/// Mirrors the node's `core_state` `FbaSubmitParams`. The action envelope wraps
+/// this under the key **`submit`**.
+///
+/// Traps mirrored from the node: `side` is PascalCase ([`CoreSide`]), the price
+/// field is named **`price`** (NOT `limit_px` as in spot/perp orders), and
+/// `stp_group` carries no serde default so the key must be present (`null` for
+/// `None`).
+///
+/// Forward-compat: see [`crate::types::rfq::RfqRequest`] — the node returns
+/// `UnsupportedAction` until it bridges this handler onto `/exchange`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct FbaSubmit {
+    /// Target market.
+    pub market: MarketId,
+    /// Side — serializes PascalCase (`"Bid"`/`"Ask"`).
+    pub side: CoreSide,
+    /// Submitted size (`>= pool.min_lot`).
+    pub size: u128,
+    /// Limit / worst-acceptable price (`> 0`). Field is `price` per the core
+    /// struct — not `limit_px`.
+    pub price: i128,
+    /// Optional STP group. Key is always present (`null` for `None`).
+    pub stp_group: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fba_submit_uses_price_pascalcase_side_and_present_stp() {
+        let s = FbaSubmit {
+            market: MarketId(7),
+            side: CoreSide::Ask,
+            size: 1_000,
+            price: 5_000_000_000,
+            stp_group: None,
+        };
+        let j = serde_json::to_value(s).unwrap();
+        assert_eq!(j["side"], "Ask");
+        // Price field is `price`, NOT `limit_px`.
+        assert!(j.get("price").is_some());
+        assert!(j.get("limit_px").is_none());
+        // No serde default on the node => key present, value null.
+        assert!(j.get("stp_group").is_some() && j["stp_group"].is_null());
+        let dec: FbaSubmit = serde_json::from_value(j).unwrap();
+        assert_eq!(dec, s);
+    }
 
     #[test]
     fn fba_config_round_trips() {

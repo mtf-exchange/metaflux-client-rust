@@ -26,9 +26,59 @@ pub struct CrossChainMsg {
     pub status: String,
 }
 
+/// Action — `cross_chain_send`: initiate a chain-agnostic cross-chain transfer
+/// (queued to the bridge outbox).
+///
+/// Mirrors the node's `evm_integration` `CrossChainSendParams`. The action
+/// envelope wraps this under the key **`msg`**.
+///
+/// **Traps:** the action field is `dst_chain_id` (the read-only
+/// [`CrossChainMsg`] snapshot uses a different `dst_chain`); and under the
+/// node's plain `#[derive(Serialize)]`, `recipient: [u8; 32]` is a JSON **array
+/// of 32 byte-numbers** and `amount: u128` is a JSON **number** — not 0x-hex
+/// strings.
+///
+/// Forward-compat: the node currently answers this tag with `UnsupportedAction`
+/// on the public `/exchange` path; the SDK emits the byte-correct shape the
+/// core handler will accept once the bridge lands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CrossChainSend {
+    /// Destination chain id.
+    pub dst_chain_id: u32,
+    /// Chain-agnostic 32-byte recipient (EVM = left-padded 20-byte address).
+    /// Serializes as a JSON array of 32 byte-numbers.
+    pub recipient: [u8; 32],
+    /// MTF asset id (not a destination-chain token address).
+    pub token: u32,
+    /// Amount in the MTF asset's native fixed-point (JSON number).
+    pub amount: u128,
+    /// Application-supplied idempotency nonce; `(sender, nonce)` is the key.
+    pub nonce: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cross_chain_send_recipient_is_array_amount_is_number() {
+        let m = CrossChainSend {
+            dst_chain_id: 8453,
+            recipient: [7u8; 32],
+            token: 1,
+            amount: 1_000_000,
+            nonce: 7,
+        };
+        let j = serde_json::to_value(&m).unwrap();
+        assert_eq!(j["dst_chain_id"], 8453);
+        // recipient => 32-element JSON array; amount => bare number.
+        assert!(j["recipient"].is_array());
+        assert_eq!(j["recipient"].as_array().unwrap().len(), 32);
+        assert!(j["amount"].is_number());
+        let dec: CrossChainSend = serde_json::from_value(j).unwrap();
+        assert_eq!(dec, m);
+    }
 
     #[test]
     fn cross_chain_msg_round_trips() {

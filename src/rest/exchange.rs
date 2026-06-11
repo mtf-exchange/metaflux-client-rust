@@ -41,20 +41,23 @@ use crate::types::{
         SetDisplayName, SetReferrer, TopUpIsolatedOnlyMargin, UpdateIsolatedMargin, UpdateLeverage,
         UserDexAbstraction, UserPortfolioMargin, UserSetAbstraction,
     },
-    encrypted::SubmitEncryptedOrder,
+    cross_chain::CrossChainSend,
+    encrypted::{EncryptedOrderSubmit, SubmitEncryptedOrder},
+    fba::FbaSubmit,
     governance::{REDACTED, SetMetaliquidityWhitelist},
     meta_bridge::MbWithdraw,
     order::{
         BatchCancel, BatchModify, BatchOrder, CancelAllOrders, CancelByCloid, CancelOrder, Modify,
         Order, OrderResponse, ScheduleCancel,
     },
+    rfq::{RfqAccept, RfqRequest},
     spot::{
         EarnDeposit, EarnWithdraw, SpotCancel, SpotMarginClose, SpotMarginDeposit, SpotMarginOpen,
         SpotMarginWithdraw, SpotOrder,
     },
     staking::{ClaimRewards, LinkStakingUser, TokenDelegate},
     twap::{TwapCancel, TwapOrder},
-    vault::{CreateVault, VaultModify, VaultTransfer, VaultWithdraw},
+    vault::{CreateVault, VaultDistribute, VaultModify, VaultTransfer, VaultWithdraw},
 };
 use crate::wallet::{Eip712, Signature, Wallet};
 
@@ -489,6 +492,32 @@ impl<'a> Exchange<'a> {
         self.post_signed(wallet, action).await
     }
 
+    /// Enroll the signing account into portfolio margin.
+    ///
+    /// Convenience wrapper over [`Exchange::user_portfolio_margin`] with
+    /// `enroll = true`. The node's `pm_enroll` action tag is an unmapped stub;
+    /// this deliberately emits the bridged `user_portfolio_margin` action.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn pm_enroll(&self, wallet: &Wallet) -> Result<Value, ClientError> {
+        self.user_portfolio_margin(wallet, &UserPortfolioMargin { enroll: true })
+            .await
+    }
+
+    /// Unenroll the signing account from portfolio margin.
+    ///
+    /// Convenience wrapper over [`Exchange::user_portfolio_margin`] with
+    /// `enroll = false`. The node's `pm_unenroll` action tag is an unmapped
+    /// stub; this deliberately emits the bridged `user_portfolio_margin` action.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn pm_unenroll(&self, wallet: &Wallet) -> Result<Value, ClientError> {
+        self.user_portfolio_margin(wallet, &UserPortfolioMargin { enroll: false })
+            .await
+    }
+
     // ---- account & agent settings ----
 
     /// Set the account display name (handle).
@@ -719,6 +748,25 @@ impl<'a> Exchange<'a> {
         self.post_signed(wallet, action).await
     }
 
+    /// Follower-deposit USD into a vault, minting shares at the current NAV
+    /// (`vault_distribute`).
+    ///
+    /// The amount rides the `pnl` field (a legacy name on the node) as a
+    /// positive decimal string. **Forward-compat:** the node currently returns
+    /// `UnsupportedAction` for this tag on `/exchange` until it bridges the
+    /// `vault_distribute` handler; the SDK emits the byte-correct wire shape.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn vault_distribute(
+        &self,
+        wallet: &Wallet,
+        params: &VaultDistribute,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "vault_distribute", "params": params });
+        self.post_signed(wallet, action).await
+    }
+
     // ---- MetaBridge ----
 
     /// Withdraw cross-collateral to a destination chain.
@@ -763,6 +811,87 @@ impl<'a> Exchange<'a> {
         self.post_signed(wallet, action).await
     }
 
+    // ---- RFQ / FBA / cross-chain / encrypted (forward-compat) ----
+    //
+    // The node recognizes these action tags but currently lowers them to
+    // `UnsupportedAction` on the public `/exchange` path (the real handlers run
+    // on the EVM core-writer path). The SDK emits the byte-correct wire shape
+    // each core param struct expects, so these become live the moment the node
+    // bridges them — no SDK change required. Note the per-action wrapper keys
+    // differ (`rfq` / `accept` / `submit` / `msg` / `encrypted`).
+
+    /// Open an RFQ session as a taker (`rfq_request`). Wrapper key is `rfq`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn rfq_request(
+        &self,
+        wallet: &Wallet,
+        params: &RfqRequest,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "rfq_request", "rfq": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Cross against a specific resting RFQ quote (`rfq_accept`). Wrapper key is
+    /// `accept`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn rfq_accept(
+        &self,
+        wallet: &Wallet,
+        params: &RfqAccept,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "rfq_accept", "accept": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Submit an order into a market's frequent-batch-auction pool
+    /// (`fba_submit`). Wrapper key is `submit`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn fba_submit(
+        &self,
+        wallet: &Wallet,
+        params: &FbaSubmit,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "fba_submit", "submit": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Initiate a chain-agnostic cross-chain transfer (`cross_chain_send`).
+    /// Wrapper key is `msg`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn cross_chain_send(
+        &self,
+        wallet: &Wallet,
+        params: &CrossChainSend,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "cross_chain_send", "msg": params });
+        self.post_signed(wallet, action).await
+    }
+
+    /// Submit a threshold-encrypted order via the `encrypted_order_submit` tag.
+    /// Wrapper key is `encrypted`.
+    ///
+    /// Distinct from [`Exchange::submit_encrypted_order`], which targets a
+    /// different (bridged) core handler with a 5-field payload.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn encrypted_order_submit(
+        &self,
+        wallet: &Wallet,
+        params: &EncryptedOrderSubmit,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "encrypted_order_submit", "encrypted": params });
+        self.post_signed(wallet, action).await
+    }
+
     // --- Internals ---
 
     /// Sign + POST an arbitrary action JSON. Public for power users.
@@ -774,16 +903,11 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         action: Value,
     ) -> Result<R, ClientError> {
-        let nonce = next_nonce();
-        let signed = ActionSignedDigest {
-            action: &action,
-            nonce,
-        };
-        let sig = wallet.sign_eip712(&signed)?;
+        let (nonce, signature) = sign_action(wallet, &action)?;
         let envelope = SignedEnvelope {
             action: &action,
             nonce,
-            signature: sig.to_hex(),
+            signature,
         };
         // `/exchange` is the node's MTF-native signed-action front door. The
         // `{action, nonce, signature}` envelope + EIP-712-over-canonical-JSON
@@ -791,6 +915,21 @@ impl<'a> Exchange<'a> {
         // this module pins it).
         self.client.post_json("/exchange", &envelope).await
     }
+}
+
+/// Sign an action with a fresh monotonic nonce, returning `(nonce, 0x-hex
+/// signature)`.
+///
+/// This is the one signing primitive shared by the REST `POST /exchange` path
+/// ([`Exchange::post_signed`]) and the WebSocket `post` action path
+/// ([`crate::ws::WsClient::post_action`]). Both recover the signer over the
+/// **compact `serde_json` serialization of the action object**, so a single
+/// helper guarantees the two transports sign byte-identical digests.
+pub(crate) fn sign_action(wallet: &Wallet, action: &Value) -> Result<(u64, String), ClientError> {
+    let nonce = next_nonce();
+    let digest = ActionSignedDigest { action, nonce };
+    let sig = wallet.sign_eip712(&digest)?;
+    Ok((nonce, sig.to_hex()))
 }
 
 /// EIP-712 typed-data hash for an `(action, nonce)` pair.
