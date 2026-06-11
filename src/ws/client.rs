@@ -214,10 +214,7 @@ impl WsClient {
     ///
     /// # Errors
     /// See [`WsClient::subscribe`].
-    pub async fn subscribe_bbo(
-        &self,
-        market: crate::types::MarketId,
-    ) -> Result<(), ClientError> {
+    pub async fn subscribe_bbo(&self, market: crate::types::MarketId) -> Result<(), ClientError> {
         self.subscribe(Subscription::Bbo {
             coin: market.0.to_string(),
         })
@@ -267,10 +264,7 @@ impl WsClient {
     ///
     /// # Errors
     /// See [`WsClient::subscribe`].
-    pub async fn subscribe_fills(
-        &self,
-        user: crate::wallet::Address,
-    ) -> Result<(), ClientError> {
+    pub async fn subscribe_fills(&self, user: crate::wallet::Address) -> Result<(), ClientError> {
         self.subscribe(Subscription::Fills { user }).await
     }
 
@@ -322,7 +316,7 @@ impl WsClient {
     /// Issue a signed exchange action over the WebSocket `post` channel,
     /// returning the node's action response payload.
     ///
-    /// This is the WS analogue of [`crate::rest::Exchange::post_signed`]: the
+    /// This is the WS analogue of [`crate::rest::exchange::Exchange::post_signed`]: the
     /// action is signed with the SAME EIP-712 digest (recovered over the
     /// compact JSON of the action object), wrapped as
     /// `{"method":"post","id":N,"request":{"type":"action","payload":{signature,nonce,action}}}`,
@@ -334,11 +328,7 @@ impl WsClient {
     /// - [`ClientError::Signature`] on signing failure.
     /// - [`ClientError::WebSocket`] if the socket is down, the post times out,
     ///   or the node returns a post-level error frame.
-    pub async fn post_action(
-        &self,
-        wallet: &Wallet,
-        action: Value,
-    ) -> Result<Value, ClientError> {
+    pub async fn post_action(&self, wallet: &Wallet, action: Value) -> Result<Value, ClientError> {
         let (nonce, signature) = crate::rest::exchange::sign_action(wallet, &action)?;
         let payload = json!({ "signature": signature, "nonce": nonce, "action": action });
         self.post_request("action", payload).await
@@ -362,7 +352,7 @@ impl WsClient {
     /// decoding the typed [`OrderResponse`].
     ///
     /// Convenience wrapper over [`Self::post_action`] mirroring
-    /// [`crate::rest::Exchange::submit_order`]. The order's `owner` MUST equal
+    /// [`crate::rest::exchange::Exchange::submit_order`]. The order's `owner` MUST equal
     /// the wallet address.
     ///
     /// # Errors
@@ -390,7 +380,7 @@ impl WsClient {
     /// Cancel an order over the WS `post` channel.
     ///
     /// Convenience wrapper over [`Self::post_action`] mirroring
-    /// [`crate::rest::Exchange::cancel_order`].
+    /// [`crate::rest::exchange::Exchange::cancel_order`].
     ///
     /// # Errors
     /// - [`ClientError::Validation`] if `cancel.owner != wallet.address()`.
@@ -415,11 +405,7 @@ impl WsClient {
     /// background task, and await the matching response. Maps a node
     /// `{"type":"error",…}` response to [`ClientError::WebSocket`]; returns the
     /// inner `payload` on success.
-    async fn post_request(
-        &self,
-        request_type: &str,
-        payload: Value,
-    ) -> Result<Value, ClientError> {
+    async fn post_request(&self, request_type: &str, payload: Value) -> Result<Value, ClientError> {
         let id = self.post_id.fetch_add(1, Ordering::Relaxed);
         let frame = json!({
             "method": "post",
