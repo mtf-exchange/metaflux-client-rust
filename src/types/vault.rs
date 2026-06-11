@@ -110,9 +110,48 @@ pub struct VaultWithdraw {
     pub shares: String,
 }
 
+/// Action — `vault_distribute`: a follower deposits USD into a vault and
+/// receives shares at the current NAV (subject to the per-vault withdrawal
+/// lock).
+///
+/// Mirrors the node's `core_state` `VaultDistributeParams`. The action envelope
+/// wraps this under the key **`params`**.
+///
+/// **Trap:** the deposit-amount field is named **`pnl`** (a legacy name on the
+/// node), not `amount`/`deposit`. It is a positive USD amount encoded as a
+/// decimal string (the SDK's `Decimal`-on-the-wire convention, matching
+/// `vault_transfer` / `vault_withdraw`).
+///
+/// Forward-compat: the node currently answers this tag with `UnsupportedAction`
+/// on the public `/exchange` path; the SDK emits the byte-correct shape the
+/// core handler will accept once the bridge lands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct VaultDistribute {
+    /// Target vault id (serializes as a bare JSON number).
+    pub vault_id: VaultId,
+    /// Deposit amount in USD as a positive decimal string. Node field name is
+    /// `pnl` (legacy) — do NOT rename.
+    pub pnl: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vault_distribute_emits_pnl_string_and_numeric_vault_id() {
+        let d = VaultDistribute {
+            vault_id: VaultId(42),
+            pnl: "1000.5".into(),
+        };
+        let j = serde_json::to_value(&d).unwrap();
+        assert_eq!(j["vault_id"], 42);
+        assert_eq!(j["pnl"], "1000.5");
+        assert!(j["pnl"].is_string());
+        let dec: VaultDistribute = serde_json::from_value(j).unwrap();
+        assert_eq!(dec, d);
+    }
 
     #[test]
     fn vault_state_round_trips() {

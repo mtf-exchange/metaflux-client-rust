@@ -13,17 +13,20 @@
 //! task continues to consume the broadcast — they will see new frames once
 //! reconnection succeeds.
 
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use serde_json::json;
-use tokio::sync::{Mutex, broadcast, mpsc};
+use serde_json::{Value, json};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 
 use crate::error::ClientError;
+use crate::types::order::{CancelOrder, Order, OrderResponse};
+use crate::wallet::Wallet;
 use crate::ws::subscriptions::{Subscription, WsMessage};
 
 /// Tunable WS configuration.
@@ -37,6 +40,9 @@ pub struct WsConfig {
     pub max_backoff: Duration,
     /// Capacity of the inbound message broadcast channel. Default: 1024.
     pub channel_capacity: usize,
+    /// How long a `post` request waits for its correlated response before
+    /// failing with [`ClientError::WebSocket`]. Default: 10 seconds.
+    pub post_timeout: Duration,
 }
 
 impl Default for WsConfig {
@@ -46,6 +52,7 @@ impl Default for WsConfig {
             initial_backoff: Duration::from_millis(250),
             max_backoff: Duration::from_secs(30),
             channel_capacity: 1024,
+            post_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -55,6 +62,19 @@ impl Default for WsConfig {
 enum Command {
     Subscribe(Subscription),
     Unsubscribe(Subscription),
+    /// A correlated `post` request: the pre-serialized frame plus a one-shot
+    /// channel the background task completes with the matching `response`
+    /// object (`{type, payload}`) once the `{channel:"post"}` frame arrives.
+    Post {
+        id: u64,
+        frame: String,
+        reply: oneshot::Sender<Value>,
+    },
+    /// Drop a pending `post` whose caller gave up (timed out) so its entry
+    /// doesn't linger in the correlation map for the life of the connection.
+    CancelPost {
+        id: u64,
+    },
     Shutdown,
 }
 
@@ -72,6 +92,10 @@ pub struct WsClient {
     alive: Arc<AtomicBool>,
     /// Active subscriptions; replayed on reconnect.
     active: Arc<Mutex<Vec<Subscription>>>,
+    /// Monotonic id source for `post` request/response correlation.
+    post_id: Arc<AtomicU64>,
+    /// Per-request timeout for `post` calls.
+    post_timeout: Duration,
 }
 
 impl WsClient {
@@ -99,6 +123,7 @@ impl WsClient {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let alive = Arc::new(AtomicBool::new(true));
         let active: Arc<Mutex<Vec<Subscription>>> = Arc::new(Mutex::new(Vec::new()));
+        let post_timeout = config.post_timeout;
 
         // Quick connect-then-drop to validate the URL up front; the
         // background task will reconnect from scratch.
@@ -120,6 +145,8 @@ impl WsClient {
             cmd_tx,
             alive,
             active,
+            post_id: Arc::new(AtomicU64::new(1)),
+            post_timeout,
         })
     }
 
@@ -212,6 +239,157 @@ impl WsClient {
         self.inbound_tx.subscribe()
     }
 
+    // ---- `post` request/response (HL `post` method) ----
+
+    /// Issue a signed exchange action over the WebSocket `post` channel,
+    /// returning the node's action response payload.
+    ///
+    /// This is the WS analogue of [`crate::rest::Exchange::post_signed`]: the
+    /// action is signed with the SAME EIP-712 digest (recovered over the
+    /// compact JSON of the action object), wrapped as
+    /// `{"method":"post","id":N,"request":{"type":"action","payload":{signature,nonce,action}}}`,
+    /// and sent over the existing connection. The returned `Value` is the
+    /// `payload` of the node's `action` response (e.g. `{"accepted":true,…}`);
+    /// a malformed-request rejection surfaces as [`ClientError::WebSocket`].
+    ///
+    /// # Errors
+    /// - [`ClientError::Signature`] on signing failure.
+    /// - [`ClientError::WebSocket`] if the socket is down, the post times out,
+    ///   or the node returns a post-level error frame.
+    pub async fn post_action(
+        &self,
+        wallet: &Wallet,
+        action: Value,
+    ) -> Result<Value, ClientError> {
+        let (nonce, signature) = crate::rest::exchange::sign_action(wallet, &action)?;
+        let payload = json!({ "signature": signature, "nonce": nonce, "action": action });
+        self.post_request("action", payload).await
+    }
+
+    /// Issue an `info` read over the WebSocket `post` channel, returning the
+    /// info response payload.
+    ///
+    /// The WS analogue of a `POST /info` call: `payload` is the usual
+    /// `{"type":"<info>",…}` body. Lets a subscriber multiplex one-off reads
+    /// over the same socket instead of opening a REST connection.
+    ///
+    /// # Errors
+    /// [`ClientError::WebSocket`] if the socket is down, the post times out, or
+    /// the node returns a post-level error frame.
+    pub async fn post_info(&self, payload: Value) -> Result<Value, ClientError> {
+        self.post_request("info", payload).await
+    }
+
+    /// Submit a limit / market / trigger order over the WS `post` channel,
+    /// decoding the typed [`OrderResponse`].
+    ///
+    /// Convenience wrapper over [`Self::post_action`] mirroring
+    /// [`crate::rest::Exchange::submit_order`]. The order's `owner` MUST equal
+    /// the wallet address.
+    ///
+    /// # Errors
+    /// - [`ClientError::Validation`] if `order.owner != wallet.address()`.
+    /// - [`ClientError::Decode`] if the response payload is not an
+    ///   [`OrderResponse`].
+    /// - WebSocket / signature errors per [`Self::post_action`].
+    pub async fn submit_order(
+        &self,
+        wallet: &Wallet,
+        order: &Order,
+    ) -> Result<OrderResponse, ClientError> {
+        if order.owner != wallet.address() {
+            return Err(ClientError::Validation(format!(
+                "order.owner {} != wallet address {}",
+                order.owner,
+                wallet.address()
+            )));
+        }
+        let action = json!({ "type": "submit_order", "order": order });
+        let payload = self.post_action(wallet, action).await?;
+        Ok(serde_json::from_value(payload)?)
+    }
+
+    /// Cancel an order over the WS `post` channel.
+    ///
+    /// Convenience wrapper over [`Self::post_action`] mirroring
+    /// [`crate::rest::Exchange::cancel_order`].
+    ///
+    /// # Errors
+    /// - [`ClientError::Validation`] if `cancel.owner != wallet.address()`.
+    /// - WebSocket / signature errors per [`Self::post_action`].
+    pub async fn cancel_order(
+        &self,
+        wallet: &Wallet,
+        cancel: &CancelOrder,
+    ) -> Result<Value, ClientError> {
+        if cancel.owner != wallet.address() {
+            return Err(ClientError::Validation(format!(
+                "cancel.owner {} != wallet address {}",
+                cancel.owner,
+                wallet.address()
+            )));
+        }
+        let action = json!({ "type": "cancel_order", "cancel": cancel });
+        self.post_action(wallet, action).await
+    }
+
+    /// Core `post` machinery: assign a correlation id, ship the frame to the
+    /// background task, and await the matching response. Maps a node
+    /// `{"type":"error",…}` response to [`ClientError::WebSocket`]; returns the
+    /// inner `payload` on success.
+    async fn post_request(
+        &self,
+        request_type: &str,
+        payload: Value,
+    ) -> Result<Value, ClientError> {
+        let id = self.post_id.fetch_add(1, Ordering::Relaxed);
+        let frame = json!({
+            "method": "post",
+            "id": id,
+            "request": { "type": request_type, "payload": payload },
+        })
+        .to_string();
+
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.cmd_tx
+            .send(Command::Post {
+                id,
+                frame,
+                reply: reply_tx,
+            })
+            .map_err(|_| ClientError::WebSocket("ws task is dead".into()))?;
+
+        let response = match tokio::time::timeout(self.post_timeout, reply_rx).await {
+            Ok(Ok(resp)) => resp,
+            // Sender dropped => the connection cycled before the response
+            // arrived. A signed action is one-shot, so we surface the failure
+            // rather than silently retrying (which could double-submit).
+            Ok(Err(_)) => {
+                return Err(ClientError::WebSocket(
+                    "ws post: connection closed before response".into(),
+                ));
+            }
+            Err(_) => {
+                // We gave up waiting; tell the background task to evict the
+                // pending entry so it can't leak on a long-lived connection.
+                // Best-effort: if the task is gone the entry dies with it.
+                let _ = self.cmd_tx.send(Command::CancelPost { id });
+                return Err(ClientError::WebSocket("ws post: timed out".into()));
+            }
+        };
+
+        // The node wraps every reply as `{type, payload}`; an error reply
+        // carries the message as a string payload.
+        if response.get("type").and_then(Value::as_str) == Some("error") {
+            let msg = response
+                .get("payload")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown post error");
+            return Err(ClientError::WebSocket(format!("ws post error: {msg}")));
+        }
+        Ok(response.get("payload").cloned().unwrap_or(Value::Null))
+    }
+
     /// True if the background reconnect task is still running.
     #[must_use]
     pub fn is_alive(&self) -> bool {
@@ -274,6 +452,11 @@ async fn run_connection(state: &mut TaskState) -> Result<ConnectionExit, ClientE
         }
     }
 
+    // In-flight `post` requests for this connection, keyed by correlation id.
+    // Dropped (with all reply senders) when the connection exits, so any
+    // caller awaiting a response on a dead socket unblocks with an error.
+    let mut pending: HashMap<u64, oneshot::Sender<Value>> = HashMap::new();
+
     let mut ping_tick = tokio::time::interval(state.config.ping_interval);
     ping_tick.tick().await; // consume the immediate first tick
 
@@ -288,6 +471,19 @@ async fn run_connection(state: &mut TaskState) -> Result<ConnectionExit, ClientE
                     Some(Command::Unsubscribe(sub)) => {
                         let frame = json!({"method": "unsubscribe", "subscription": sub});
                         sink.send(Message::Text(frame.to_string())).await?;
+                    }
+                    Some(Command::Post { id, frame, reply }) => {
+                        // Send first; only track the reply once the frame is on
+                        // the wire. A send failure propagates `Err` out of
+                        // `run_connection` (which `run_background` treats as a
+                        // recoverable reconnect) and drops `reply`, surfacing a
+                        // disconnect to the caller.
+                        sink.send(Message::Text(frame)).await?;
+                        pending.insert(id, reply);
+                    }
+                    Some(Command::CancelPost { id }) => {
+                        // Caller timed out; drop the dangling reply sender.
+                        pending.remove(&id);
                     }
                     Some(Command::Shutdown) | None => {
                         let _ = sink.send(Message::Close(None)).await;
@@ -307,8 +503,31 @@ async fn run_connection(state: &mut TaskState) -> Result<ConnectionExit, ClientE
                 };
                 match frame {
                     Ok(Message::Text(text)) => {
-                        if let Ok(msg) = serde_json::from_str::<WsMessage>(&text) {
-                            let _ = state.inbound_tx.send(msg);
+                        // A `{channel:"post"}` frame correlates by id back to the
+                        // waiting caller; every other frame is a channel update
+                        // for the broadcast.
+                        match serde_json::from_str::<Value>(&text) {
+                            Ok(v)
+                                if v.get("channel").and_then(Value::as_str) == Some("post") =>
+                            {
+                                if let Some(id) =
+                                    v.pointer("/data/id").and_then(Value::as_u64)
+                                {
+                                    if let Some(reply) = pending.remove(&id) {
+                                        let resp = v
+                                            .pointer("/data/response")
+                                            .cloned()
+                                            .unwrap_or(Value::Null);
+                                        let _ = reply.send(resp);
+                                    }
+                                }
+                            }
+                            Ok(v) => {
+                                if let Ok(msg) = serde_json::from_value::<WsMessage>(v) {
+                                    let _ = state.inbound_tx.send(msg);
+                                }
+                            }
+                            Err(_) => {}
                         }
                     }
                     Ok(Message::Binary(_) | Message::Pong(_) | Message::Ping(_)) => {
