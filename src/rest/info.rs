@@ -121,6 +121,48 @@ pub struct OpenOrders {
     pub orders: Vec<OpenOrder>,
 }
 
+/// One OHLCV bar from the `candle` `/info` read.
+///
+/// The REST companion to the live `candles` WS channel: the WS pushes the
+/// forming bar as trades land, this read returns the closed history. Bars are
+/// oldest-first by `open_time`; the newest element is the still-forming bar.
+///
+/// **Price plane — does NOT match the WS `candles` frame.** This REST read's
+/// `open`/`close`/`high`/`low` are **whole-USDC** human-dollar decimal strings
+/// (`"67042.50"`); the WS `candles` frame carries the SAME bar's OHLC as RAW
+/// 1e8 fixed-point integers (`"6700000000000"`). Rescale if you mix the two
+/// sources. `volume` is base units (coin size, NOT notional); `num_trades` is a
+/// fill count, not notional.
+///
+/// GATEWAY-served, not node: candles are derived display data folded from the
+/// public trade stream — not committed chain state, so they must be queried
+/// against the **gateway** (`<net>-gateway.mtf.exchange/info`); a bare node
+/// returns `unknown info type: candle`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Candle {
+    /// Echoed market symbol (e.g. `"BTC"`).
+    pub coin: String,
+    /// Echoed bucket token (`1m`/`5m`/`15m`/`1h`/`4h`/`1d`).
+    pub interval: String,
+    /// Bar open timestamp (ms, bucket-aligned).
+    pub open_time: u64,
+    /// Bar close timestamp (ms) — `open_time + interval − 1`.
+    pub close_time: u64,
+    /// Open price, whole-USDC decimal string.
+    pub open: String,
+    /// Close price, whole-USDC decimal string.
+    pub close: String,
+    /// High price, whole-USDC decimal string.
+    pub high: String,
+    /// Low price, whole-USDC decimal string.
+    pub low: String,
+    /// Traded base volume in the bar, decimal string (coin size, not notional).
+    pub volume: String,
+    /// Fill count in the bar.
+    pub num_trades: u64,
+}
+
 /// One fee tier inside a [`FeeSchedule`]. All bps fields are decimal strings.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -584,6 +626,37 @@ impl<'a> Info<'a> {
             .await
     }
 
+    /// `candle` — historical OHLCV bars for `(coin, interval)` over a window.
+    ///
+    /// The REST companion to the live `candles` WS channel. `coin` is a market
+    /// **symbol** (e.g. `"BTC"`), not a numeric id. `start_time` / `end_time`
+    /// are unix-ms filters on bar open (`None` = unbounded / from 0). Bars come
+    /// oldest-first; the newest is the still-forming bar.
+    ///
+    /// GATEWAY-served, not node: a bare node returns `unknown info type:
+    /// candle`. An empty vec is the honest-empty answer for an unsupported
+    /// `interval`, a market with no indexed trades, or a deployment with no
+    /// indexer wired.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn candle(
+        &self,
+        coin: &str,
+        interval: &str,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> Result<Vec<Candle>, ClientError> {
+        let mut req = json!({ "type": "candle", "coin": coin, "interval": interval });
+        if let Some(s) = start_time {
+            req["start_time"] = json!(s);
+        }
+        if let Some(e) = end_time {
+            req["end_time"] = json!(e);
+        }
+        self.client.post_json("/info", &req).await
+    }
+
     /// `market_info` — rich single-market snapshot by canonical `asset_id`.
     ///
     /// Per the `/info` contract (`market_info`). To resolve by human-readable
@@ -955,5 +1028,38 @@ mod tests {
         assert!(j["orders"][0]["oid"].is_number());
         let dec: OpenOrders = serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
         assert_eq!(o, dec);
+    }
+
+    /// Decode the gateway `candle.data` array (whole-USDC prices, base volume).
+    #[test]
+    fn candle_decodes_gateway_fixture() {
+        let data = serde_json::json!([
+            {
+                "coin": "BTC",
+                "interval": "1m",
+                "open_time": 1_700_000_040_000u64,
+                "close_time": 1_700_000_099_999u64,
+                "open": "67000.00",
+                "close": "67042.50",
+                "high": "67080.00",
+                "low": "66990.00",
+                "volume": "12.5",
+                "num_trades": 37
+            }
+        ]);
+        let bars: Vec<Candle> = serde_json::from_value(data).unwrap();
+        assert_eq!(bars.len(), 1);
+        assert_eq!(bars[0].coin, "BTC");
+        assert_eq!(bars[0].interval, "1m");
+        assert_eq!(bars[0].open_time, 1_700_000_040_000);
+        assert_eq!(bars[0].close_time, 1_700_000_099_999);
+        assert_eq!(bars[0].close, "67042.50");
+        assert_eq!(bars[0].num_trades, 37);
+        // OHLC / volume are strings; times + count are numbers.
+        let j = serde_json::to_value(&bars[0]).unwrap();
+        assert!(j["open"].is_string());
+        assert!(j["volume"].is_string());
+        assert!(j["open_time"].is_number());
+        assert!(j["num_trades"].is_number());
     }
 }

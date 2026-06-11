@@ -429,3 +429,36 @@ async fn l2_book_decodes_levels() {
     assert_eq!(book.bids[0].size, "1000");
     assert_eq!(book.asks[0].n_orders, 2);
 }
+
+#[tokio::test]
+async fn candle_decodes_gateway_envelope() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "candle",
+            json!([
+                {
+                    "coin": "BTC", "interval": "1m",
+                    "open_time": 1_700_000_040_000u64, "close_time": 1_700_000_099_999u64,
+                    "open": "67000.00", "close": "67042.50",
+                    "high": "67080.00", "low": "66990.00",
+                    "volume": "12.5", "num_trades": 37
+                }
+            ]),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let bars = client
+        .rest()
+        .info()
+        .candle("BTC", "1m", Some(1_700_000_000_000), None)
+        .await
+        .unwrap();
+    assert_eq!(bars.len(), 1);
+    assert_eq!(bars[0].coin, "BTC");
+    assert_eq!(bars[0].close, "67042.50");
+    assert_eq!(bars[0].num_trades, 37);
+}
