@@ -29,7 +29,10 @@ async fn markets_decodes_array_of_market_info() {
         json!({
             "asset_id": asset_id,
             "name": name,
-            "kind": "Perp",
+            "kind": "perp",
+            "sz_decimals": 5,
+            "mark_px": "50000",
+            "oracle_px": "50000",
             "tick_size": "100",
             "step_size": "10000",
             "min_order": "10000",
@@ -132,22 +135,19 @@ async fn vault_state_decodes_pinned_constants() {
 }
 
 #[tokio::test]
-async fn fee_schedule_decodes_plan_l_split() {
+async fn fee_schedule_decodes_gateway_shape() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
             "fee_schedule",
             json!({
-                "taker_bps": 45,
-                "maker_bps": 15,
-                "referrer_share_bps": 1000,
-                "builder_cap_bps": 8,
-                "deployer_cap_bps": 5,
-                "burn_bps": 5000,
-                "vault_bps": 2500,
-                "validator_bps": 1500,
-                "treasury_bps": 1000
+                "maker_bps": "1.0",
+                "taker_bps": "5.0",
+                "referrer_share_bps": "5.0",
+                "builder_rebate_bps": "0",
+                "burn_ratio": "0.8",
+                "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
             }),
         )))
         .mount(&server)
@@ -155,13 +155,11 @@ async fn fee_schedule_decodes_plan_l_split() {
 
     let client = Client::new(server.uri()).unwrap();
     let f = client.rest().info().fee_schedule().await.unwrap();
-    assert_eq!(f.taker_bps, 45);
-    assert_eq!(f.maker_bps, 15);
-    let sum = u64::from(f.burn_bps)
-        + u64::from(f.vault_bps)
-        + u64::from(f.validator_bps)
-        + u64::from(f.treasury_bps);
-    assert_eq!(sum, 10_000, "fee split must sum to 10000 bps");
+    assert_eq!(f.taker_bps.as_deref(), Some("5.0"));
+    assert_eq!(f.maker_bps.as_deref(), Some("1.0"));
+    assert_eq!(f.burn_ratio, "0.8");
+    assert_eq!(f.tiers.len(), 1);
+    assert_eq!(f.tiers[0].volume_30d, "0");
 }
 
 #[tokio::test]
@@ -351,7 +349,10 @@ async fn market_info_decodes_rich_shape_by_asset_id() {
             json!({
                 "asset_id": 0,
                 "name": "BTC",
-                "kind": "Perp",
+                "kind": "perp",
+                "sz_decimals": 5,
+                "mark_px": "50000",
+                "oracle_px": "50000",
                 "tick_size": "100",
                 "step_size": "10000",
                 "min_order": "10000",
@@ -376,6 +377,8 @@ async fn market_info_decodes_rich_shape_by_asset_id() {
     let m = client.rest().info().market_info(MarketId(0)).await.unwrap();
     assert_eq!(m.asset_id, 0);
     assert_eq!(m.name, "BTC");
+    assert_eq!(m.sz_decimals, 5);
+    assert_eq!(m.mark_px, "50000");
     assert_eq!(m.tick_size, "100");
     assert_eq!(m.open_interest, "5000000000");
     assert_eq!(m.funding.interval_ms, 3_600_000);
@@ -413,8 +416,8 @@ async fn l2_book_decodes_levels() {
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
             "l2_book",
             json!({
-                "bids": [{ "px": "4990000000000", "sz": "1000", "n_orders": 3 }],
-                "asks": [{ "px": "5010000000000", "sz": "800", "n_orders": 2 }]
+                "bids": [{ "px": "4990000000000", "size": "1000", "n_orders": 3 }],
+                "asks": [{ "px": "5010000000000", "size": "800", "n_orders": 2 }]
             }),
         )))
         .mount(&server)
@@ -423,6 +426,6 @@ async fn l2_book_decodes_levels() {
     let client = Client::new(server.uri()).unwrap();
     let book = client.rest().info().l2_book(MarketId(1), 20).await.unwrap();
     assert_eq!(book.bids.len(), 1);
-    assert_eq!(book.bids[0].sz, "1000");
+    assert_eq!(book.bids[0].size, "1000");
     assert_eq!(book.asks[0].n_orders, 2);
 }

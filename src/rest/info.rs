@@ -39,16 +39,17 @@ pub struct Info<'a> {
 
 /// One level of the L2 book.
 ///
-/// Per the `/info` contract (`l2_book`): `px` / `sz` are 8-decimal fixed-point
-/// **u128 strings** (precision past 2^53), `n_orders` is a JSON number.
+/// Per the gateway `/info` `l2_book` wire: `px` / `size` are 8-decimal
+/// fixed-point **decimal strings** (precision past 2^53), `n_orders` is a JSON
+/// number. (The price field is `size` on the REST read — not `sz`.)
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct L2Level {
     /// Price, 8-decimal fixed-point as a decimal string.
     pub px: String,
-    /// Aggregate size at this price, fixed-point as a decimal string.
-    pub sz: String,
-    /// Number of orders at this price.
+    /// Aggregate raw-lot size at this price, decimal string.
+    pub size: String,
+    /// Number of resting orders at this price.
     pub n_orders: u32,
 }
 
@@ -65,28 +66,99 @@ pub struct L2Book {
     pub asks: Vec<L2Level>,
 }
 
-/// `fee_schedule` response — the protocol fee splits.
+/// Order side as it appears on the REST `open_orders` read: lowercase
+/// `"bid"` / `"ask"` (not `"buy"`/`"sell"`, not capitalized).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderSide {
+    /// Resting buy.
+    Bid,
+    /// Resting sell.
+    Ask,
+}
+
+/// One resting order in an [`OpenOrders`] snapshot.
+///
+/// `px` is x1e8 fixed-point (positive canonical price for **both** sides);
+/// `size` is raw lots (`whole × 10^sz_decimals`). `oid` / `market_id` /
+/// `inserted_at_ms` are bare integers.
+///
+/// LIVE GATEWAY GAP: a resting order currently reads back with `oid: 0` and
+/// `inserted_at_ms: 0` even though it is on the book — so an order is NOT
+/// reliably cancellable by the `oid` from this snapshot, and it carries no
+/// `cloid`. Until the gateway populates `oid`, the oid-independent workaround
+/// for reconcile / ghost-sweep is the `cancel_all_orders` exchange action
+/// (by account / asset) rather than per-oid cancels.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct OpenOrder {
+    /// Order id. See the struct note: currently `0` on the gateway.
+    pub oid: u64,
+    /// Market / asset id.
+    pub market_id: u32,
+    /// Side, lowercase `"bid"` / `"ask"`.
+    pub side: OrderSide,
+    /// Limit price, x1e8 fixed-point decimal string.
+    pub px: String,
+    /// Remaining size, raw lots (`whole × 10^sz_decimals`) decimal string.
+    pub size: String,
+    /// Insertion timestamp (unix ms). See the struct note: currently `0`.
+    pub inserted_at_ms: u64,
+}
+
+/// `open_orders` response — resting orders for one account.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct OpenOrders {
+    /// Echo of the resolved account address (`0x` lowercase hex).
+    pub address: Address,
+    /// Numeric account id — present only when the request used `account_id`
+    /// instead of `address`; `None` when resolved from an address.
+    #[serde(default)]
+    pub account_id: Option<u64>,
+    /// Resting orders.
+    #[serde(default)]
+    pub orders: Vec<OpenOrder>,
+}
+
+/// One fee tier inside a [`FeeSchedule`]. All bps fields are decimal strings.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct FeeTier {
+    /// Maker fee, bps decimal string (e.g. `"1.0"`).
+    pub maker_bps: String,
+    /// Taker fee, bps decimal string (e.g. `"5.0"`).
+    pub taker_bps: String,
+    /// 30-day volume threshold for this tier, decimal string (`"0"` = base).
+    pub volume_30d: String,
+}
+
+/// `fee_schedule` response — protocol fee parameters.
+///
+/// All bps fields are **decimal strings** (`"1.0"`, `"5.0"`, `"0"`).
+/// `burn_ratio` is a **fraction** in `[0, 1]` (`"0.8"` = 80%), NOT bps — do not
+/// scale it by 10000 like the bps fields. `tiers[0]` is the canonical source of
+/// maker/taker when the top-level pair is absent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct FeeSchedule {
-    /// Base taker fee in bps × 10 (i.e. 45 = 4.5 bps).
-    pub taker_bps: u16,
-    /// Base maker fee in bps × 10.
-    pub maker_bps: u16,
-    /// Referrer share as a fraction of the base taker take, in bps.
-    pub referrer_share_bps: u16,
-    /// Max additional builder code fee in bps.
-    pub builder_cap_bps: u16,
-    /// Max additional deployer fee in bps.
-    pub deployer_cap_bps: u16,
-    /// Burn fraction of the non-referrer remainder, in bps.
-    pub burn_bps: u16,
-    /// Vault fraction, in bps.
-    pub vault_bps: u16,
-    /// Validator fraction, in bps.
-    pub validator_bps: u16,
-    /// Treasury fraction, in bps.
-    pub treasury_bps: u16,
+    /// Top-level base maker fee, bps decimal string. Present on the deployed
+    /// gateway; absent from a node built from the current source — fall back to
+    /// `tiers[0].maker_bps` when `None`.
+    #[serde(default)]
+    pub maker_bps: Option<String>,
+    /// Top-level base taker fee, bps decimal string. See `maker_bps`.
+    #[serde(default)]
+    pub taker_bps: Option<String>,
+    /// Referrer share of the base taker take, bps decimal string (e.g. `"5.0"`).
+    pub referrer_share_bps: String,
+    /// Max additional builder-code rebate, bps decimal string (e.g. `"0"`).
+    pub builder_rebate_bps: String,
+    /// Burn fraction of the non-referrer remainder, fraction in `[0, 1]`
+    /// (e.g. `"0.8"`). NOT bps.
+    pub burn_ratio: String,
+    /// Per-tier maker/taker schedule (authoritative carrier of maker/taker).
+    pub tiers: Vec<FeeTier>,
 }
 
 /// `staking_state` response.
@@ -254,8 +326,9 @@ pub struct AccountState {
     pub balances: Balances,
 }
 
-/// Market kind.
+/// Market kind. The gateway emits lowercase `"perp"` / `"spot"`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MarketKind {
     /// Perpetual future.
     Perp,
@@ -291,8 +364,15 @@ pub struct MarketInfo {
     pub asset_id: u32,
     /// Human-readable market name (e.g. `"BTC"`).
     pub name: String,
-    /// Market kind.
+    /// Market kind (`"perp"` / `"spot"`).
     pub kind: MarketKind,
+    /// Size precision: raw order/position `size` = `whole_units × 10^sz_decimals`.
+    /// Load-bearing for size encoding — NOT derivable from `step_size`.
+    pub sz_decimals: u8,
+    /// Mark price, whole-USDC decimal string (tick-snapped; `"0"` fallback).
+    pub mark_px: String,
+    /// Oracle price, whole-USDC decimal string (tick-snapped; `"0"` fallback).
+    pub oracle_px: String,
     /// Tick size (smallest price increment), fixed-point string.
     pub tick_size: String,
     /// Step size (smallest size increment), fixed-point string.
@@ -415,7 +495,7 @@ impl<'a> Info<'a> {
         self.client
             .post_json(
                 "/info",
-                &json!({ "type": "l2_book", "asset_id": market.0, "depth": depth }),
+                &json!({ "type": "l2_book", "market_id": market.0, "depth": depth }),
             )
             .await
     }
@@ -485,6 +565,22 @@ impl<'a> Info<'a> {
                 "/info",
                 &json!({ "type": "account_state", "address": addr }),
             )
+            .await
+    }
+
+    /// `open_orders` — resting orders for an account, keyed by `address`.
+    ///
+    /// LIVE GATEWAY GAP: each [`OpenOrder`] currently reads back with `oid: 0`
+    /// and `inserted_at_ms: 0`, so the orders are not cancellable by the `oid`
+    /// from this snapshot and carry no `cloid`. The oid-independent workaround
+    /// for reconcile / cancel-all is the `cancel_all_orders` exchange action
+    /// keyed by account / asset rather than per-oid cancels.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn open_orders(&self, addr: Address) -> Result<OpenOrders, ClientError> {
+        self.client
+            .post_json("/info", &json!({ "type": "open_orders", "address": addr }))
             .await
     }
 
@@ -631,7 +727,10 @@ mod tests {
         let data = serde_json::json!({
             "asset_id": 0,
             "name": "BTC",
-            "kind": "Perp",
+            "kind": "perp",
+            "sz_decimals": 5,
+            "mark_px": "50000",
+            "oracle_px": "50000",
             "tick_size": "100",
             "step_size": "10000",
             "min_order": "10000",
@@ -652,13 +751,18 @@ mod tests {
         assert_eq!(m.asset_id, 0);
         assert_eq!(m.name, "BTC");
         assert_eq!(m.kind, MarketKind::Perp);
+        assert_eq!(m.sz_decimals, 5);
+        assert_eq!(m.mark_px, "50000");
+        assert_eq!(m.oracle_px, "50000");
         assert_eq!(m.tick_size, "100");
         assert_eq!(m.max_leverage, 50);
         assert_eq!(m.funding.interval_ms, 3_600_000);
         assert_eq!(m.mark_source, "MedianOfOraclesAndMid");
         assert_eq!(m.open_interest, "5000000000");
-        // Fixed-point magnitudes serialize back as strings.
+        // Fixed-point magnitudes serialize back as strings; kind is lowercase.
         let j = serde_json::to_value(&m).unwrap();
+        assert_eq!(j["kind"], "perp");
+        assert!(j["sz_decimals"].is_number());
         assert!(j["tick_size"].is_string());
         assert!(j["open_interest"].is_string());
         assert!(j["asset_id"].is_number());
@@ -714,18 +818,19 @@ mod tests {
     #[test]
     fn l2_book_decodes_doc_fixture() {
         let data = serde_json::json!({
-            "bids": [{ "px": "10049000000", "sz": "100000000", "n_orders": 5 }],
-            "asks": [{ "px": "10051000000", "sz": "200000000", "n_orders": 3 }]
+            "bids": [{ "px": "10049000000", "size": "100000000", "n_orders": 5 }],
+            "asks": [{ "px": "10051000000", "size": "200000000", "n_orders": 3 }]
         });
         let b: L2Book = serde_json::from_value(data).unwrap();
         assert_eq!(b.bids.len(), 1);
         assert_eq!(b.bids[0].px, "10049000000");
-        assert_eq!(b.bids[0].sz, "100000000");
+        assert_eq!(b.bids[0].size, "100000000");
         assert_eq!(b.bids[0].n_orders, 5);
         assert_eq!(b.asks[0].n_orders, 3);
-        // px/sz serialize as strings.
+        // px/size serialize as strings.
         let j = serde_json::to_value(&b).unwrap();
         assert!(j["bids"][0]["px"].is_string());
+        assert!(j["bids"][0]["size"].is_string());
         assert!(j["bids"][0]["n_orders"].is_number());
     }
 
@@ -796,27 +901,59 @@ mod tests {
         assert_eq!(s, dec);
     }
 
+    /// Decode the deployed gateway `fee_schedule.data`: string bps + tiers[].
     #[test]
-    fn fee_schedule_round_trips_plan_values() {
-        let f = FeeSchedule {
-            taker_bps: 45,
-            maker_bps: 15,
-            referrer_share_bps: 1000,
-            builder_cap_bps: 8,
-            deployer_cap_bps: 5,
-            burn_bps: 5000,
-            vault_bps: 2500,
-            validator_bps: 1500,
-            treasury_bps: 1000,
-        };
-        let j = serde_json::to_string(&f).unwrap();
-        let dec: FeeSchedule = serde_json::from_str(&j).unwrap();
+    fn fee_schedule_decodes_gateway_fixture() {
+        let data = serde_json::json!({
+            "maker_bps": "1.0",
+            "taker_bps": "5.0",
+            "referrer_share_bps": "5.0",
+            "builder_rebate_bps": "0",
+            "burn_ratio": "0.8",
+            "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
+        });
+        let f: FeeSchedule = serde_json::from_value(data).unwrap();
+        assert_eq!(f.maker_bps.as_deref(), Some("1.0"));
+        assert_eq!(f.referrer_share_bps, "5.0");
+        assert_eq!(f.builder_rebate_bps, "0");
+        assert_eq!(f.burn_ratio, "0.8");
+        assert_eq!(f.tiers.len(), 1);
+        assert_eq!(f.tiers[0].taker_bps, "5.0");
+        assert_eq!(f.tiers[0].volume_30d, "0");
+        let dec: FeeSchedule = serde_json::from_str(&serde_json::to_string(&f).unwrap()).unwrap();
         assert_eq!(f, dec);
-        // Fee split sums to 10000 bps.
-        let sum = u64::from(f.burn_bps)
-            + u64::from(f.vault_bps)
-            + u64::from(f.validator_bps)
-            + u64::from(f.treasury_bps);
-        assert_eq!(sum, 10_000);
+
+        // A source-built node may omit the top-level maker/taker pair.
+        let data2 = serde_json::json!({
+            "referrer_share_bps": "5.0",
+            "builder_rebate_bps": "0",
+            "burn_ratio": "0.8",
+            "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
+        });
+        let f2: FeeSchedule = serde_json::from_value(data2).unwrap();
+        assert!(f2.maker_bps.is_none() && f2.taker_bps.is_none());
+    }
+
+    /// Decode the deployed gateway `open_orders.data` (note the live oid:0 gap).
+    #[test]
+    fn open_orders_decodes_gateway_fixture() {
+        let data = serde_json::json!({
+            "address": "0x000000000000000000000000000000000000beef",
+            "orders": [
+                { "oid": 0, "market_id": 0, "side": "bid", "px": "2500000000000", "size": "60", "inserted_at_ms": 0 }
+            ]
+        });
+        let o: OpenOrders = serde_json::from_value(data).unwrap();
+        assert!(o.account_id.is_none());
+        assert_eq!(o.orders.len(), 1);
+        assert_eq!(o.orders[0].side, OrderSide::Bid);
+        assert_eq!(o.orders[0].px, "2500000000000");
+        assert_eq!(o.orders[0].size, "60");
+        // side is lowercase on the wire; oid/inserted_at_ms are numbers.
+        let j = serde_json::to_value(&o).unwrap();
+        assert_eq!(j["orders"][0]["side"], "bid");
+        assert!(j["orders"][0]["oid"].is_number());
+        let dec: OpenOrders = serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
+        assert_eq!(o, dec);
     }
 }
