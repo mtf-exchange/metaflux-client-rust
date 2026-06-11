@@ -185,7 +185,10 @@ async fn ws_post_action_info_and_error() {
     );
 
     // 2. post_info round-trips its payload through the echo.
-    let info = client.post_info(json!({ "type": "node_info" })).await.unwrap();
+    let info = client
+        .post_info(json!({ "type": "node_info" }))
+        .await
+        .unwrap();
     assert_eq!(
         info.pointer("/echo/type").and_then(Value::as_str),
         Some("node_info"),
