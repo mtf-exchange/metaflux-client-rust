@@ -92,12 +92,13 @@ async fn client_reconnects_and_replays_subscriptions() {
         frames.len()
     );
 
-    // Every captured frame must be a subscribe frame for l2_book on market_id=1.
+    // Every captured frame must be a subscribe frame for l2_book on coin "1"
+    // (the node keys per-market channels on a decimal asset-id *string*).
     for f in &frames {
         let parsed: serde_json::Value = serde_json::from_str(f).expect("subscribe frame is JSON");
         assert_eq!(parsed["method"], "subscribe");
         assert_eq!(parsed["subscription"]["type"], "l2_book");
-        assert_eq!(parsed["subscription"]["market_id"], 1);
+        assert_eq!(parsed["subscription"]["coin"], "1");
     }
 
     // Cleanup.

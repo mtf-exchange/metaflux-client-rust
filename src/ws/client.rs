@@ -190,8 +190,10 @@ impl WsClient {
         &self,
         market: crate::types::MarketId,
     ) -> Result<(), ClientError> {
-        self.subscribe(Subscription::L2Book { market_id: market })
-            .await
+        self.subscribe(Subscription::L2Book {
+            coin: market.0.to_string(),
+        })
+        .await
     }
 
     /// Subscribe to public trades for a market.
@@ -202,31 +204,107 @@ impl WsClient {
         &self,
         market: crate::types::MarketId,
     ) -> Result<(), ClientError> {
-        self.subscribe(Subscription::Trades { market_id: market })
-            .await
+        self.subscribe(Subscription::Trades {
+            coin: market.0.to_string(),
+        })
+        .await
+    }
+
+    /// Subscribe to best-bid-best-offer ticks for a market.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_bbo(
+        &self,
+        market: crate::types::MarketId,
+    ) -> Result<(), ClientError> {
+        self.subscribe(Subscription::Bbo {
+            coin: market.0.to_string(),
+        })
+        .await
+    }
+
+    /// Subscribe to per-market mark / oracle / funding context.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_active_asset_ctx(
+        &self,
+        market: crate::types::MarketId,
+    ) -> Result<(), ClientError> {
+        self.subscribe(Subscription::ActiveAssetCtx {
+            coin: market.0.to_string(),
+        })
+        .await
+    }
+
+    /// Subscribe to OHLCV candles for a market + interval token
+    /// (`"1m"`/`"5m"`/`"15m"`/`"1h"`/`"4h"`/`"1d"`).
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_candles(
+        &self,
+        market: crate::types::MarketId,
+        interval: impl Into<String>,
+    ) -> Result<(), ClientError> {
+        self.subscribe(Subscription::Candles {
+            coin: market.0.to_string(),
+            interval: interval.into(),
+        })
+        .await
+    }
+
+    /// Subscribe to the global all-market mids stream.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_all_mids(&self) -> Result<(), ClientError> {
+        self.subscribe(Subscription::AllMids).await
     }
 
     /// Subscribe to per-user fills.
     ///
     /// # Errors
     /// See [`WsClient::subscribe`].
-    pub async fn subscribe_user_fills(
+    pub async fn subscribe_fills(
         &self,
-        addr: crate::wallet::Address,
+        user: crate::wallet::Address,
     ) -> Result<(), ClientError> {
-        self.subscribe(Subscription::UserFills { address: addr })
-            .await
+        self.subscribe(Subscription::Fills { user }).await
     }
 
-    /// Subscribe to vault NAV updates.
+    /// Subscribe to per-user order lifecycle updates.
     ///
     /// # Errors
     /// See [`WsClient::subscribe`].
-    pub async fn subscribe_vault_nav(
+    pub async fn subscribe_order_updates(
         &self,
-        vault_id: crate::types::VaultId,
+        user: crate::wallet::Address,
     ) -> Result<(), ClientError> {
-        self.subscribe(Subscription::VaultNav { vault_id }).await
+        self.subscribe(Subscription::OrderUpdates { user }).await
+    }
+
+    /// Subscribe to per-user account / margin events.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_user_events(
+        &self,
+        user: crate::wallet::Address,
+    ) -> Result<(), ClientError> {
+        self.subscribe(Subscription::UserEvents { user }).await
+    }
+
+    /// Subscribe to the per-user live account-state stream.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_account_state(
+        &self,
+        user: crate::wallet::Address,
+    ) -> Result<(), ClientError> {
+        self.subscribe(Subscription::AccountState { user }).await
     }
 
     /// Receive inbound channel frames.
@@ -523,9 +601,13 @@ async fn run_connection(state: &mut TaskState) -> Result<ConnectionExit, ClientE
                                 }
                             }
                             Ok(v) => {
-                                if let Ok(msg) = serde_json::from_value::<WsMessage>(v) {
-                                    let _ = state.inbound_tx.send(msg);
-                                }
+                                // Unknown / future channels (and any frame whose
+                                // `data` we can't type) fall back to `Unknown`
+                                // instead of being dropped, so a forward-compat
+                                // consumer still sees that a frame arrived.
+                                let msg = serde_json::from_value::<WsMessage>(v)
+                                    .unwrap_or(WsMessage::Unknown);
+                                let _ = state.inbound_tx.send(msg);
                             }
                             Err(_) => {}
                         }
