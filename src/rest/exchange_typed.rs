@@ -29,6 +29,27 @@ struct TypedSignedEnvelope<'a> {
     sig_scheme: &'static str,
 }
 
+/// Map a [`crate::types::meta_bridge::MbChain`] to the `uint8` the typed `MbWithdraw` digest
+/// signs (`Solana = 0`, `Base = 1`, `Arbitrum = 2`). This is independent of the
+/// wire string name, which is still PascalCase in the POST params.
+fn mb_chain_to_u8(chain: crate::types::meta_bridge::MbChain) -> u8 {
+    match chain {
+        crate::types::meta_bridge::MbChain::Solana => 0,
+        crate::types::meta_bridge::MbChain::Base => 1,
+        crate::types::meta_bridge::MbChain::Arbitrum => 2,
+    }
+}
+
+/// The PascalCase wire name for a [`crate::types::meta_bridge::MbChain`] (the value the POST
+/// `params.chain` carries).
+fn mb_chain_name(chain: crate::types::meta_bridge::MbChain) -> &'static str {
+    match chain {
+        crate::types::meta_bridge::MbChain::Solana => "Solana",
+        crate::types::meta_bridge::MbChain::Base => "Base",
+        crate::types::meta_bridge::MbChain::Arbitrum => "Arbitrum",
+    }
+}
+
 impl<'a> Exchange<'a> {
     // ---- typed-scheme signed actions (structured EIP-712) ----
     //
@@ -512,6 +533,361 @@ impl<'a> Exchange<'a> {
                 params["expires_at_ms"] = json!(expires_at_ms);
             }
             (action, "REDACTED", params)
+        })
+        .await
+    }
+
+    /// Add or remove isolated margin on an open position under the typed scheme.
+    ///
+    /// `delta` is a signed canonical decimal string (`+` adds, `-` withdraws).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn update_isolated_margin_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        delta: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let delta = delta.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::UpdateIsolatedMargin {
+                metaflux_chain: chain,
+                asset,
+                delta: delta.clone(),
+                nonce,
+            };
+            let params = json!({ "asset": asset, "delta": delta });
+            (action, "update_isolated_margin", params)
+        })
+        .await
+    }
+
+    /// Top up the margin of a strict-isolated-only position under the typed
+    /// scheme.
+    ///
+    /// `amount` is a positive canonical decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn top_up_isolated_only_margin_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        amount: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::TopUpIsolatedOnlyMargin {
+                metaflux_chain: chain,
+                asset,
+                amount: amount.clone(),
+                nonce,
+            };
+            let params = json!({ "asset": asset, "amount": amount });
+            (action, "top_up_isolated_only_margin", params)
+        })
+        .await
+    }
+
+    /// Delegate stake to a validator (or queue an undelegation) under the typed
+    /// scheme.
+    ///
+    /// `amount` is a canonical decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn token_delegate_typed(
+        &self,
+        wallet: &Wallet,
+        validator: crate::wallet::Address,
+        amount: impl Into<String>,
+        is_undelegate: bool,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::TokenDelegate {
+                metaflux_chain: chain,
+                validator,
+                amount: amount.clone(),
+                is_undelegate,
+                nonce,
+            };
+            let params = json!({
+                "validator": validator,
+                "amount": amount,
+                "is_undelegate": is_undelegate,
+            });
+            (action, "token_delegate", params)
+        })
+        .await
+    }
+
+    /// Move capital into or out of a vault under the typed scheme.
+    ///
+    /// `amount` is a canonical decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn vault_transfer_typed(
+        &self,
+        wallet: &Wallet,
+        vault_id: u64,
+        deposit: bool,
+        amount: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::VaultTransfer {
+                metaflux_chain: chain,
+                vault_id,
+                deposit,
+                amount: amount.clone(),
+                nonce,
+            };
+            let params = json!({
+                "vault_id": vault_id,
+                "deposit": deposit,
+                "amount": amount,
+            });
+            (action, "vault_transfer", params)
+        })
+        .await
+    }
+
+    /// Redeem shares from a vault under the typed scheme.
+    ///
+    /// `shares` is a canonical decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn vault_withdraw_typed(
+        &self,
+        wallet: &Wallet,
+        vault_id: u64,
+        shares: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let shares = shares.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::VaultWithdraw {
+                metaflux_chain: chain,
+                vault_id,
+                shares: shares.clone(),
+                nonce,
+            };
+            let params = json!({ "vault_id": vault_id, "shares": shares });
+            (action, "vault_withdraw", params)
+        })
+        .await
+    }
+
+    /// Post quote collateral to a spot-margin account under the typed scheme.
+    ///
+    /// `amount` is a canonical decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_margin_deposit_typed(
+        &self,
+        wallet: &Wallet,
+        pair: u32,
+        amount: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SpotMarginDeposit {
+                metaflux_chain: chain,
+                pair,
+                amount: amount.clone(),
+                nonce,
+            };
+            let params = json!({ "pair": pair, "amount": amount });
+            (action, "spot_margin_deposit", params)
+        })
+        .await
+    }
+
+    /// Withdraw free collateral from a spot-margin account under the typed
+    /// scheme.
+    ///
+    /// `amount` is a canonical decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_margin_withdraw_typed(
+        &self,
+        wallet: &Wallet,
+        pair: u32,
+        amount: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SpotMarginWithdraw {
+                metaflux_chain: chain,
+                pair,
+                amount: amount.clone(),
+                nonce,
+            };
+            let params = json!({ "pair": pair, "amount": amount });
+            (action, "spot_margin_withdraw", params)
+        })
+        .await
+    }
+
+    /// Open a leveraged spot position under the typed scheme.
+    ///
+    /// `size` and `limit_px` are 1e8-plane integers; `borrow` is a canonical
+    /// decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_margin_open_typed(
+        &self,
+        wallet: &Wallet,
+        pair: u32,
+        size: u64,
+        limit_px: u64,
+        borrow: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let borrow = borrow.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SpotMarginOpen {
+                metaflux_chain: chain,
+                pair,
+                size,
+                limit_px,
+                borrow: borrow.clone(),
+                nonce,
+            };
+            let params = json!({
+                "pair": pair,
+                "size": size,
+                "limit_px": limit_px,
+                "borrow": borrow,
+            });
+            (action, "spot_margin_open", params)
+        })
+        .await
+    }
+
+    /// Supply quote into an Earn lending pool under the typed scheme.
+    ///
+    /// `amount` is a canonical decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn earn_deposit_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        amount: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::EarnDeposit {
+                metaflux_chain: chain,
+                asset,
+                amount: amount.clone(),
+                nonce,
+            };
+            let params = json!({ "asset": asset, "amount": amount });
+            (action, "earn_deposit", params)
+        })
+        .await
+    }
+
+    /// Redeem Earn pool shares under the typed scheme.
+    ///
+    /// `shares` is a canonical decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn earn_withdraw_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        shares: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let shares = shares.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::EarnWithdraw {
+                metaflux_chain: chain,
+                asset,
+                shares: shares.clone(),
+                nonce,
+            };
+            let params = json!({ "asset": asset, "shares": shares });
+            (action, "earn_withdraw", params)
+        })
+        .await
+    }
+
+    /// As an approved agent, set an abstraction config value for `user` under
+    /// the typed scheme.
+    ///
+    /// `value` is hashed verbatim as an EIP-712 string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn agent_set_abstraction_typed(
+        &self,
+        wallet: &Wallet,
+        user: crate::wallet::Address,
+        kind: u8,
+        value: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let value = value.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::AgentSetAbstraction {
+                metaflux_chain: chain,
+                user,
+                kind,
+                value: value.clone(),
+                nonce,
+            };
+            let params = json!({ "user": user, "kind": kind, "value": value });
+            (action, "agent_set_abstraction", params)
+        })
+        .await
+    }
+
+    /// Withdraw cross-collateral to a destination chain under the typed scheme.
+    ///
+    /// The signed `chain` field is the mapped `uint8` (`Solana = 0`,
+    /// `Base = 1`, `Arbitrum = 2`), but the POST `params.chain` carries the
+    /// PascalCase string name the wire expects. `amount` is an integer in base
+    /// units (not a decimal string); `dst_addr` is a `0x`-hex destination
+    /// address for the target chain.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn mb_withdraw_typed(
+        &self,
+        wallet: &Wallet,
+        chain: crate::types::meta_bridge::MbChain,
+        asset: u32,
+        amount: u64,
+        dst_addr: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let dst_addr = dst_addr.into();
+        let chain_u8 = mb_chain_to_u8(chain);
+        let chain_name = mb_chain_name(chain);
+        self.post_signed_typed(wallet, |meta_chain, nonce| {
+            let action = TypedAction::MbWithdraw {
+                metaflux_chain: meta_chain,
+                chain: chain_u8,
+                asset,
+                amount,
+                dst_addr: dst_addr.clone(),
+                nonce,
+            };
+            let params = json!({
+                "chain": chain_name,
+                "asset": asset,
+                "amount": amount,
+                "dst_addr": dst_addr,
+            });
+            (action, "mb_withdraw", params)
         })
         .await
     }

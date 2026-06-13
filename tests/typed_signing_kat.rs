@@ -110,6 +110,139 @@ fn kat_vectors_match_pinned_digests() {
     );
 }
 
+/// (1b) The twelve formerly-deferred typed actions must reproduce the frozen
+/// contract digests (chain id 114514 / `"Testnet"`) byte-for-byte. Covers the
+/// decimal-string (`delta`/`amount`/`shares`/`borrow`), `uint8` (`kind`/
+/// `chain`), `uint64 amount` (mb_withdraw), and verbatim-string (`value`) rules.
+#[test]
+fn extended_kat_vectors_match_pinned_digests() {
+    let cases: Vec<(TypedAction, &str)> = vec![
+        (
+            TypedAction::UpdateIsolatedMargin {
+                metaflux_chain: "Testnet".into(),
+                asset: 1,
+                delta: "-100.5".into(),
+                nonce: 9,
+            },
+            "f3ca20d10ce710d31de3d321d61d60b53550adbb4dfd09fca9b7a8c8dbc08162",
+        ),
+        (
+            TypedAction::TopUpIsolatedOnlyMargin {
+                metaflux_chain: "Testnet".into(),
+                asset: 1,
+                amount: "50".into(),
+                nonce: 10,
+            },
+            "47647d208358a681eb657867da2ce00dfeb010a7f2023ecb69e195642da24c8a",
+        ),
+        (
+            TypedAction::TokenDelegate {
+                metaflux_chain: "Testnet".into(),
+                validator: addr(0xD4),
+                amount: "1000".into(),
+                is_undelegate: false,
+                nonce: 11,
+            },
+            "5327737fefc7ee3b38b59743fb4ba311d9142a7c672ec59ca92c5a871173008b",
+        ),
+        (
+            TypedAction::VaultTransfer {
+                metaflux_chain: "Testnet".into(),
+                vault_id: 42,
+                deposit: true,
+                amount: "250.75".into(),
+                nonce: 16,
+            },
+            "d5da325a4e1331ebd6a158d7192795a3eeaf2a39c86b90d44cd5506c98ececc9",
+        ),
+        (
+            TypedAction::VaultWithdraw {
+                metaflux_chain: "Testnet".into(),
+                vault_id: 42,
+                shares: "10.5".into(),
+                nonce: 18,
+            },
+            "ca6c76e49c7cedd99df8d27ee85d14175b954d25bdac53f9525e6b8c71f6b5a7",
+        ),
+        (
+            TypedAction::SpotMarginDeposit {
+                metaflux_chain: "Testnet".into(),
+                pair: 5,
+                amount: "100".into(),
+                nonce: 20,
+            },
+            "3d2f440131e3059d8ac4329864f258ae8c799f82323785a36420182ed3e304fd",
+        ),
+        (
+            TypedAction::SpotMarginWithdraw {
+                metaflux_chain: "Testnet".into(),
+                pair: 5,
+                amount: "50".into(),
+                nonce: 21,
+            },
+            "44540925574b90c68c0cb4c5773d2d51e14d3c3ddd6c9fe5b97e81aba67e768c",
+        ),
+        (
+            TypedAction::SpotMarginOpen {
+                metaflux_chain: "Testnet".into(),
+                pair: 5,
+                size: 1_000,
+                limit_px: 5_000_000_000,
+                borrow: "200".into(),
+                nonce: 22,
+            },
+            "d56110f1e4adb4fbd07a72b870678425bd5440d2119e3d9d9f205469c6dbd4c1",
+        ),
+        (
+            TypedAction::EarnDeposit {
+                metaflux_chain: "Testnet".into(),
+                asset: 0,
+                amount: "500".into(),
+                nonce: 24,
+            },
+            "947530d85221850f892412799ef45baef7f5a75663272bc565e81c519879664e",
+        ),
+        (
+            TypedAction::EarnWithdraw {
+                metaflux_chain: "Testnet".into(),
+                asset: 0,
+                shares: "25.5".into(),
+                nonce: 25,
+            },
+            "5244365c226ab1b7ec786129f134d104a2923a57b9cc2588d6b215aef5b55018",
+        ),
+        (
+            TypedAction::AgentSetAbstraction {
+                metaflux_chain: "Testnet".into(),
+                user: addr(0xF6),
+                kind: 3,
+                value: "abstraction-value".into(),
+                nonce: 14,
+            },
+            "0dd8a92857e2f4aafd97dd0131704bab22969345844389d2b214d55f2a7de71e",
+        ),
+        (
+            TypedAction::MbWithdraw {
+                metaflux_chain: "Testnet".into(),
+                chain: 2,
+                asset: 1,
+                amount: 1_000_000,
+                dst_addr: "0xdeadbeef".into(),
+                nonce: 19,
+            },
+            "423f327abdec7b3469b6dc5d4993ac4a11f0a09487cec564b85d8162abdee2e8",
+        ),
+    ];
+    assert_eq!(cases.len(), 12, "all 12 formerly-deferred actions pinned");
+    for (action, want) in &cases {
+        assert_eq!(
+            hex::encode(_typed_digest_for_test(action)),
+            *want,
+            "extended typed digest drift for {action:?}"
+        );
+    }
+}
+
 /// (2) Every typed action signs to a 65-byte `r||s||v` that recovers the
 /// signing wallet — proving the SDK's digest + signature are accepted by the
 /// node's recovery contract across the whole typed surface.
@@ -227,15 +360,94 @@ fn every_typed_action_signs_and_recovers() {
             nonce: 16,
         },
         TypedAction::REDACTED {
-            metaflux_chain: chain,
+            metaflux_chain: chain.clone(),
             vault_id: 42,
             operator: addr(0xFA),
             allowed: true,
             expires_at_ms: 1_700_000_000_000,
             nonce: 17,
         },
+        TypedAction::UpdateIsolatedMargin {
+            metaflux_chain: chain.clone(),
+            asset: 1,
+            delta: "-100.5".into(),
+            nonce: 18,
+        },
+        TypedAction::TopUpIsolatedOnlyMargin {
+            metaflux_chain: chain.clone(),
+            asset: 1,
+            amount: "50".into(),
+            nonce: 19,
+        },
+        TypedAction::TokenDelegate {
+            metaflux_chain: chain.clone(),
+            validator: addr(0xD4),
+            amount: "1000".into(),
+            is_undelegate: false,
+            nonce: 20,
+        },
+        TypedAction::VaultTransfer {
+            metaflux_chain: chain.clone(),
+            vault_id: 42,
+            deposit: true,
+            amount: "250.75".into(),
+            nonce: 21,
+        },
+        TypedAction::VaultWithdraw {
+            metaflux_chain: chain.clone(),
+            vault_id: 42,
+            shares: "10.5".into(),
+            nonce: 22,
+        },
+        TypedAction::SpotMarginDeposit {
+            metaflux_chain: chain.clone(),
+            pair: 5,
+            amount: "100".into(),
+            nonce: 23,
+        },
+        TypedAction::SpotMarginWithdraw {
+            metaflux_chain: chain.clone(),
+            pair: 5,
+            amount: "50".into(),
+            nonce: 24,
+        },
+        TypedAction::SpotMarginOpen {
+            metaflux_chain: chain.clone(),
+            pair: 5,
+            size: 1_000,
+            limit_px: 5_000_000_000,
+            borrow: "200".into(),
+            nonce: 25,
+        },
+        TypedAction::EarnDeposit {
+            metaflux_chain: chain.clone(),
+            asset: 0,
+            amount: "500".into(),
+            nonce: 26,
+        },
+        TypedAction::EarnWithdraw {
+            metaflux_chain: chain.clone(),
+            asset: 0,
+            shares: "25.5".into(),
+            nonce: 27,
+        },
+        TypedAction::AgentSetAbstraction {
+            metaflux_chain: chain.clone(),
+            user: addr(0xF6),
+            kind: 3,
+            value: "abstraction-value".into(),
+            nonce: 28,
+        },
+        TypedAction::MbWithdraw {
+            metaflux_chain: chain,
+            chain: 2,
+            asset: 1,
+            amount: 1_000_000,
+            dst_addr: "0xdeadbeef".into(),
+            nonce: 29,
+        },
     ];
-    assert_eq!(actions.len(), 18, "all 18 reachable typed actions covered");
+    assert_eq!(actions.len(), 30, "all 30 reachable typed actions covered");
 
     for action in &actions {
         let digest = _typed_digest_for_test(action);
