@@ -147,6 +147,30 @@ const SET_METALIQUIDITY_SET_TYPE: &[u8] =
     b"MetaFluxTransaction:SetMetaliquiditySet(string metafluxChain,address account,bool allowed,uint64 nonce)";
 const REGISTER_METALIQUIDITY_OPERATOR_TYPE: &[u8] =
     b"MetaFluxTransaction:RegisterMetaliquidityOperator(string metafluxChain,uint64 vaultId,address operator,bool allowed,uint64 expiresAtMs,uint64 nonce)";
+const UPDATE_ISOLATED_MARGIN_TYPE: &[u8] =
+    b"MetaFluxTransaction:UpdateIsolatedMargin(string metafluxChain,uint32 asset,string delta,uint64 nonce)";
+const TOP_UP_ISOLATED_ONLY_MARGIN_TYPE: &[u8] =
+    b"MetaFluxTransaction:TopUpIsolatedOnlyMargin(string metafluxChain,uint32 asset,string amount,uint64 nonce)";
+const TOKEN_DELEGATE_TYPE: &[u8] =
+    b"MetaFluxTransaction:TokenDelegate(string metafluxChain,address validator,string amount,bool isUndelegate,uint64 nonce)";
+const VAULT_TRANSFER_TYPE: &[u8] =
+    b"MetaFluxTransaction:VaultTransfer(string metafluxChain,uint64 vaultId,bool deposit,string amount,uint64 nonce)";
+const VAULT_WITHDRAW_TYPE: &[u8] =
+    b"MetaFluxTransaction:VaultWithdraw(string metafluxChain,uint64 vaultId,string shares,uint64 nonce)";
+const SPOT_MARGIN_DEPOSIT_TYPE: &[u8] =
+    b"MetaFluxTransaction:SpotMarginDeposit(string metafluxChain,uint32 pair,string amount,uint64 nonce)";
+const SPOT_MARGIN_WITHDRAW_TYPE: &[u8] =
+    b"MetaFluxTransaction:SpotMarginWithdraw(string metafluxChain,uint32 pair,string amount,uint64 nonce)";
+const SPOT_MARGIN_OPEN_TYPE: &[u8] =
+    b"MetaFluxTransaction:SpotMarginOpen(string metafluxChain,uint32 pair,uint64 size,uint64 limitPx,string borrow,uint64 nonce)";
+const EARN_DEPOSIT_TYPE: &[u8] =
+    b"MetaFluxTransaction:EarnDeposit(string metafluxChain,uint32 asset,string amount,uint64 nonce)";
+const EARN_WITHDRAW_TYPE: &[u8] =
+    b"MetaFluxTransaction:EarnWithdraw(string metafluxChain,uint32 asset,string shares,uint64 nonce)";
+const AGENT_SET_ABSTRACTION_TYPE: &[u8] =
+    b"MetaFluxTransaction:AgentSetAbstraction(string metafluxChain,address user,uint8 kind,string value,uint64 nonce)";
+const MB_WITHDRAW_TYPE: &[u8] =
+    b"MetaFluxTransaction:MbWithdraw(string metafluxChain,uint8 chain,uint32 asset,uint64 amount,string dstAddr,uint64 nonce)";
 
 // ===== TypedAction =====
 
@@ -370,6 +394,155 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `UpdateIsolatedMargin(string metafluxChain,uint32 asset,string delta,uint64 nonce)`
+    UpdateIsolatedMargin {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Asset id.
+        asset: u32,
+        /// Signed margin delta as a canonical decimal string (e.g. `"-100.5"`).
+        delta: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `TopUpIsolatedOnlyMargin(string metafluxChain,uint32 asset,string amount,uint64 nonce)`
+    TopUpIsolatedOnlyMargin {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Asset id.
+        asset: u32,
+        /// Top-up amount as a canonical decimal string.
+        amount: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `TokenDelegate(string metafluxChain,address validator,string amount,bool isUndelegate,uint64 nonce)`
+    TokenDelegate {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Validator address.
+        validator: Address,
+        /// Stake amount as a canonical decimal string.
+        amount: String,
+        /// Undelegate (vs delegate).
+        is_undelegate: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `VaultTransfer(string metafluxChain,uint64 vaultId,bool deposit,string amount,uint64 nonce)`
+    VaultTransfer {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Vault id.
+        vault_id: u64,
+        /// Deposit (vs withdraw).
+        deposit: bool,
+        /// Amount as a canonical decimal string.
+        amount: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `VaultWithdraw(string metafluxChain,uint64 vaultId,string shares,uint64 nonce)`
+    VaultWithdraw {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Vault id.
+        vault_id: u64,
+        /// Share count as a canonical decimal string.
+        shares: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SpotMarginDeposit(string metafluxChain,uint32 pair,string amount,uint64 nonce)`
+    SpotMarginDeposit {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Spot margin pair id.
+        pair: u32,
+        /// Amount as a canonical decimal string.
+        amount: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SpotMarginWithdraw(string metafluxChain,uint32 pair,string amount,uint64 nonce)`
+    SpotMarginWithdraw {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Spot margin pair id.
+        pair: u32,
+        /// Amount as a canonical decimal string.
+        amount: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SpotMarginOpen(string metafluxChain,uint32 pair,uint64 size,uint64 limitPx,string borrow,uint64 nonce)`
+    SpotMarginOpen {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Spot margin pair id.
+        pair: u32,
+        /// Order size on the 1e8 plane.
+        size: u64,
+        /// Limit price on the 1e8 plane.
+        limit_px: u64,
+        /// Borrow amount as a canonical decimal string.
+        borrow: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `EarnDeposit(string metafluxChain,uint32 asset,string amount,uint64 nonce)`
+    EarnDeposit {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Asset id.
+        asset: u32,
+        /// Deposit amount as a canonical decimal string.
+        amount: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `EarnWithdraw(string metafluxChain,uint32 asset,string shares,uint64 nonce)`
+    EarnWithdraw {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Asset id.
+        asset: u32,
+        /// Share count as a canonical decimal string.
+        shares: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `AgentSetAbstraction(string metafluxChain,address user,uint8 kind,string value,uint64 nonce)`
+    AgentSetAbstraction {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// User address the abstraction applies to.
+        user: Address,
+        /// Abstraction kind discriminant.
+        kind: u8,
+        /// Abstraction value, hashed verbatim as an EIP-712 string.
+        value: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `MbWithdraw(string metafluxChain,uint8 chain,uint32 asset,uint64 amount,string dstAddr,uint64 nonce)`
+    ///
+    /// The signed `chain` is the mapped `uint8` (`0` = Solana, `1` = Base,
+    /// `2` = Arbitrum); the POST `params.chain` carries the string name.
+    MbWithdraw {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Destination chain discriminant (`0` = Solana, `1` = Base, `2` = Arbitrum).
+        chain: u8,
+        /// Asset id.
+        asset: u32,
+        /// Integer amount (not a decimal string).
+        amount: u64,
+        /// Destination address string for the target chain.
+        dst_addr: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
 }
 
 impl TypedAction {
@@ -396,6 +569,18 @@ impl TypedAction {
             TypedAction::RegisterMetaliquidityOperator { .. } => {
                 REGISTER_METALIQUIDITY_OPERATOR_TYPE
             }
+            TypedAction::UpdateIsolatedMargin { .. } => UPDATE_ISOLATED_MARGIN_TYPE,
+            TypedAction::TopUpIsolatedOnlyMargin { .. } => TOP_UP_ISOLATED_ONLY_MARGIN_TYPE,
+            TypedAction::TokenDelegate { .. } => TOKEN_DELEGATE_TYPE,
+            TypedAction::VaultTransfer { .. } => VAULT_TRANSFER_TYPE,
+            TypedAction::VaultWithdraw { .. } => VAULT_WITHDRAW_TYPE,
+            TypedAction::SpotMarginDeposit { .. } => SPOT_MARGIN_DEPOSIT_TYPE,
+            TypedAction::SpotMarginWithdraw { .. } => SPOT_MARGIN_WITHDRAW_TYPE,
+            TypedAction::SpotMarginOpen { .. } => SPOT_MARGIN_OPEN_TYPE,
+            TypedAction::EarnDeposit { .. } => EARN_DEPOSIT_TYPE,
+            TypedAction::EarnWithdraw { .. } => EARN_WITHDRAW_TYPE,
+            TypedAction::AgentSetAbstraction { .. } => AGENT_SET_ABSTRACTION_TYPE,
+            TypedAction::MbWithdraw { .. } => MB_WITHDRAW_TYPE,
         }
     }
 
@@ -614,6 +799,152 @@ impl TypedAction {
                 enc_u64(*expires_at_ms),
                 enc_u64(*nonce),
             ],
+            TypedAction::UpdateIsolatedMargin {
+                metaflux_chain,
+                asset,
+                delta,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_string(delta),
+                enc_u64(*nonce),
+            ],
+            TypedAction::TopUpIsolatedOnlyMargin {
+                metaflux_chain,
+                asset,
+                amount,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_string(amount),
+                enc_u64(*nonce),
+            ],
+            TypedAction::TokenDelegate {
+                metaflux_chain,
+                validator,
+                amount,
+                is_undelegate,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_addr(validator),
+                enc_string(amount),
+                enc_bool(*is_undelegate),
+                enc_u64(*nonce),
+            ],
+            TypedAction::VaultTransfer {
+                metaflux_chain,
+                vault_id,
+                deposit,
+                amount,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u64(*vault_id),
+                enc_bool(*deposit),
+                enc_string(amount),
+                enc_u64(*nonce),
+            ],
+            TypedAction::VaultWithdraw {
+                metaflux_chain,
+                vault_id,
+                shares,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u64(*vault_id),
+                enc_string(shares),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SpotMarginDeposit {
+                metaflux_chain,
+                pair,
+                amount,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*pair),
+                enc_string(amount),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SpotMarginWithdraw {
+                metaflux_chain,
+                pair,
+                amount,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*pair),
+                enc_string(amount),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SpotMarginOpen {
+                metaflux_chain,
+                pair,
+                size,
+                limit_px,
+                borrow,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*pair),
+                enc_u64(*size),
+                enc_u64(*limit_px),
+                enc_string(borrow),
+                enc_u64(*nonce),
+            ],
+            TypedAction::EarnDeposit {
+                metaflux_chain,
+                asset,
+                amount,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_string(amount),
+                enc_u64(*nonce),
+            ],
+            TypedAction::EarnWithdraw {
+                metaflux_chain,
+                asset,
+                shares,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_string(shares),
+                enc_u64(*nonce),
+            ],
+            TypedAction::AgentSetAbstraction {
+                metaflux_chain,
+                user,
+                kind,
+                value,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_addr(user),
+                enc_u8(*kind),
+                enc_string(value),
+                enc_u64(*nonce),
+            ],
+            TypedAction::MbWithdraw {
+                metaflux_chain,
+                chain,
+                asset,
+                amount,
+                dst_addr,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u8(*chain),
+                enc_u32(*asset),
+                enc_u64(*amount),
+                enc_string(dst_addr),
+                enc_u64(*nonce),
+            ],
         }
     }
 
@@ -735,6 +1066,136 @@ mod tests {
             hex::encode(TypedActionDigest::new(&multi_sig, 114514).to_digest()),
             "981a2b3adb1d0c03a7af30076f3c6497ffeabe79e380b01be4f1f14eb1252e84"
         );
+    }
+
+    /// Pin the twelve formerly-deferred typed actions (chain id 114514 /
+    /// `"Testnet"`) byte-for-byte against the frozen contract digests.
+    #[test]
+    fn kat_vectors_extended_chain_114514() {
+        let cases: Vec<(TypedAction, &str)> = vec![
+            (
+                TypedAction::UpdateIsolatedMargin {
+                    metaflux_chain: "Testnet".into(),
+                    asset: 1,
+                    delta: "-100.5".into(),
+                    nonce: 9,
+                },
+                "f3ca20d10ce710d31de3d321d61d60b53550adbb4dfd09fca9b7a8c8dbc08162",
+            ),
+            (
+                TypedAction::TopUpIsolatedOnlyMargin {
+                    metaflux_chain: "Testnet".into(),
+                    asset: 1,
+                    amount: "50".into(),
+                    nonce: 10,
+                },
+                "47647d208358a681eb657867da2ce00dfeb010a7f2023ecb69e195642da24c8a",
+            ),
+            (
+                TypedAction::TokenDelegate {
+                    metaflux_chain: "Testnet".into(),
+                    validator: addr(0xD4),
+                    amount: "1000".into(),
+                    is_undelegate: false,
+                    nonce: 11,
+                },
+                "5327737fefc7ee3b38b59743fb4ba311d9142a7c672ec59ca92c5a871173008b",
+            ),
+            (
+                TypedAction::VaultTransfer {
+                    metaflux_chain: "Testnet".into(),
+                    vault_id: 42,
+                    deposit: true,
+                    amount: "250.75".into(),
+                    nonce: 16,
+                },
+                "d5da325a4e1331ebd6a158d7192795a3eeaf2a39c86b90d44cd5506c98ececc9",
+            ),
+            (
+                TypedAction::VaultWithdraw {
+                    metaflux_chain: "Testnet".into(),
+                    vault_id: 42,
+                    shares: "10.5".into(),
+                    nonce: 18,
+                },
+                "ca6c76e49c7cedd99df8d27ee85d14175b954d25bdac53f9525e6b8c71f6b5a7",
+            ),
+            (
+                TypedAction::SpotMarginDeposit {
+                    metaflux_chain: "Testnet".into(),
+                    pair: 5,
+                    amount: "100".into(),
+                    nonce: 20,
+                },
+                "3d2f440131e3059d8ac4329864f258ae8c799f82323785a36420182ed3e304fd",
+            ),
+            (
+                TypedAction::SpotMarginWithdraw {
+                    metaflux_chain: "Testnet".into(),
+                    pair: 5,
+                    amount: "50".into(),
+                    nonce: 21,
+                },
+                "44540925574b90c68c0cb4c5773d2d51e14d3c3ddd6c9fe5b97e81aba67e768c",
+            ),
+            (
+                TypedAction::SpotMarginOpen {
+                    metaflux_chain: "Testnet".into(),
+                    pair: 5,
+                    size: 1_000,
+                    limit_px: 5_000_000_000,
+                    borrow: "200".into(),
+                    nonce: 22,
+                },
+                "d56110f1e4adb4fbd07a72b870678425bd5440d2119e3d9d9f205469c6dbd4c1",
+            ),
+            (
+                TypedAction::EarnDeposit {
+                    metaflux_chain: "Testnet".into(),
+                    asset: 0,
+                    amount: "500".into(),
+                    nonce: 24,
+                },
+                "947530d85221850f892412799ef45baef7f5a75663272bc565e81c519879664e",
+            ),
+            (
+                TypedAction::EarnWithdraw {
+                    metaflux_chain: "Testnet".into(),
+                    asset: 0,
+                    shares: "25.5".into(),
+                    nonce: 25,
+                },
+                "5244365c226ab1b7ec786129f134d104a2923a57b9cc2588d6b215aef5b55018",
+            ),
+            (
+                TypedAction::AgentSetAbstraction {
+                    metaflux_chain: "Testnet".into(),
+                    user: addr(0xF6),
+                    kind: 3,
+                    value: "abstraction-value".into(),
+                    nonce: 14,
+                },
+                "0dd8a92857e2f4aafd97dd0131704bab22969345844389d2b214d55f2a7de71e",
+            ),
+            (
+                TypedAction::MbWithdraw {
+                    metaflux_chain: "Testnet".into(),
+                    chain: 2,
+                    asset: 1,
+                    amount: 1_000_000,
+                    dst_addr: "0xdeadbeef".into(),
+                    nonce: 19,
+                },
+                "423f327abdec7b3469b6dc5d4993ac4a11f0a09487cec564b85d8162abdee2e8",
+            ),
+        ];
+        for (action, want) in cases {
+            assert_eq!(
+                hex::encode(TypedActionDigest::new(&action, 114514).to_digest()),
+                want,
+                "digest drift for {action:?}"
+            );
+        }
     }
 
     #[test]
