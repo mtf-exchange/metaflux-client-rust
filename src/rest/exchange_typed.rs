@@ -13,7 +13,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::error::ClientError;
-use crate::rest::exchange::{Exchange, next_nonce, MTF_CHAIN_ID};
+use crate::rest::exchange::{Exchange, MTF_CHAIN_ID, next_nonce};
 use crate::wallet::{Eip712, TypedAction, TypedActionDigest, Wallet, metaflux_chain_tag};
 
 /// A typed-scheme signed action ready to POST to `/exchange`.

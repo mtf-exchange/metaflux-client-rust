@@ -998,8 +998,9 @@ impl Eip712 for TypedActionDigest<'_> {
 /// with `name = "MetaFlux"`, `version = "1"`, `verifyingContract = 0x0`.
 #[must_use]
 pub fn metaflux_domain_separator(chain_id: u64) -> [u8; 32] {
-    let type_hash =
-        keccak(b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    let type_hash = keccak(
+        b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)",
+    );
     let name_hash = keccak(b"MetaFlux");
     let version_hash = keccak(b"1");
     let mut chain_be = [0u8; 32];
