@@ -23,6 +23,7 @@ use serde_json::Value;
 use crate::error::ClientError;
 
 pub mod exchange;
+pub mod exchange_typed;
 pub mod explorer;
 pub mod info;
 
