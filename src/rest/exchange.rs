@@ -915,7 +915,6 @@ impl<'a> Exchange<'a> {
         // this module pins it).
         self.client.post_json("/exchange", &envelope).await
     }
-
 }
 
 /// Sign an action with a fresh monotonic nonce, returning `(nonce, 0x-hex
@@ -1056,7 +1055,6 @@ pub fn _recover_for_test(
 ) -> Result<crate::wallet::Address, ClientError> {
     crate::wallet::sign_recover_for_test_only(digest, sig)
 }
-
 
 #[cfg(test)]
 mod tests {
