@@ -915,6 +915,7 @@ impl<'a> Exchange<'a> {
         // this module pins it).
         self.client.post_json("/exchange", &envelope).await
     }
+
 }
 
 /// Sign an action with a fresh monotonic nonce, returning `(nonce, 0x-hex
@@ -1022,7 +1023,7 @@ fn current_unix_ms() -> u64 {
 /// distinct nonces. The server's per-account window (`check_and_advance_nonce`)
 /// tolerates out-of-order delivery within 64 but rejects *collisions*, so a raw
 /// `unix_ms` would drop the 2nd-and-later order in a same-ms burst.
-fn next_nonce() -> u64 {
+pub(crate) fn next_nonce() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NONCE_CLOCK: AtomicU64 = AtomicU64::new(0);
     let now = current_unix_ms();
@@ -1055,6 +1056,7 @@ pub fn _recover_for_test(
 ) -> Result<crate::wallet::Address, ClientError> {
     crate::wallet::sign_recover_for_test_only(digest, sig)
 }
+
 
 #[cfg(test)]
 mod tests {

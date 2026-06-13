@@ -1,0 +1,747 @@
+//! Structured EIP-712 typed-action signing.
+//!
+//! Each wallet-signed action here is a proper EIP-712 struct, so wallets that
+//! render `eth_signTypedData_v4` show named fields instead of one opaque blob.
+//! The primary type is `MetaFluxTransaction:<PascalAction>`.
+//!
+//! ## Atomic encoding
+//!
+//! - `hashStruct(s) = keccak256(typeHash ‖ encodeData(s))`, where
+//!   `typeHash = keccak256(encodeType)`.
+//! - Each field becomes one 32-byte word, concatenated in declared order:
+//!   - `address` → 20 bytes right-aligned (12 zero-byte left pad).
+//!   - `uintN` / `bool` → big-endian, zero-left-padded to 32 (`bool` = `uint8` `0`/`1`).
+//!   - `string` → `keccak256(utf8)`; `T[]` → `keccak256(concat of element words)`.
+//! - Final digest: `keccak256(0x19 0x01 ‖ domainSeparator ‖ hashStruct)`.
+//!
+//! ## Decimal fields
+//!
+//! Decimal magnitudes (`amount` / `ntl` / etc.) are EIP-712 `string`s carrying
+//! the canonical decimal text (for example `"1500.5"`). The signer hashes the
+//! exact UTF-8 bytes; the same string MUST then be sent verbatim in the POST
+//! `action` JSON, since the server hashes the received string before parsing it.
+//! Pick one canonical form — `"1.0"` and `"1.00"` hash differently.
+
+use tiny_keccak::{Hasher, Keccak};
+
+use crate::wallet::key::Address;
+use crate::wallet::sign::Eip712;
+
+/// EIP-712 chain tag (`metafluxChain`) for a domain chain id.
+///
+/// This is the first signed field of every typed action and must match the
+/// node's mapping exactly: `8964` → `"Mainnet"`, `114514` → `"Testnet"`,
+/// `31337` → `"Devnet"`; any other id falls back to `"Devnet"`.
+#[must_use]
+pub fn metaflux_chain_tag(chain_id: u64) -> &'static str {
+    match chain_id {
+        8964 => "Mainnet",
+        114514 => "Testnet",
+        31337 => "Devnet",
+        _ => "Devnet",
+    }
+}
+
+// ===== Encoder toolkit =====
+
+fn keccak(input: &[u8]) -> [u8; 32] {
+    let mut h = Keccak::v256();
+    h.update(input);
+    let mut out = [0u8; 32];
+    h.finalize(&mut out);
+    out
+}
+
+/// `address` → 20 bytes right-aligned in a 32-byte word (12 zero-byte left pad).
+fn enc_addr(a: &Address) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[12..].copy_from_slice(a.as_bytes());
+    out
+}
+
+/// `uint256(u64)` → big-endian, zero-left-padded to 32 bytes.
+fn enc_u64(v: u64) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[24..].copy_from_slice(&v.to_be_bytes());
+    out
+}
+
+/// `uint256(u32)` → big-endian, zero-left-padded to 32 bytes.
+fn enc_u32(v: u32) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[28..].copy_from_slice(&v.to_be_bytes());
+    out
+}
+
+/// `uint256(u16)` → big-endian, zero-left-padded to 32 bytes.
+fn enc_u16(v: u16) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[30..].copy_from_slice(&v.to_be_bytes());
+    out
+}
+
+/// `uint256(u8)` → big-endian, zero-left-padded to 32 bytes.
+fn enc_u8(v: u8) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    out[31] = v;
+    out
+}
+
+/// `bool` → `uint8` `0`/`1`, zero-left-padded to 32 bytes.
+fn enc_bool(v: bool) -> [u8; 32] {
+    enc_u8(u8::from(v))
+}
+
+/// `string` → `keccak256(utf8)`. Decimal fields use the same hashing — the
+/// caller hashes the verbatim canonical string and resends it unchanged.
+fn enc_string(s: &str) -> [u8; 32] {
+    keccak(s.as_bytes())
+}
+
+/// `address[]` → `keccak256(concat(enc_addr(eᵢ)))`.
+fn enc_addr_array(addrs: &[Address]) -> [u8; 32] {
+    let mut k = Keccak::v256();
+    for a in addrs {
+        k.update(&enc_addr(a));
+    }
+    let mut out = [0u8; 32];
+    k.finalize(&mut out);
+    out
+}
+
+// ===== Type strings (signing order = encodeType order = message field order) =====
+
+const SEND_ASSET_TYPE: &[u8] =
+    b"MetaFluxTransaction:SendAsset(string metafluxChain,uint32 sourceDex,uint32 destinationDex,uint32 asset,address destination,string amount,bool toPerp,uint64 nonce)";
+const USD_CLASS_TRANSFER_TYPE: &[u8] =
+    b"MetaFluxTransaction:UsdClassTransfer(string metafluxChain,string ntl,bool toPerp,uint64 nonce)";
+const WITHDRAW_TYPE: &[u8] =
+    b"MetaFluxTransaction:Withdraw(string metafluxChain,uint32 asset,string amount,uint32 destinationChainId,bool useCctp,uint64 nonce)";
+const APPROVE_AGENT_TYPE: &[u8] =
+    b"MetaFluxTransaction:ApproveAgent(string metafluxChain,address agentAddress,string agentName,uint64 nonce)";
+const SET_REFERRER_TYPE: &[u8] =
+    b"MetaFluxTransaction:SetReferrer(string metafluxChain,address referrer,uint64 nonce)";
+const APPROVE_BUILDER_FEE_TYPE: &[u8] =
+    b"MetaFluxTransaction:ApproveBuilderFee(string metafluxChain,address builder,uint16 maxFeeBps,uint64 nonce)";
+const SET_DISPLAY_NAME_TYPE: &[u8] =
+    b"MetaFluxTransaction:SetDisplayName(string metafluxChain,string displayName,uint64 nonce)";
+const SET_POSITION_MODE_TYPE: &[u8] =
+    b"MetaFluxTransaction:SetPositionMode(string metafluxChain,bool hedge,uint64 nonce)";
+const USER_PORTFOLIO_MARGIN_TYPE: &[u8] =
+    b"MetaFluxTransaction:UserPortfolioMargin(string metafluxChain,bool enroll,uint64 nonce)";
+const CONVERT_TO_MULTI_SIG_USER_TYPE: &[u8] =
+    b"MetaFluxTransaction:ConvertToMultiSigUser(string metafluxChain,address[] signers,uint32 threshold,uint64 nonce)";
+const UPDATE_LEVERAGE_TYPE: &[u8] =
+    b"MetaFluxTransaction:UpdateLeverage(string metafluxChain,uint32 asset,uint32 leverage,bool isIsolated,uint64 nonce)";
+const CLAIM_REWARDS_TYPE: &[u8] =
+    b"MetaFluxTransaction:ClaimRewards(string metafluxChain,address validator,uint64 nonce)";
+const LINK_STAKING_USER_TYPE: &[u8] =
+    b"MetaFluxTransaction:LinkStakingUser(string metafluxChain,address target,uint64 nonce)";
+const CREATE_VAULT_TYPE: &[u8] =
+    b"MetaFluxTransaction:CreateVault(string metafluxChain,string name,uint64 lockPeriodSecs,uint8 kind,uint64 nonce)";
+const VAULT_MODIFY_TYPE: &[u8] =
+    b"MetaFluxTransaction:VaultModify(string metafluxChain,uint64 vaultId,string newName,uint64 nonce)";
+const SPOT_MARGIN_CLOSE_TYPE: &[u8] =
+    b"MetaFluxTransaction:SpotMarginClose(string metafluxChain,uint32 pair,uint64 limitPx,uint64 nonce)";
+const SET_METALIQUIDITY_SET_TYPE: &[u8] =
+    b"MetaFluxTransaction:SetMetaliquiditySet(string metafluxChain,address account,bool allowed,uint64 nonce)";
+const REGISTER_METALIQUIDITY_OPERATOR_TYPE: &[u8] =
+    b"MetaFluxTransaction:RegisterMetaliquidityOperator(string metafluxChain,uint64 vaultId,address operator,bool allowed,uint64 expiresAtMs,uint64 nonce)";
+
+// ===== TypedAction =====
+
+/// One wallet-signed action per variant, carrying exactly its EIP-712 fields in
+/// declared (= `encodeType` = message) order.
+///
+/// These are the actions the node accepts under the typed signing scheme.
+/// Decimal magnitudes are `String` and hashed verbatim — set them to the
+/// canonical text you intend to send on the wire.
+///
+/// The leading `metaflux_chain` tag is filled in for you when you build a
+/// variant through [`crate::rest::exchange::Exchange`]; if you construct one
+/// directly, use [`metaflux_chain_tag`] for the target chain id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TypedAction {
+    /// `SendAsset(string metafluxChain,uint32 sourceDex,uint32 destinationDex,uint32 asset,address destination,string amount,bool toPerp,uint64 nonce)`
+    SendAsset {
+        /// Chain tag (`"Mainnet"` / `"Testnet"` / `"Devnet"`).
+        metaflux_chain: String,
+        /// Source dex id.
+        source_dex: u32,
+        /// Destination dex id.
+        destination_dex: u32,
+        /// Asset id.
+        asset: u32,
+        /// Recipient address.
+        destination: Address,
+        /// Amount as a canonical decimal string.
+        amount: String,
+        /// Move to the perp side.
+        to_perp: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `UsdClassTransfer(string metafluxChain,string ntl,bool toPerp,uint64 nonce)`
+    UsdClassTransfer {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Notional as a canonical decimal string.
+        ntl: String,
+        /// Move to the perp side.
+        to_perp: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `Withdraw(string metafluxChain,uint32 asset,string amount,uint32 destinationChainId,bool useCctp,uint64 nonce)`
+    Withdraw {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Asset id.
+        asset: u32,
+        /// Amount as a canonical decimal string.
+        amount: String,
+        /// Destination EVM chain id.
+        destination_chain_id: u32,
+        /// Route via CCTP.
+        use_cctp: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `ApproveAgent(string metafluxChain,address agentAddress,string agentName,uint64 nonce)`
+    ApproveAgent {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Agent address being approved.
+        agent_address: Address,
+        /// Human-readable agent name.
+        agent_name: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SetReferrer(string metafluxChain,address referrer,uint64 nonce)`
+    SetReferrer {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Referrer address.
+        referrer: Address,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `ApproveBuilderFee(string metafluxChain,address builder,uint16 maxFeeBps,uint64 nonce)`
+    ApproveBuilderFee {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Builder address.
+        builder: Address,
+        /// Max builder fee in basis points.
+        max_fee_bps: u16,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SetDisplayName(string metafluxChain,string displayName,uint64 nonce)`
+    SetDisplayName {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Display name.
+        display_name: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SetPositionMode(string metafluxChain,bool hedge,uint64 nonce)`
+    SetPositionMode {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Hedge mode enabled.
+        hedge: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `UserPortfolioMargin(string metafluxChain,bool enroll,uint64 nonce)`
+    UserPortfolioMargin {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Enroll in portfolio margin.
+        enroll: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `ConvertToMultiSigUser(string metafluxChain,address[] signers,uint32 threshold,uint64 nonce)`
+    ConvertToMultiSigUser {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Authorized signer set.
+        signers: Vec<Address>,
+        /// Required signatures.
+        threshold: u32,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `UpdateLeverage(string metafluxChain,uint32 asset,uint32 leverage,bool isIsolated,uint64 nonce)`
+    UpdateLeverage {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Asset id.
+        asset: u32,
+        /// Leverage multiplier.
+        leverage: u32,
+        /// Isolated (vs cross) margin.
+        is_isolated: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `ClaimRewards(string metafluxChain,address validator,uint64 nonce)`. The
+    /// zero address means "claim all".
+    ClaimRewards {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Validator address, or [`Address::ZERO`] to claim everything.
+        validator: Address,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `LinkStakingUser(string metafluxChain,address target,uint64 nonce)`
+    LinkStakingUser {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Linked staking target address.
+        target: Address,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `CreateVault(string metafluxChain,string name,uint64 lockPeriodSecs,uint8 kind,uint64 nonce)`
+    CreateVault {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Vault name.
+        name: String,
+        /// Lock period in seconds.
+        lock_period_secs: u64,
+        /// Vault kind (`0` = user, `1` = metaliquidity).
+        kind: u8,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `VaultModify(string metafluxChain,uint64 vaultId,string newName,uint64 nonce)`
+    VaultModify {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Vault id.
+        vault_id: u64,
+        /// New vault name.
+        new_name: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SpotMarginClose(string metafluxChain,uint32 pair,uint64 limitPx,uint64 nonce)`
+    SpotMarginClose {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Spot margin pair id.
+        pair: u32,
+        /// Limit price on the 1e8 plane.
+        limit_px: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SetMetaliquiditySet(string metafluxChain,address account,bool allowed,uint64 nonce)`
+    SetMetaliquiditySet {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Account address.
+        account: Address,
+        /// Whitelist allowed.
+        allowed: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `RegisterMetaliquidityOperator(string metafluxChain,uint64 vaultId,address operator,bool allowed,uint64 expiresAtMs,uint64 nonce)`
+    RegisterMetaliquidityOperator {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Vault id.
+        vault_id: u64,
+        /// Operator address.
+        operator: Address,
+        /// Operator allowed.
+        allowed: bool,
+        /// Expiry timestamp in ms (`0` = never expires).
+        expires_at_ms: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+}
+
+impl TypedAction {
+    /// The frozen `encodeType` string for this variant.
+    fn type_string(&self) -> &'static [u8] {
+        match self {
+            TypedAction::SendAsset { .. } => SEND_ASSET_TYPE,
+            TypedAction::UsdClassTransfer { .. } => USD_CLASS_TRANSFER_TYPE,
+            TypedAction::Withdraw { .. } => WITHDRAW_TYPE,
+            TypedAction::ApproveAgent { .. } => APPROVE_AGENT_TYPE,
+            TypedAction::SetReferrer { .. } => SET_REFERRER_TYPE,
+            TypedAction::ApproveBuilderFee { .. } => APPROVE_BUILDER_FEE_TYPE,
+            TypedAction::SetDisplayName { .. } => SET_DISPLAY_NAME_TYPE,
+            TypedAction::SetPositionMode { .. } => SET_POSITION_MODE_TYPE,
+            TypedAction::UserPortfolioMargin { .. } => USER_PORTFOLIO_MARGIN_TYPE,
+            TypedAction::ConvertToMultiSigUser { .. } => CONVERT_TO_MULTI_SIG_USER_TYPE,
+            TypedAction::UpdateLeverage { .. } => UPDATE_LEVERAGE_TYPE,
+            TypedAction::ClaimRewards { .. } => CLAIM_REWARDS_TYPE,
+            TypedAction::LinkStakingUser { .. } => LINK_STAKING_USER_TYPE,
+            TypedAction::CreateVault { .. } => CREATE_VAULT_TYPE,
+            TypedAction::VaultModify { .. } => VAULT_MODIFY_TYPE,
+            TypedAction::SpotMarginClose { .. } => SPOT_MARGIN_CLOSE_TYPE,
+            TypedAction::SetMetaliquiditySet { .. } => SET_METALIQUIDITY_SET_TYPE,
+            TypedAction::RegisterMetaliquidityOperator { .. } => {
+                REGISTER_METALIQUIDITY_OPERATOR_TYPE
+            }
+        }
+    }
+
+    /// `typeHash = keccak256(encodeType)` for this variant.
+    #[must_use]
+    pub fn type_hash(&self) -> [u8; 32] {
+        keccak(self.type_string())
+    }
+
+    /// `encodeData(s)` — the 32-byte words for each field, in declared order.
+    fn encode_data(&self) -> Vec<[u8; 32]> {
+        match self {
+            TypedAction::SendAsset {
+                metaflux_chain,
+                source_dex,
+                destination_dex,
+                asset,
+                destination,
+                amount,
+                to_perp,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*source_dex),
+                enc_u32(*destination_dex),
+                enc_u32(*asset),
+                enc_addr(destination),
+                enc_string(amount),
+                enc_bool(*to_perp),
+                enc_u64(*nonce),
+            ],
+            TypedAction::UsdClassTransfer {
+                metaflux_chain,
+                ntl,
+                to_perp,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_string(ntl),
+                enc_bool(*to_perp),
+                enc_u64(*nonce),
+            ],
+            TypedAction::Withdraw {
+                metaflux_chain,
+                asset,
+                amount,
+                destination_chain_id,
+                use_cctp,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_string(amount),
+                enc_u32(*destination_chain_id),
+                enc_bool(*use_cctp),
+                enc_u64(*nonce),
+            ],
+            TypedAction::ApproveAgent {
+                metaflux_chain,
+                agent_address,
+                agent_name,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_addr(agent_address),
+                enc_string(agent_name),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SetReferrer {
+                metaflux_chain,
+                referrer,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_addr(referrer),
+                enc_u64(*nonce),
+            ],
+            TypedAction::ApproveBuilderFee {
+                metaflux_chain,
+                builder,
+                max_fee_bps,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_addr(builder),
+                enc_u16(*max_fee_bps),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SetDisplayName {
+                metaflux_chain,
+                display_name,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_string(display_name),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SetPositionMode {
+                metaflux_chain,
+                hedge,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_bool(*hedge),
+                enc_u64(*nonce),
+            ],
+            TypedAction::UserPortfolioMargin {
+                metaflux_chain,
+                enroll,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_bool(*enroll),
+                enc_u64(*nonce),
+            ],
+            TypedAction::ConvertToMultiSigUser {
+                metaflux_chain,
+                signers,
+                threshold,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_addr_array(signers),
+                enc_u32(*threshold),
+                enc_u64(*nonce),
+            ],
+            TypedAction::UpdateLeverage {
+                metaflux_chain,
+                asset,
+                leverage,
+                is_isolated,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_u32(*leverage),
+                enc_bool(*is_isolated),
+                enc_u64(*nonce),
+            ],
+            TypedAction::ClaimRewards {
+                metaflux_chain,
+                validator,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_addr(validator),
+                enc_u64(*nonce),
+            ],
+            TypedAction::LinkStakingUser {
+                metaflux_chain,
+                target,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_addr(target),
+                enc_u64(*nonce),
+            ],
+            TypedAction::CreateVault {
+                metaflux_chain,
+                name,
+                lock_period_secs,
+                kind,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_string(name),
+                enc_u64(*lock_period_secs),
+                enc_u8(*kind),
+                enc_u64(*nonce),
+            ],
+            TypedAction::VaultModify {
+                metaflux_chain,
+                vault_id,
+                new_name,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u64(*vault_id),
+                enc_string(new_name),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SpotMarginClose {
+                metaflux_chain,
+                pair,
+                limit_px,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*pair),
+                enc_u64(*limit_px),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SetMetaliquiditySet {
+                metaflux_chain,
+                account,
+                allowed,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_addr(account),
+                enc_bool(*allowed),
+                enc_u64(*nonce),
+            ],
+            TypedAction::RegisterMetaliquidityOperator {
+                metaflux_chain,
+                vault_id,
+                operator,
+                allowed,
+                expires_at_ms,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u64(*vault_id),
+                enc_addr(operator),
+                enc_bool(*allowed),
+                enc_u64(*expires_at_ms),
+                enc_u64(*nonce),
+            ],
+        }
+    }
+
+    /// `hashStruct(s) = keccak256(typeHash ‖ encodeData(s))`.
+    #[must_use]
+    pub fn hash_struct(&self) -> [u8; 32] {
+        let mut k = Keccak::v256();
+        k.update(&self.type_hash());
+        for word in self.encode_data() {
+            k.update(&word);
+        }
+        let mut out = [0u8; 32];
+        k.finalize(&mut out);
+        out
+    }
+}
+
+/// EIP-712 wrapper binding a [`TypedAction`] to a domain chain id, so it can be
+/// signed through [`crate::wallet::Wallet::sign_eip712`].
+///
+/// The 32-byte digest is `keccak256(0x19 0x01 ‖ domainSeparator ‖ hashStruct)`,
+/// where the domain separator is the shared MetaFlux V1 5-field domain for the
+/// given chain id.
+#[derive(Clone, Debug)]
+pub struct TypedActionDigest<'a> {
+    action: &'a TypedAction,
+    chain_id: u64,
+}
+
+impl<'a> TypedActionDigest<'a> {
+    /// Bind `action` to `chain_id` for signing.
+    #[must_use]
+    pub fn new(action: &'a TypedAction, chain_id: u64) -> Self {
+        Self { action, chain_id }
+    }
+}
+
+impl Eip712 for TypedActionDigest<'_> {
+    fn domain_separator(&self) -> [u8; 32] {
+        metaflux_domain_separator(self.chain_id)
+    }
+
+    fn struct_hash(&self) -> [u8; 32] {
+        self.action.hash_struct()
+    }
+}
+
+/// The MetaFlux V1 EIP-712 domain separator for `chain_id`.
+///
+/// `keccak256(typeHash ‖ keccak256(name) ‖ keccak256(version) ‖ chainId ‖ verifyingContract)`
+/// with `name = "MetaFlux"`, `version = "1"`, `verifyingContract = 0x0`.
+#[must_use]
+pub fn metaflux_domain_separator(chain_id: u64) -> [u8; 32] {
+    let type_hash =
+        keccak(b"EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    let name_hash = keccak(b"MetaFlux");
+    let version_hash = keccak(b"1");
+    let mut chain_be = [0u8; 32];
+    chain_be[24..].copy_from_slice(&chain_id.to_be_bytes());
+    let verifying_padded = [0u8; 32]; // Address::ZERO, left-padded.
+
+    let mut k = Keccak::v256();
+    k.update(&type_hash);
+    k.update(&name_hash);
+    k.update(&version_hash);
+    k.update(&chain_be);
+    k.update(&verifying_padded);
+    let mut out = [0u8; 32];
+    k.finalize(&mut out);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wallet::sign::Eip712;
+
+    fn addr(byte: u8) -> Address {
+        Address::from_bytes([byte; 20])
+    }
+
+    /// Pin the three fully specified KAT vectors from the signing contract
+    /// (chain id 114514 / `"Testnet"`) byte-for-byte.
+    #[test]
+    fn kat_vectors_chain_114514() {
+        let approve_agent = TypedAction::ApproveAgent {
+            metaflux_chain: "Testnet".into(),
+            agent_address: addr(0xA1),
+            agent_name: "trading-bot".into(),
+            nonce: 1,
+        };
+        assert_eq!(
+            hex::encode(TypedActionDigest::new(&approve_agent, 114514).to_digest()),
+            "b5a1178200a97f6ea644abdf4eb21525ad8e13c8ff07b5c4a6809815e6c91820"
+        );
+
+        let send_asset = TypedAction::SendAsset {
+            metaflux_chain: "Testnet".into(),
+            source_dex: 0,
+            destination_dex: 1,
+            asset: 2,
+            destination: addr(0x3C),
+            amount: "750.25".into(),
+            to_perp: true,
+            nonce: 28,
+        };
+        assert_eq!(
+            hex::encode(TypedActionDigest::new(&send_asset, 114514).to_digest()),
+            "88aa17af1dc0d6d35934ada321549a4b8b6a4d964f9c5263e1200b4f696cac4d"
+        );
+
+        let multi_sig = TypedAction::ConvertToMultiSigUser {
+            metaflux_chain: "Testnet".into(),
+            signers: vec![addr(0x11), addr(0x22), addr(0x33)],
+            threshold: 2,
+            nonce: 7,
+        };
+        assert_eq!(
+            hex::encode(TypedActionDigest::new(&multi_sig, 114514).to_digest()),
+            "981a2b3adb1d0c03a7af30076f3c6497ffeabe79e380b01be4f1f14eb1252e84"
+        );
+    }
+
+    #[test]
+    fn chain_tag_mapping() {
+        assert_eq!(metaflux_chain_tag(8964), "Mainnet");
+        assert_eq!(metaflux_chain_tag(114514), "Testnet");
+        assert_eq!(metaflux_chain_tag(31337), "Devnet");
+        assert_eq!(metaflux_chain_tag(7), "Devnet");
+    }
+}

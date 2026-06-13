@@ -21,9 +21,11 @@
 
 mod key;
 mod sign;
+mod typed;
 
 pub use key::{Address, Wallet};
 pub use sign::{Eip712, Signature};
+pub use typed::{TypedAction, TypedActionDigest, metaflux_chain_tag, metaflux_domain_separator};
 
 // Test-only escape hatch used by integration tests + the exchange module's
 // `_recover_for_test` shim. Not part of the stable public API.
