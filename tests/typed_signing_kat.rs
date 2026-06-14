@@ -73,11 +73,12 @@ fn kat_vectors_match_pinned_digests() {
         metaflux_chain: "Testnet".into(),
         agent_address: addr(0xA1),
         agent_name: "trading-bot".into(),
+        expires_at_ms: 1_700_000_000_000,
         nonce: 1,
     };
     assert_eq!(
         hex::encode(_typed_digest_for_test(&approve_agent)),
-        "b5a1178200a97f6ea644abdf4eb21525ad8e13c8ff07b5c4a6809815e6c91820",
+        "569bb62f0cd468264550e8bdc4c37abcf273bdd48569bed37b985c5d6e94693e",
         "ApproveAgent digest drift"
     );
 
@@ -283,6 +284,7 @@ fn every_typed_action_signs_and_recovers() {
             metaflux_chain: chain.clone(),
             agent_address: addr(0xA1),
             agent_name: "trading-bot".into(),
+            expires_at_ms: 1_700_000_000_000,
             nonce: 1,
         },
         TypedAction::SetReferrer {
