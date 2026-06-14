@@ -175,6 +175,7 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         agent_address: crate::wallet::Address,
         agent_name: impl Into<String>,
+        expires_at_ms: u64,
     ) -> Result<Value, ClientError> {
         let agent_name = agent_name.into();
         self.post_signed_typed(wallet, |chain, nonce| {
@@ -182,9 +183,14 @@ impl<'a> Exchange<'a> {
                 metaflux_chain: chain,
                 agent_address,
                 agent_name: agent_name.clone(),
+                expires_at_ms,
                 nonce,
             };
-            let params = json!({ "agent": agent_address, "name": agent_name });
+            let mut params = json!({ "agent": agent_address, "name": agent_name });
+            // `0` = never expires (omit from the wire); a real expiry rides verbatim.
+            if expires_at_ms != 0 {
+                params["expires_at_ms"] = json!(expires_at_ms);
+            }
             (action, "approve_agent", params)
         })
         .await
