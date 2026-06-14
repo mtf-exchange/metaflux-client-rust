@@ -118,7 +118,7 @@ const USD_CLASS_TRANSFER_TYPE: &[u8] =
 const WITHDRAW_TYPE: &[u8] =
     b"MetaFluxTransaction:Withdraw(string metafluxChain,uint32 asset,string amount,uint32 destinationChainId,bool useCctp,uint64 nonce)";
 const APPROVE_AGENT_TYPE: &[u8] =
-    b"MetaFluxTransaction:ApproveAgent(string metafluxChain,address agentAddress,string agentName,uint64 nonce)";
+    b"MetaFluxTransaction:ApproveAgent(string metafluxChain,address agentAddress,string agentName,uint64 expiresAtMs,uint64 nonce)";
 const SET_REFERRER_TYPE: &[u8] =
     b"MetaFluxTransaction:SetReferrer(string metafluxChain,address referrer,uint64 nonce)";
 const APPROVE_BUILDER_FEE_TYPE: &[u8] =
@@ -232,7 +232,7 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
-    /// `ApproveAgent(string metafluxChain,address agentAddress,string agentName,uint64 nonce)`
+    /// `ApproveAgent(string metafluxChain,address agentAddress,string agentName,uint64 expiresAtMs,uint64 nonce)`
     ApproveAgent {
         /// Chain tag.
         metaflux_chain: String,
@@ -240,6 +240,8 @@ pub enum TypedAction {
         agent_address: Address,
         /// Human-readable agent name.
         agent_name: String,
+        /// Approval expiry (ms since epoch). `0` = never expires.
+        expires_at_ms: u64,
         /// Envelope nonce.
         nonce: u64,
     },
@@ -642,11 +644,13 @@ impl TypedAction {
                 metaflux_chain,
                 agent_address,
                 agent_name,
+                expires_at_ms,
                 nonce,
             } => vec![
                 enc_string(metaflux_chain),
                 enc_addr(agent_address),
                 enc_string(agent_name),
+                enc_u64(*expires_at_ms),
                 enc_u64(*nonce),
             ],
             TypedAction::SetReferrer {
@@ -1035,11 +1039,12 @@ mod tests {
             metaflux_chain: "Testnet".into(),
             agent_address: addr(0xA1),
             agent_name: "trading-bot".into(),
+            expires_at_ms: 1_700_000_000_000,
             nonce: 1,
         };
         assert_eq!(
             hex::encode(TypedActionDigest::new(&approve_agent, 114514).to_digest()),
-            "b5a1178200a97f6ea644abdf4eb21525ad8e13c8ff07b5c4a6809815e6c91820"
+            "569bb62f0cd468264550e8bdc4c37abcf273bdd48569bed37b985c5d6e94693e"
         );
 
         let send_asset = TypedAction::SendAsset {
