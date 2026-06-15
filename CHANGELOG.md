@@ -5,6 +5,30 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
+## [0.6.0]
+
+### Added
+
+- Typed EIP-712 signing + `Exchange` methods for `core_evm_transfer` and the
+  ten previously-unsigned account / sub-account / staking / abstraction /
+  priority / encrypted actions: `create_sub_account`, `sub_account_transfer`,
+  `sub_account_spot_transfer`, `c_deposit`, `c_withdraw`,
+  `user_dex_abstraction`, `user_set_abstraction`, `priority_bid`,
+  `cancel_all_orders`, `submit_encrypted_order`. These reach the typed-only
+  `/exchange` path (`sig_scheme: "typed"`); previously they had no structured
+  signing form and were un-submittable.
+- Field-encoding rules matched byte-for-byte to the server + TypeScript SDK:
+  server-flattened `Option<T>` → `(has_x bool, x uintN)` presence/value pairs
+  for `create_sub_account.explicit_index` and `cancel_all_orders.asset` (the
+  presence flag and an absent value are signed but omitted from the POST
+  `params`), `submit_encrypted_order.ciphertext` as EIP-712 `bytes`
+  (`keccak256(raw)`) and `commitment` as `bytes32` (raw 32-byte word), and
+  decimal magnitudes carried verbatim.
+- Known-answer-test vectors pinning the eleven new digests (chain id 114514)
+  to the same server-verified values the TypeScript SDK pins, including the
+  optional-absent variants (`create_sub_account` with no index,
+  `cancel_all_orders` with no asset).
+
 ## [Unreleased]
 
 ### Added

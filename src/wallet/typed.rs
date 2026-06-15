@@ -26,6 +26,7 @@ use tiny_keccak::{Hasher, Keccak};
 
 use crate::wallet::key::Address;
 use crate::wallet::sign::Eip712;
+use crate::wallet::typed_account as account;
 
 /// EIP-712 chain tag (`metafluxChain`) for a domain chain id.
 ///
@@ -44,7 +45,7 @@ pub fn metaflux_chain_tag(chain_id: u64) -> &'static str {
 
 // ===== Encoder toolkit =====
 
-fn keccak(input: &[u8]) -> [u8; 32] {
+pub(crate) fn keccak(input: &[u8]) -> [u8; 32] {
     let mut h = Keccak::v256();
     h.update(input);
     let mut out = [0u8; 32];
@@ -53,49 +54,54 @@ fn keccak(input: &[u8]) -> [u8; 32] {
 }
 
 /// `address` → 20 bytes right-aligned in a 32-byte word (12 zero-byte left pad).
-fn enc_addr(a: &Address) -> [u8; 32] {
+pub(crate) fn enc_addr(a: &Address) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[12..].copy_from_slice(a.as_bytes());
     out
 }
 
 /// `uint256(u64)` → big-endian, zero-left-padded to 32 bytes.
-fn enc_u64(v: u64) -> [u8; 32] {
+pub(crate) fn enc_u64(v: u64) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[24..].copy_from_slice(&v.to_be_bytes());
     out
 }
 
 /// `uint256(u32)` → big-endian, zero-left-padded to 32 bytes.
-fn enc_u32(v: u32) -> [u8; 32] {
+pub(crate) fn enc_u32(v: u32) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[28..].copy_from_slice(&v.to_be_bytes());
     out
 }
 
 /// `uint256(u16)` → big-endian, zero-left-padded to 32 bytes.
-fn enc_u16(v: u16) -> [u8; 32] {
+pub(crate) fn enc_u16(v: u16) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[30..].copy_from_slice(&v.to_be_bytes());
     out
 }
 
 /// `uint256(u8)` → big-endian, zero-left-padded to 32 bytes.
-fn enc_u8(v: u8) -> [u8; 32] {
+pub(crate) fn enc_u8(v: u8) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[31] = v;
     out
 }
 
 /// `bool` → `uint8` `0`/`1`, zero-left-padded to 32 bytes.
-fn enc_bool(v: bool) -> [u8; 32] {
+pub(crate) fn enc_bool(v: bool) -> [u8; 32] {
     enc_u8(u8::from(v))
 }
 
 /// `string` → `keccak256(utf8)`. Decimal fields use the same hashing — the
 /// caller hashes the verbatim canonical string and resends it unchanged.
-fn enc_string(s: &str) -> [u8; 32] {
+pub(crate) fn enc_string(s: &str) -> [u8; 32] {
     keccak(s.as_bytes())
+}
+
+/// `bytes` → `keccak256(raw)`. Used for the encrypted-order ciphertext.
+pub(crate) fn enc_bytes(b: &[u8]) -> [u8; 32] {
+    keccak(b)
 }
 
 /// `address[]` → `keccak256(concat(enc_addr(eᵢ)))`.
@@ -545,6 +551,148 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `CoreEvmTransfer(string metafluxChain,string amount,bool toEvm,address destination,uint64 nonce)`
+    CoreEvmTransfer {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Amount as a canonical decimal string (whole-USDC plane).
+        amount: String,
+        /// Direction: `true` = Core → MetaFluxEVM.
+        to_evm: bool,
+        /// MetaFluxEVM-side recipient address.
+        destination: Address,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `CreateSubAccount(string metafluxChain,string name,bool hasExplicitIndex,uint32 explicitIndex,bool sharedStpGroup,uint64 nonce)`
+    ///
+    /// The optional explicit index flattens to a presence `bool` + value (`0`
+    /// when absent).
+    CreateSubAccount {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Human-readable sub-account name.
+        name: String,
+        /// Explicit-index presence flag.
+        has_explicit_index: bool,
+        /// Explicit sub-account index (`0` when absent).
+        explicit_index: u32,
+        /// Share the parent's STP group.
+        shared_stp_group: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SubAccountTransfer(string metafluxChain,uint32 subIndex,bool deposit,string amount,uint64 nonce)`
+    SubAccountTransfer {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Sub-account index (relative to the sender).
+        sub_index: u32,
+        /// Direction (`true` = parent → sub).
+        deposit: bool,
+        /// Amount as a canonical decimal string.
+        amount: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SubAccountSpotTransfer(string metafluxChain,uint32 subIndex,uint32 token,bool deposit,string amount,uint64 nonce)`
+    SubAccountSpotTransfer {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Sub-account index.
+        sub_index: u32,
+        /// Token (spot asset) id.
+        token: u32,
+        /// Direction (`true` = parent → sub).
+        deposit: bool,
+        /// Amount as a canonical decimal string.
+        amount: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `CDeposit(string metafluxChain,string amount,uint64 nonce)` — spot MTF → free staking pool.
+    CDeposit {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Amount of MTF to move, as a canonical decimal string.
+        amount: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `CWithdraw(string metafluxChain,string amount,uint64 nonce)` — free staking pool → spot MTF.
+    CWithdraw {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Amount of MTF to move, as a canonical decimal string.
+        amount: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `UserDexAbstraction(string metafluxChain,bool enabled,uint64 nonce)`
+    UserDexAbstraction {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Opt-in (`true`) / opt-out (`false`).
+        enabled: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `UserSetAbstraction(string metafluxChain,uint8 kind,string value,uint64 nonce)`
+    UserSetAbstraction {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Sub-type tag.
+        kind: u8,
+        /// Setting value, hashed verbatim as a canonical decimal string.
+        value: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `PriorityBid(string metafluxChain,uint32 asset,uint16 bidBps,uint64 nonce)`
+    PriorityBid {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Asset this bid is bound to.
+        asset: u32,
+        /// Bid in basis points.
+        bid_bps: u16,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `CancelAllOrders(string metafluxChain,bool hasAsset,uint32 asset,uint64 nonce)`
+    ///
+    /// The optional asset filter flattens to a presence `bool` + value (`0` when
+    /// "all assets").
+    CancelAllOrders {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Asset-filter presence flag.
+        has_asset: bool,
+        /// Asset filter (`0` when "all assets").
+        asset: u32,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SubmitEncryptedOrder(string metafluxChain,bytes ciphertext,bytes32 commitment,uint8 threshold,uint64 targetBlock,uint64 revealDeadlineMs,uint64 nonce)`
+    ///
+    /// `ciphertext` hashes as EIP-712 `bytes` (`keccak256(raw)`); `commitment`
+    /// is a `bytes32` carried verbatim into one word.
+    SubmitEncryptedOrder {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Encrypted order ciphertext (hashed as `bytes`).
+        ciphertext: Vec<u8>,
+        /// `keccak(plaintext‖salt)` commitment (`bytes32`).
+        commitment: [u8; 32],
+        /// Threshold shares to reveal.
+        threshold: u8,
+        /// Block height at/after which decryption may proceed.
+        target_block: u64,
+        /// Consensus-time (ms) reveal deadline.
+        reveal_deadline_ms: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
 }
 
 impl TypedAction {
@@ -583,6 +731,17 @@ impl TypedAction {
             TypedAction::EarnWithdraw { .. } => EARN_WITHDRAW_TYPE,
             TypedAction::AgentSetAbstraction { .. } => AGENT_SET_ABSTRACTION_TYPE,
             TypedAction::MbWithdraw { .. } => MB_WITHDRAW_TYPE,
+            TypedAction::CoreEvmTransfer { .. } => account::CORE_EVM_TRANSFER_TYPE,
+            TypedAction::CreateSubAccount { .. } => account::CREATE_SUB_ACCOUNT_TYPE,
+            TypedAction::SubAccountTransfer { .. } => account::SUB_ACCOUNT_TRANSFER_TYPE,
+            TypedAction::SubAccountSpotTransfer { .. } => account::SUB_ACCOUNT_SPOT_TRANSFER_TYPE,
+            TypedAction::CDeposit { .. } => account::C_DEPOSIT_TYPE,
+            TypedAction::CWithdraw { .. } => account::C_WITHDRAW_TYPE,
+            TypedAction::UserDexAbstraction { .. } => account::USER_DEX_ABSTRACTION_TYPE,
+            TypedAction::UserSetAbstraction { .. } => account::USER_SET_ABSTRACTION_TYPE,
+            TypedAction::PriorityBid { .. } => account::PRIORITY_BID_TYPE,
+            TypedAction::CancelAllOrders { .. } => account::CANCEL_ALL_ORDERS_TYPE,
+            TypedAction::SubmitEncryptedOrder { .. } => account::SUBMIT_ENCRYPTED_ORDER_TYPE,
         }
     }
 
@@ -949,6 +1108,112 @@ impl TypedAction {
                 enc_string(dst_addr),
                 enc_u64(*nonce),
             ],
+            TypedAction::CoreEvmTransfer {
+                metaflux_chain,
+                amount,
+                to_evm,
+                destination,
+                nonce,
+            } => account::core_evm_transfer_words(
+                metaflux_chain,
+                amount,
+                *to_evm,
+                destination,
+                *nonce,
+            ),
+            TypedAction::CreateSubAccount {
+                metaflux_chain,
+                name,
+                has_explicit_index,
+                explicit_index,
+                shared_stp_group,
+                nonce,
+            } => account::create_sub_account_words(
+                metaflux_chain,
+                name,
+                *has_explicit_index,
+                *explicit_index,
+                *shared_stp_group,
+                *nonce,
+            ),
+            TypedAction::SubAccountTransfer {
+                metaflux_chain,
+                sub_index,
+                deposit,
+                amount,
+                nonce,
+            } => account::sub_account_transfer_words(
+                metaflux_chain,
+                *sub_index,
+                *deposit,
+                amount,
+                *nonce,
+            ),
+            TypedAction::SubAccountSpotTransfer {
+                metaflux_chain,
+                sub_index,
+                token,
+                deposit,
+                amount,
+                nonce,
+            } => account::sub_account_spot_transfer_words(
+                metaflux_chain,
+                *sub_index,
+                *token,
+                *deposit,
+                amount,
+                *nonce,
+            ),
+            TypedAction::CDeposit {
+                metaflux_chain,
+                amount,
+                nonce,
+            } => account::staking_move_words(metaflux_chain, amount, *nonce),
+            TypedAction::CWithdraw {
+                metaflux_chain,
+                amount,
+                nonce,
+            } => account::staking_move_words(metaflux_chain, amount, *nonce),
+            TypedAction::UserDexAbstraction {
+                metaflux_chain,
+                enabled,
+                nonce,
+            } => account::user_dex_abstraction_words(metaflux_chain, *enabled, *nonce),
+            TypedAction::UserSetAbstraction {
+                metaflux_chain,
+                kind,
+                value,
+                nonce,
+            } => account::user_set_abstraction_words(metaflux_chain, *kind, value, *nonce),
+            TypedAction::PriorityBid {
+                metaflux_chain,
+                asset,
+                bid_bps,
+                nonce,
+            } => account::priority_bid_words(metaflux_chain, *asset, *bid_bps, *nonce),
+            TypedAction::CancelAllOrders {
+                metaflux_chain,
+                has_asset,
+                asset,
+                nonce,
+            } => account::cancel_all_orders_words(metaflux_chain, *has_asset, *asset, *nonce),
+            TypedAction::SubmitEncryptedOrder {
+                metaflux_chain,
+                ciphertext,
+                commitment,
+                threshold,
+                target_block,
+                reveal_deadline_ms,
+                nonce,
+            } => account::submit_encrypted_order_words(
+                metaflux_chain,
+                ciphertext,
+                commitment,
+                *threshold,
+                *target_block,
+                *reveal_deadline_ms,
+                *nonce,
+            ),
         }
     }
 

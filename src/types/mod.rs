@@ -16,6 +16,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod account;
+pub mod core_evm;
 pub mod cross_chain;
 pub mod encrypted;
 pub mod fba;
@@ -27,6 +28,7 @@ pub mod position;
 pub mod rfq;
 pub mod spot;
 pub mod staking;
+pub mod sub_account;
 pub mod twap;
 pub mod vault;
 
