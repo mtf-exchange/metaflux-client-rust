@@ -156,6 +156,7 @@ async fn ws_post_action_info_and_error() {
         cloid: None,
         builder: None,
         position_side: None,
+        trigger: None,
     };
     let resp = client.submit_order(&wallet, &order).await.unwrap();
     assert_eq!(resp.statuses.len(), 1, "one resting status");

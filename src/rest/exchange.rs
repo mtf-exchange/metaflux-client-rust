@@ -59,7 +59,7 @@ use crate::types::{
     twap::{TwapCancel, TwapOrder},
     vault::{CreateVault, VaultDistribute, VaultModify, VaultTransfer, VaultWithdraw},
 };
-use crate::wallet::{Eip712, Signature, Wallet};
+use crate::wallet::{Eip712, Signature, TypedTradingAction, Wallet};
 
 /// MetaFlux EIP-712 domain chain ids.
 ///
@@ -119,7 +119,8 @@ impl<'a> Exchange<'a> {
             )));
         }
         let action = json!({ "type": "submit_order", "order": order });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::SubmitOrder(order))
+            .await
     }
 
     /// Cancel an order by `oid` or by `cloid`.
@@ -139,7 +140,8 @@ impl<'a> Exchange<'a> {
             )));
         }
         let action = json!({ "type": "cancel_order", "cancel": cancel });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::CancelOrder(cancel))
+            .await
     }
 
     /// Toggle the signing account's position mode (hedge / two-way vs one-way).
@@ -178,7 +180,8 @@ impl<'a> Exchange<'a> {
         order: &SpotOrder,
     ) -> Result<OrderResponse, ClientError> {
         let action = json!({ "type": "spot_order", "order": order });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::SpotOrder(order))
+            .await
     }
 
     /// Cancel a resting spot order by `oid`.
@@ -191,7 +194,8 @@ impl<'a> Exchange<'a> {
         cancel: &SpotCancel,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "spot_cancel", "cancel": cancel });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::SpotCancel(cancel))
+            .await
     }
 
     /// Post quote collateral into a spot-margin account (spot margin / Earn,
@@ -308,7 +312,8 @@ impl<'a> Exchange<'a> {
         params: &CancelByCloid,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "cancel_by_cloid", "params": params });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::CancelByCloid(params))
+            .await
     }
 
     /// Amend a resting order's price and/or size in place.
@@ -317,7 +322,8 @@ impl<'a> Exchange<'a> {
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn modify(&self, wallet: &Wallet, params: &Modify) -> Result<Value, ClientError> {
         let action = json!({ "type": "modify", "params": params });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::Modify(params))
+            .await
     }
 
     /// Apply N modifications under one signature.
@@ -330,7 +336,8 @@ impl<'a> Exchange<'a> {
         params: &BatchModify,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "batch_modify", "params": params });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::BatchModify(params))
+            .await
     }
 
     /// Place N orders under one signature.
@@ -357,7 +364,8 @@ impl<'a> Exchange<'a> {
             }
         }
         let action = json!({ "type": "batch_order", "params": batch });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::BatchOrder(batch))
+            .await
     }
 
     /// Apply N cancels under one signature. Each cancel's `owner` MUST equal the
@@ -381,7 +389,8 @@ impl<'a> Exchange<'a> {
             }
         }
         let action = json!({ "type": "batch_cancel", "params": batch });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::BatchCancel(batch))
+            .await
     }
 
     /// Schedule a cancel-all of the sender's open orders at a future block.
@@ -394,7 +403,8 @@ impl<'a> Exchange<'a> {
         params: &ScheduleCancel,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "schedule_cancel", "params": params });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::ScheduleCancel(params))
+            .await
     }
 
     /// Cancel all of the sender's open orders (optionally for a single asset).
@@ -422,7 +432,8 @@ impl<'a> Exchange<'a> {
         params: &TwapOrder,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "twap_order", "params": params });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::TwapOrder(params))
+            .await
     }
 
     /// Cancel a running TWAP parent by id.
@@ -435,7 +446,8 @@ impl<'a> Exchange<'a> {
         params: &TwapCancel,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "twap_cancel", "params": params });
-        self.post_signed(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::TwapCancel(params))
+            .await
     }
 
     // ---- leverage & margin ----
