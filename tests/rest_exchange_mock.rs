@@ -10,6 +10,7 @@
 use metaflux_client::{
     Client,
     rest::exchange::{_action_digest_for_test, _recover_for_test},
+    rest::exchange_typed::_typed_trade_digest_for_test,
     types::{
         MarketId, OrderId,
         account::UpdateLeverage,
@@ -19,7 +20,7 @@ use metaflux_client::{
         spot::{EarnWithdraw, SpotMarginOpen},
         vault::{CreateVault, VaultKind},
     },
-    wallet::Wallet,
+    wallet::{TypedTradingAction, Wallet},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -89,6 +90,7 @@ async fn submit_order_envelope_includes_valid_signature() {
         cloid: None,
         builder: None,
         position_side: None,
+        trigger: None,
     };
     let resp = client
         .exchange()
@@ -116,15 +118,21 @@ async fn submit_order_envelope_includes_valid_signature() {
         .and_then(Value::as_str)
         .expect("envelope has signature");
 
-    // Confirm the action is the typed submit_order shape.
+    // Confirm the action is the typed submit_order shape, signed under the
+    // typed scheme (the node no longer admits orders under the opaque envelope).
     assert_eq!(
         action.get("type").and_then(Value::as_str),
         Some("submit_order")
     );
     assert!(action.get("order").is_some());
+    assert_eq!(
+        captured.get("sig_scheme").and_then(Value::as_str),
+        Some("typed"),
+        "trading actions must sign under sig_scheme=typed"
+    );
 
-    // Reproduce the same EIP-712 digest and recover the signer.
-    let digest = _action_digest_for_test(&action, nonce);
+    // Reproduce the typed trading digest and recover the signer.
+    let digest = _typed_trade_digest_for_test(TypedTradingAction::SubmitOrder(&order), nonce);
     let sig = decode_sig(sig_hex);
     let recovered = _recover_for_test(&digest, &sig).expect("recover");
     assert_eq!(
@@ -168,7 +176,8 @@ async fn cancel_order_round_trips_through_exchange() {
     let nonce = body["nonce"].as_u64().unwrap();
     let sig_hex = body["signature"].as_str().unwrap();
     assert_eq!(action["type"].as_str(), Some("cancel_order"));
-    let digest = _action_digest_for_test(&action, nonce);
+    assert_eq!(body["sig_scheme"].as_str(), Some("typed"));
+    let digest = _typed_trade_digest_for_test(TypedTradingAction::CancelOrder(&cancel), nonce);
     let sig = decode_sig(sig_hex);
     let recovered = _recover_for_test(&digest, &sig).expect("recover");
     assert_eq!(recovered, wallet.address());
@@ -201,6 +210,7 @@ async fn submit_order_rejects_mismatched_owner_locally() {
         cloid: None,
         builder: None,
         position_side: None,
+        trigger: None,
     };
     let err = client
         .exchange()
@@ -419,6 +429,7 @@ async fn batch_order_rejects_mismatched_owner_locally() {
         cloid: None,
         builder: None,
         position_side: None,
+        trigger: None,
     };
     // Second order is owned by a different address → local validation rejects.
     let batch = BatchOrder {

@@ -14,7 +14,10 @@ use serde_json::{Value, json};
 
 use crate::error::ClientError;
 use crate::rest::exchange::{Exchange, MTF_CHAIN_ID, next_nonce};
-use crate::wallet::{Eip712, TypedAction, TypedActionDigest, Wallet, metaflux_chain_tag};
+use crate::wallet::{
+    Eip712, TypedAction, TypedActionDigest, TypedTradingAction, TypedTradingDigest, Wallet,
+    metaflux_chain_tag,
+};
 
 /// A typed-scheme signed action ready to POST to `/exchange`.
 ///
@@ -924,6 +927,29 @@ impl<'a> Exchange<'a> {
         };
         self.client.post_json("/exchange", &envelope).await
     }
+
+    /// Sign a TRADING action (order / cancel / TWAP / batch) under the typed
+    /// scheme and POST it. The 12 trading actions migrated to the typed scheme
+    /// in node lockstep — the opaque `MetaFluxAction` envelope is no longer
+    /// admitted for them. `action` is the canonical `{ type, … }` wire JSON;
+    /// `typed` is its structured form, bound to the same nonce for the digest.
+    pub(crate) async fn post_typed_trade<R: serde::de::DeserializeOwned>(
+        &self,
+        wallet: &Wallet,
+        action: Value,
+        typed: TypedTradingAction<'_>,
+    ) -> Result<R, ClientError> {
+        let nonce = next_nonce();
+        let digest = TypedTradingDigest::new(typed, MTF_CHAIN_ID, nonce).digest()?;
+        let signature = wallet.sign_digest(&digest)?.to_hex();
+        let envelope = TypedSignedEnvelope {
+            action: &action,
+            nonce,
+            signature,
+            sig_scheme: "typed",
+        };
+        self.client.post_json("/exchange", &envelope).await
+    }
 }
 
 /// Test-only escape hatch: compute the typed-scheme EIP-712 digest the SDK
@@ -933,4 +959,13 @@ impl<'a> Exchange<'a> {
 #[doc(hidden)]
 pub fn _typed_digest_for_test(action: &TypedAction) -> [u8; 32] {
     TypedActionDigest::new(action, MTF_CHAIN_ID).to_digest()
+}
+
+/// Test-only escape hatch: the typed-scheme EIP-712 digest for a TRADING action
+/// (order / cancel / …) against the default [`MTF_CHAIN_ID`] + given nonce.
+#[doc(hidden)]
+pub fn _typed_trade_digest_for_test(action: TypedTradingAction<'_>, nonce: u64) -> [u8; 32] {
+    TypedTradingDigest::new(action, MTF_CHAIN_ID, nonce)
+        .digest()
+        .expect("typed trade digest")
 }

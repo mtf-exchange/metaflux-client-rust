@@ -51,6 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cloid: None,
         builder: None,
         position_side: None, // one-way account
+        trigger: None,
     };
 
     let resp = client.exchange().submit_order(&wallet, &order).await?;
