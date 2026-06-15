@@ -22,6 +22,7 @@
 mod key;
 mod sign;
 mod typed;
+mod typed_account;
 mod typed_orders;
 
 pub use key::{Address, Wallet};

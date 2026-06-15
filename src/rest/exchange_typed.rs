@@ -901,6 +901,338 @@ impl<'a> Exchange<'a> {
         .await
     }
 
+    /// Transfer USDC between Core and MetaFluxEVM under the typed scheme.
+    ///
+    /// `amount` is a canonical decimal string (whole-USDC plane); `to_evm = true`
+    /// moves Core → MetaFluxEVM, `false` the reverse. `destination` is the
+    /// MetaFluxEVM-side recipient.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn core_evm_transfer_typed(
+        &self,
+        wallet: &Wallet,
+        amount: impl Into<String>,
+        to_evm: bool,
+        destination: crate::wallet::Address,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::CoreEvmTransfer {
+                metaflux_chain: chain,
+                amount: amount.clone(),
+                to_evm,
+                destination,
+                nonce,
+            };
+            let params = json!({
+                "amount": amount,
+                "to_evm": to_evm,
+                "destination": destination,
+            });
+            (action, "core_evm_transfer", params)
+        })
+        .await
+    }
+
+    /// Create a sub-account under the signing (parent) account, under the typed
+    /// scheme.
+    ///
+    /// `explicit_index` is optional: `None` lets the node assign the next free
+    /// index and omits the field from the wire (the signed digest flattens the
+    /// optional to a presence `bool` + value `0`).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn create_sub_account_typed(
+        &self,
+        wallet: &Wallet,
+        name: impl Into<String>,
+        explicit_index: Option<u32>,
+        shared_stp_group: bool,
+    ) -> Result<Value, ClientError> {
+        let name = name.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::CreateSubAccount {
+                metaflux_chain: chain,
+                name: name.clone(),
+                has_explicit_index: explicit_index.is_some(),
+                explicit_index: explicit_index.unwrap_or(0),
+                shared_stp_group,
+                nonce,
+            };
+            let mut params = json!({ "name": name, "shared_stp_group": shared_stp_group });
+            // Absent index is omitted from the wire; the signed digest still
+            // covers the flattened (false, 0) pair.
+            if let Some(idx) = explicit_index {
+                params["explicit_index"] = json!(idx);
+            }
+            (action, "create_sub_account", params)
+        })
+        .await
+    }
+
+    /// Move quote collateral between the parent and a sub-account under the typed
+    /// scheme.
+    ///
+    /// `amount` is a canonical decimal string; `deposit = true` moves
+    /// parent → sub.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn sub_account_transfer_typed(
+        &self,
+        wallet: &Wallet,
+        sub_index: u32,
+        deposit: bool,
+        amount: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SubAccountTransfer {
+                metaflux_chain: chain,
+                sub_index,
+                deposit,
+                amount: amount.clone(),
+                nonce,
+            };
+            let params = json!({
+                "sub_index": sub_index,
+                "deposit": deposit,
+                "amount": amount,
+            });
+            (action, "sub_account_transfer", params)
+        })
+        .await
+    }
+
+    /// Move a spot token between the parent and a sub-account under the typed
+    /// scheme.
+    ///
+    /// `amount` is a canonical decimal string; `deposit = true` moves
+    /// parent → sub.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn sub_account_spot_transfer_typed(
+        &self,
+        wallet: &Wallet,
+        sub_index: u32,
+        token: u32,
+        deposit: bool,
+        amount: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SubAccountSpotTransfer {
+                metaflux_chain: chain,
+                sub_index,
+                token,
+                deposit,
+                amount: amount.clone(),
+                nonce,
+            };
+            let params = json!({
+                "sub_index": sub_index,
+                "token": token,
+                "deposit": deposit,
+                "amount": amount,
+            });
+            (action, "sub_account_spot_transfer", params)
+        })
+        .await
+    }
+
+    /// Move spot MTF into the free staking pool (`c_deposit`) under the typed
+    /// scheme.
+    ///
+    /// `amount` is a canonical decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn c_deposit_typed(
+        &self,
+        wallet: &Wallet,
+        amount: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::CDeposit {
+                metaflux_chain: chain,
+                amount: amount.clone(),
+                nonce,
+            };
+            (action, "c_deposit", json!({ "amount": amount }))
+        })
+        .await
+    }
+
+    /// Move MTF from the free staking pool back to spot (`c_withdraw`) under the
+    /// typed scheme.
+    ///
+    /// `amount` is a canonical decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn c_withdraw_typed(
+        &self,
+        wallet: &Wallet,
+        amount: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::CWithdraw {
+                metaflux_chain: chain,
+                amount: amount.clone(),
+                nonce,
+            };
+            (action, "c_withdraw", json!({ "amount": amount }))
+        })
+        .await
+    }
+
+    /// Toggle the account's DEX-abstraction opt-in flag under the typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn user_dex_abstraction_typed(
+        &self,
+        wallet: &Wallet,
+        enabled: bool,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::UserDexAbstraction {
+                metaflux_chain: chain,
+                enabled,
+                nonce,
+            };
+            (
+                action,
+                "user_dex_abstraction",
+                json!({ "enabled": enabled }),
+            )
+        })
+        .await
+    }
+
+    /// Set a self-scoped abstraction config value under the typed scheme.
+    ///
+    /// `value` is hashed verbatim as a canonical decimal string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn user_set_abstraction_typed(
+        &self,
+        wallet: &Wallet,
+        kind: u8,
+        value: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let value = value.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::UserSetAbstraction {
+                metaflux_chain: chain,
+                kind,
+                value: value.clone(),
+                nonce,
+            };
+            let params = json!({ "kind": kind, "value": value });
+            (action, "user_set_abstraction", params)
+        })
+        .await
+    }
+
+    /// Pay a priority fee (bps) for block-front placement on an asset under the
+    /// typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn priority_bid_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        bid_bps: u16,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PriorityBid {
+                metaflux_chain: chain,
+                asset,
+                bid_bps,
+                nonce,
+            };
+            let params = json!({ "asset": asset, "bid_bps": bid_bps });
+            (action, "priority_bid", params)
+        })
+        .await
+    }
+
+    /// Cancel all of the sender's open orders (optionally for one asset) under
+    /// the typed scheme.
+    ///
+    /// `asset` is optional: `None` cancels across all assets and omits the field
+    /// from the wire (the signed digest flattens the optional to a presence
+    /// `bool` + value `0`).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn cancel_all_orders_typed(
+        &self,
+        wallet: &Wallet,
+        asset: Option<u32>,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::CancelAllOrders {
+                metaflux_chain: chain,
+                has_asset: asset.is_some(),
+                asset: asset.unwrap_or(0),
+                nonce,
+            };
+            let params = match asset {
+                Some(a) => json!({ "asset": a }),
+                None => json!({}),
+            };
+            (action, "cancel_all_orders", params)
+        })
+        .await
+    }
+
+    /// Submit a threshold-encrypted order under the typed scheme.
+    ///
+    /// `ciphertext` is signed as EIP-712 `bytes` (`keccak256(raw)`) and posted as
+    /// a JSON byte array; `commitment` is a 32-byte `bytes32` carried verbatim.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn submit_encrypted_order_typed(
+        &self,
+        wallet: &Wallet,
+        ciphertext: Vec<u8>,
+        commitment: [u8; 32],
+        threshold: u8,
+        target_block: u64,
+        reveal_deadline_ms: u64,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SubmitEncryptedOrder {
+                metaflux_chain: chain,
+                ciphertext: ciphertext.clone(),
+                commitment,
+                threshold,
+                target_block,
+                reveal_deadline_ms,
+                nonce,
+            };
+            let params = json!({
+                "ciphertext": ciphertext,
+                "commitment": commitment.to_vec(),
+                "threshold": threshold,
+                "target_block": target_block,
+                "reveal_deadline_ms": reveal_deadline_ms,
+            });
+            (action, "submit_encrypted_order", params)
+        })
+        .await
+    }
+
     /// Sign + POST a structured (typed-scheme) action.
     ///
     /// The closure is handed the chain tag and a fresh nonce; it returns the

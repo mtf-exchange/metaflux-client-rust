@@ -244,6 +244,168 @@ fn extended_kat_vectors_match_pinned_digests() {
     }
 }
 
+/// (1c) The eleven newly-typed actions (`core_evm_transfer` + the account /
+/// sub-account / staking / abstraction / priority / encrypted set) must
+/// reproduce the frozen contract digests (chain id 114514 / `"Testnet"`) — the
+/// SAME byte-for-byte digests the TS SDK and the server pin. Covers the
+/// optional-flatten (`create_sub_account` / `cancel_all_orders` present AND
+/// absent), the `bytes` / `bytes32` rule (`submit_encrypted_order`), and the
+/// verbatim-decimal-string rule (`amount` / `value`).
+#[test]
+fn newly_typed_kat_vectors_match_pinned_digests() {
+    let cases: Vec<(TypedAction, &str)> = vec![
+        (
+            TypedAction::CoreEvmTransfer {
+                metaflux_chain: "Testnet".into(),
+                amount: "250.5".into(),
+                to_evm: true,
+                destination: addr(0xCE),
+                nonce: 52,
+            },
+            "afab7aec6d4b9ab674162a745a79e1f0f3939b75710236a2d255a0d6d64ab499",
+        ),
+        (
+            // explicit_index present => hasExplicitIndex=true, explicitIndex=5.
+            TypedAction::CreateSubAccount {
+                metaflux_chain: "Testnet".into(),
+                name: "bot".into(),
+                has_explicit_index: true,
+                explicit_index: 5,
+                shared_stp_group: true,
+                nonce: 53,
+            },
+            "d4ab521e447ba69431403946797bc4fed4f7ab1c395fbde55170dae5cd5872ef",
+        ),
+        (
+            TypedAction::SubAccountTransfer {
+                metaflux_chain: "Testnet".into(),
+                sub_index: 0,
+                deposit: true,
+                amount: "100.5".into(),
+                nonce: 55,
+            },
+            "741b3707a6530c4410d54ed1f80a9581ad3d7255a8d84dc93356adf71fb90910",
+        ),
+        (
+            TypedAction::SubAccountSpotTransfer {
+                metaflux_chain: "Testnet".into(),
+                sub_index: 2,
+                token: 7,
+                deposit: false,
+                amount: "42.0".into(),
+                nonce: 56,
+            },
+            "0c2e9be9c1372f62cbd6f6122a9d5f48589ae966ec1717ddd1fe8a56984997d4",
+        ),
+        (
+            TypedAction::CDeposit {
+                metaflux_chain: "Testnet".into(),
+                amount: "500".into(),
+                nonce: 57,
+            },
+            "59e1ad2f5970799c5ac2f84f859757c6b102bfefa0e42edc1068ed2a33240d39",
+        ),
+        (
+            TypedAction::CWithdraw {
+                metaflux_chain: "Testnet".into(),
+                amount: "500".into(),
+                nonce: 58,
+            },
+            "66466daf4a1f531f167ea4d131ee4c41c5e16d75e3a85bd0cc739633b763b4cf",
+        ),
+        (
+            TypedAction::UserDexAbstraction {
+                metaflux_chain: "Testnet".into(),
+                enabled: true,
+                nonce: 59,
+            },
+            "5fad4db7c576767400c930e5ed312847e17741526db66f6f918ff027a6e7b2d6",
+        ),
+        (
+            TypedAction::UserSetAbstraction {
+                metaflux_chain: "Testnet".into(),
+                kind: 3,
+                value: "9.9".into(),
+                nonce: 60,
+            },
+            "8a84c2fe0594d1db9f4bb6c3db0c539cec75b7c759d053818db92d7acc107148",
+        ),
+        (
+            TypedAction::PriorityBid {
+                metaflux_chain: "Testnet".into(),
+                asset: 8,
+                bid_bps: 6,
+                nonce: 61,
+            },
+            "aaffc74728255d071f7c3033ddb4aa81f822269e7ba3742172933fd238cc3522",
+        ),
+        (
+            // asset present => hasAsset=true, asset=4.
+            TypedAction::CancelAllOrders {
+                metaflux_chain: "Testnet".into(),
+                has_asset: true,
+                asset: 4,
+                nonce: 62,
+            },
+            "9088140fe0311f99071e2c45e5eff506052fa787e6eb44e0d110a198fb5a3bf7",
+        ),
+        (
+            TypedAction::SubmitEncryptedOrder {
+                metaflux_chain: "Testnet".into(),
+                ciphertext: vec![1, 2, 3, 4],
+                commitment: [0x11; 32],
+                threshold: 2,
+                target_block: 1000,
+                reveal_deadline_ms: 5000,
+                nonce: 64,
+            },
+            "86657cd5b8920543f8e4ec41790aeb0957af3c4d2440e25d8009cfa9e5fc9675",
+        ),
+    ];
+    assert_eq!(cases.len(), 11, "all 11 newly-typed actions pinned");
+    for (action, want) in &cases {
+        assert_eq!(
+            hex::encode(_typed_digest_for_test(action)),
+            *want,
+            "newly-typed digest drift for {action:?}"
+        );
+    }
+}
+
+/// (1d) The optional-flatten ABSENT variants must reproduce the frozen
+/// contract digests the TS SDK + server pin: `create_sub_account` with NO index
+/// (`hasExplicitIndex=false`, `explicitIndex=0`) and `cancel_all_orders` with NO
+/// asset (`hasAsset=false`, `asset=0`). These are the highest-risk regressions —
+/// an absent optional must still sign the flattened `(false, 0)` pair.
+#[test]
+fn optional_absent_typed_kat_vectors_match_pinned_digests() {
+    let create_sub_account_no_index = TypedAction::CreateSubAccount {
+        metaflux_chain: "Testnet".into(),
+        name: "bot".into(),
+        has_explicit_index: false,
+        explicit_index: 0,
+        shared_stp_group: false,
+        nonce: 54,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&create_sub_account_no_index)),
+        "9a8663dc58851e1e0baf4a04a1fcdc38ca5b13b8017eb49554a10b9060ae5eff",
+        "create_sub_account (no index) digest drift"
+    );
+
+    let cancel_all_orders_no_asset = TypedAction::CancelAllOrders {
+        metaflux_chain: "Testnet".into(),
+        has_asset: false,
+        asset: 0,
+        nonce: 63,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&cancel_all_orders_no_asset)),
+        "cd7cb102701e9d114bad62d2b693a3f1d4ea78ae5e6ea243a496720debac97e4",
+        "cancel_all_orders (no asset) digest drift"
+    );
+}
+
 /// (2) Every typed action signs to a 65-byte `r||s||v` that recovers the
 /// signing wallet — proving the SDK's digest + signature are accepted by the
 /// node's recovery contract across the whole typed surface.
@@ -441,15 +603,87 @@ fn every_typed_action_signs_and_recovers() {
             nonce: 28,
         },
         TypedAction::MbWithdraw {
-            metaflux_chain: chain,
+            metaflux_chain: chain.clone(),
             chain: 2,
             asset: 1,
             amount: 1_000_000,
             dst_addr: "0xdeadbeef".into(),
             nonce: 29,
         },
+        TypedAction::CoreEvmTransfer {
+            metaflux_chain: chain.clone(),
+            amount: "250.5".into(),
+            to_evm: true,
+            destination: addr(0xCE),
+            nonce: 30,
+        },
+        TypedAction::CreateSubAccount {
+            metaflux_chain: chain.clone(),
+            name: "bot".into(),
+            has_explicit_index: true,
+            explicit_index: 5,
+            shared_stp_group: true,
+            nonce: 31,
+        },
+        TypedAction::SubAccountTransfer {
+            metaflux_chain: chain.clone(),
+            sub_index: 0,
+            deposit: true,
+            amount: "100.5".into(),
+            nonce: 32,
+        },
+        TypedAction::SubAccountSpotTransfer {
+            metaflux_chain: chain.clone(),
+            sub_index: 2,
+            token: 7,
+            deposit: false,
+            amount: "42.0".into(),
+            nonce: 33,
+        },
+        TypedAction::CDeposit {
+            metaflux_chain: chain.clone(),
+            amount: "500".into(),
+            nonce: 34,
+        },
+        TypedAction::CWithdraw {
+            metaflux_chain: chain.clone(),
+            amount: "500".into(),
+            nonce: 35,
+        },
+        TypedAction::UserDexAbstraction {
+            metaflux_chain: chain.clone(),
+            enabled: true,
+            nonce: 36,
+        },
+        TypedAction::UserSetAbstraction {
+            metaflux_chain: chain.clone(),
+            kind: 3,
+            value: "9.9".into(),
+            nonce: 37,
+        },
+        TypedAction::PriorityBid {
+            metaflux_chain: chain.clone(),
+            asset: 8,
+            bid_bps: 6,
+            nonce: 38,
+        },
+        TypedAction::CancelAllOrders {
+            metaflux_chain: chain.clone(),
+            has_asset: false,
+            asset: 0,
+            nonce: 39,
+        },
+        TypedAction::SubmitEncryptedOrder {
+            metaflux_chain: chain,
+            ciphertext: vec![1, 2, 3, 4],
+            commitment: [0x11; 32],
+            threshold: 2,
+            target_block: 1000,
+            reveal_deadline_ms: 5000,
+            nonce: 40,
+        },
     ];
-    assert_eq!(actions.len(), 30, "all 30 reachable typed actions covered");
+    assert_eq!(actions.len(), 41, "all 41 reachable typed actions covered");
 
     for action in &actions {
         let digest = _typed_digest_for_test(action);

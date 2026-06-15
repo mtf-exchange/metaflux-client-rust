@@ -36,6 +36,26 @@ pub struct LinkStakingUser {
     pub target: Address,
 }
 
+/// Action — move spot MTF into the free (undelegated) staking pool (`c_deposit`).
+///
+/// Sender-authorized. `amount` rides the wire as a decimal **string**.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CDeposit {
+    /// Amount of MTF to move, as a decimal string.
+    pub amount: String,
+}
+
+/// Action — move MTF from the free staking pool back to spot (`c_withdraw`).
+///
+/// Sender-authorized. `amount` rides the wire as a decimal **string**.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CWithdraw {
+    /// Amount of MTF to move, as a decimal string.
+    pub amount: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,5 +79,22 @@ mod tests {
         let a = ClaimRewards { validator: None };
         let j = serde_json::to_value(a).unwrap();
         assert!(j.get("validator").is_none());
+    }
+
+    #[test]
+    fn c_deposit_withdraw_amount_is_string() {
+        let d = CDeposit {
+            amount: "500".into(),
+        };
+        let jd = serde_json::to_value(&d).unwrap();
+        assert_eq!(jd["amount"], serde_json::json!("500"));
+        assert_eq!(serde_json::from_value::<CDeposit>(jd).unwrap(), d);
+
+        let w = CWithdraw {
+            amount: "500".into(),
+        };
+        let jw = serde_json::to_value(&w).unwrap();
+        assert_eq!(jw["amount"], serde_json::json!("500"));
+        assert_eq!(serde_json::from_value::<CWithdraw>(jw).unwrap(), w);
     }
 }
