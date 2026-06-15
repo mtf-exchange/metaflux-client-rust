@@ -131,6 +131,33 @@ pub struct Order {
     /// byte-identical to the pre-hedge-mode shape.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub position_side: Option<PositionSide>,
+    /// Trigger block for `stop_loss` / `take_profit` orders. `None` for plain
+    /// limit / market orders (omitted on the wire). Carries the activation
+    /// price, whether it fires as a market order, and the TP/SL kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<Trigger>,
+}
+
+/// TP/SL discriminator for an order [`Trigger`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TpSl {
+    /// Take-profit.
+    Tp,
+    /// Stop-loss.
+    Sl,
+}
+
+/// Trigger block riding inside a stop-loss / take-profit order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Trigger {
+    /// Activation price on the 1e8 fixed-point price plane (u64).
+    pub trigger_px: u64,
+    /// `true` → fire as a market order when triggered; `false` → stop-limit.
+    pub is_market: bool,
+    /// Take-profit vs stop-loss.
+    pub tpsl: TpSl,
 }
 
 /// Builder-code fee attribution riding inside a signed order.
@@ -352,6 +379,7 @@ mod tests {
             cloid: None,
             builder: None,
             position_side: None,
+            trigger: None,
         }
     }
 

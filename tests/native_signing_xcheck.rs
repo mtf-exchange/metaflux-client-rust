@@ -245,6 +245,7 @@ fn sdk_submit_order_path_round_trips() {
         cloid: None,
         builder: None,
         position_side: None,
+        trigger: None,
     };
     // This is exactly the Value the SDK's `Exchange::submit_order` builds and
     // both signs over and POSTs (the server hashes the identical bytes).
@@ -371,6 +372,7 @@ fn sdk_hedge_perp_order_path_round_trips() {
         cloid: None,
         builder: None,
         position_side: Some(PositionSide::Long),
+        trigger: None,
     };
     let action = json!({ "type": "submit_order", "order": order });
     assert_action_round_trips(&action);
@@ -404,6 +406,7 @@ fn one_way_perp_order_bytes_match_legacy_kat_shape() {
         cloid: None,
         builder: None,
         position_side: None,
+        trigger: None,
     };
     // Serialize the struct directly (declaration order) — this is the `order`
     // sub-object the server KAT pins. `position_side: None` must NOT appear.

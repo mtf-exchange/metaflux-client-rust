@@ -27,6 +27,7 @@ fn order(owner: metaflux_client::wallet::Address, side: Side, px: u64) -> Order 
         cloid: None,
         builder: None,
         position_side: None, // one-way account
+        trigger: None,
     }
 }
 
