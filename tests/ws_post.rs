@@ -18,12 +18,13 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use metaflux_client::{
     ClientError,
-    rest::exchange::{_action_digest_for_test, _recover_for_test},
+    rest::exchange::_recover_for_test,
+    rest::exchange_typed::_typed_trade_digest_for_test,
     types::{
         MarketId,
         order::{Order, OrderKind, Side, StpMode, TimeInForce},
     },
-    wallet::{Signature, Wallet},
+    wallet::{Signature, TypedTradingAction, Wallet},
     ws::{WsClient, WsConfig},
 };
 use serde_json::{Value, json};
@@ -177,12 +178,17 @@ async fn ws_post_action_info_and_error() {
         action.get("type").and_then(Value::as_str),
         Some("submit_order")
     );
-    let digest = _action_digest_for_test(&action, nonce);
+    assert_eq!(
+        payload.get("sig_scheme").and_then(Value::as_str),
+        Some("typed"),
+        "WS trading actions must sign under sig_scheme=typed"
+    );
+    let digest = _typed_trade_digest_for_test(TypedTradingAction::SubmitOrder(&order), nonce);
     let recovered = _recover_for_test(&digest, &decode_sig(sig_hex)).expect("recover");
     assert_eq!(
         recovered,
         wallet.address(),
-        "WS post action must sign the same EIP-712 digest as REST"
+        "WS post action must sign the same typed EIP-712 digest as REST"
     );
 
     // 2. post_info round-trips its payload through the echo.

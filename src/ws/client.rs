@@ -26,7 +26,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::error::ClientError;
 use crate::types::order::{CancelOrder, Order, OrderResponse};
-use crate::wallet::Wallet;
+use crate::wallet::{TypedTradingAction, TypedTradingDigest, Wallet};
 use crate::ws::subscriptions::{Subscription, WsMessage};
 
 /// Tunable WS configuration.
@@ -334,6 +334,29 @@ impl WsClient {
         self.post_request("action", payload).await
     }
 
+    /// Issue a TRADING action (order / cancel / …) over the WS `post` channel,
+    /// signed under the typed scheme. The 12 trading actions migrated to the
+    /// typed scheme (the node rejects them under the opaque envelope), so the WS
+    /// `post` path carries `sig_scheme:"typed"` alongside the structured digest.
+    async fn post_typed_trade(
+        &self,
+        wallet: &Wallet,
+        action: Value,
+        typed: TypedTradingAction<'_>,
+    ) -> Result<Value, ClientError> {
+        let nonce = crate::rest::exchange::next_nonce();
+        let digest =
+            TypedTradingDigest::new(typed, crate::rest::exchange::MTF_CHAIN_ID, nonce).digest()?;
+        let signature = wallet.sign_digest(&digest)?.to_hex();
+        let payload = json!({
+            "signature": signature,
+            "nonce": nonce,
+            "action": action,
+            "sig_scheme": "typed",
+        });
+        self.post_request("action", payload).await
+    }
+
     /// Issue an `info` read over the WebSocket `post` channel, returning the
     /// info response payload.
     ///
@@ -373,7 +396,9 @@ impl WsClient {
             )));
         }
         let action = json!({ "type": "submit_order", "order": order });
-        let payload = self.post_action(wallet, action).await?;
+        let payload = self
+            .post_typed_trade(wallet, action, TypedTradingAction::SubmitOrder(order))
+            .await?;
         Ok(serde_json::from_value(payload)?)
     }
 
@@ -398,7 +423,8 @@ impl WsClient {
             )));
         }
         let action = json!({ "type": "cancel_order", "cancel": cancel });
-        self.post_action(wallet, action).await
+        self.post_typed_trade(wallet, action, TypedTradingAction::CancelOrder(cancel))
+            .await
     }
 
     /// Core `post` machinery: assign a correlation id, ship the frame to the
