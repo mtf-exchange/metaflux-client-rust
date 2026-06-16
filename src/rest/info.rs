@@ -301,8 +301,8 @@ pub enum MarginMode {
 ///
 /// Distinct from [`crate::types::position::Position`] (the `user_state`
 /// element): this is the `account_state.positions[*]` shape from
-/// the `/info` contract. `size` / `entry_px` / `unrealised_pnl` are fixed-point
-/// **string** numerics; `leverage` is an integer.
+/// the `/info` contract. `size` / `entry` / `upnl` are fixed-point
+/// **string** numerics; `lev` is an integer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct AccountPosition {
@@ -311,12 +311,15 @@ pub struct AccountPosition {
     /// Signed position size, fixed-point as a decimal string.
     pub size: String,
     /// Volume-weighted entry price, fixed-point as a decimal string.
+    #[serde(rename = "entry")]
     pub entry_px: String,
     /// Unrealised PnL (signed), USDC base units as a decimal string.
+    #[serde(rename = "upnl")]
     pub unrealised_pnl: String,
     /// Whether this position uses isolated margin.
     pub isolated: bool,
     /// Per-asset leverage multiple.
+    #[serde(rename = "lev")]
     pub leverage: u32,
 }
 
@@ -857,10 +860,10 @@ mod tests {
             "positions": [{
                 "asset": 0,
                 "size": "100000000",
-                "entry_px": "10000000000",
-                "unrealised_pnl": "500000",
+                "entry": "10000000000",
+                "upnl": "500000",
                 "isolated": false,
-                "leverage": 10
+                "lev": 10
             }],
             "balances": {
                 "usdc": "100000000",
