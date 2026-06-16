@@ -27,7 +27,7 @@ use crate::wallet::typed::{
 
 /// `MetaFluxTransaction:CoreEvmTransfer` // CONSENSUS-FROZEN
 pub(crate) const CORE_EVM_TRANSFER_TYPE: &[u8] =
-    b"MetaFluxTransaction:CoreEvmTransfer(string metafluxChain,string amount,bool toEvm,address destination,uint64 nonce)";
+    b"MetaFluxTransaction:CoreEvmTransfer(string metafluxChain,string amount,bool toEvm,address destination,uint32 asset,uint64 nonce)";
 /// `MetaFluxTransaction:CreateSubAccount` // CONSENSUS-FROZEN. The optional
 /// `explicitIndex` flattens to a presence `bool` + value (`0` when absent).
 pub(crate) const CREATE_SUB_ACCOUNT_TYPE: &[u8] =
@@ -70,6 +70,7 @@ pub(crate) fn core_evm_transfer_words(
     amount: &str,
     to_evm: bool,
     destination: &crate::wallet::Address,
+    asset: u32,
     nonce: u64,
 ) -> Vec<[u8; 32]> {
     vec![
@@ -77,6 +78,7 @@ pub(crate) fn core_evm_transfer_words(
         enc_string(amount),
         enc_bool(to_evm),
         enc_addr(destination),
+        enc_u32(asset),
         enc_u64(nonce),
     ]
 }

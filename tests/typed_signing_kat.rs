@@ -260,9 +260,10 @@ fn newly_typed_kat_vectors_match_pinned_digests() {
                 amount: "250.5".into(),
                 to_evm: true,
                 destination: addr(0xCE),
+                asset: 0,
                 nonce: 52,
             },
-            "afab7aec6d4b9ab674162a745a79e1f0f3939b75710236a2d255a0d6d64ab499",
+            "c4ea0f4c7ac7aad20c157bda62198070e6f1a3af941945726a7d09004ee2e27d",
         ),
         (
             // explicit_index present => hasExplicitIndex=true, explicitIndex=5.
@@ -615,6 +616,7 @@ fn every_typed_action_signs_and_recovers() {
             amount: "250.5".into(),
             to_evm: true,
             destination: addr(0xCE),
+            asset: 0,
             nonce: 30,
         },
         TypedAction::CreateSubAccount {

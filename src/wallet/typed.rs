@@ -551,16 +551,19 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
-    /// `CoreEvmTransfer(string metafluxChain,string amount,bool toEvm,address destination,uint64 nonce)`
+    /// `CoreEvmTransfer(string metafluxChain,string amount,bool toEvm,address destination,uint32 asset,uint64 nonce)`
     CoreEvmTransfer {
         /// Chain tag.
         metaflux_chain: String,
-        /// Amount as a canonical decimal string (whole-USDC plane).
+        /// Amount as a canonical decimal string (whole-token plane).
         amount: String,
         /// Direction: `true` = Core → MetaFluxEVM.
         to_evm: bool,
         /// MetaFluxEVM-side recipient address.
         destination: Address,
+        /// MTF asset id to move (0 = USDC). Signed so a relay cannot redirect the
+        /// transfer to a different spot token.
+        asset: u32,
         /// Envelope nonce.
         nonce: u64,
     },
@@ -1113,12 +1116,14 @@ impl TypedAction {
                 amount,
                 to_evm,
                 destination,
+                asset,
                 nonce,
             } => account::core_evm_transfer_words(
                 metaflux_chain,
                 amount,
                 *to_evm,
                 destination,
+                *asset,
                 *nonce,
             ),
             TypedAction::CreateSubAccount {
