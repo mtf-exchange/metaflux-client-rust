@@ -915,6 +915,7 @@ impl<'a> Exchange<'a> {
         amount: impl Into<String>,
         to_evm: bool,
         destination: crate::wallet::Address,
+        asset: u32,
     ) -> Result<Value, ClientError> {
         let amount = amount.into();
         self.post_signed_typed(wallet, |chain, nonce| {
@@ -923,12 +924,14 @@ impl<'a> Exchange<'a> {
                 amount: amount.clone(),
                 to_evm,
                 destination,
+                asset,
                 nonce,
             };
             let params = json!({
                 "amount": amount,
                 "to_evm": to_evm,
                 "destination": destination,
+                "asset": asset,
             });
             (action, "core_evm_transfer", params)
         })
