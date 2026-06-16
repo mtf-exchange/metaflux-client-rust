@@ -308,10 +308,10 @@ async fn account_state_decodes_rich_shape_by_address() {
                 "positions": [{
                     "asset": 0,
                     "size": "100000000",
-                    "entry_px": "10000000000",
-                    "unrealised_pnl": "500000",
+                    "entry": "10000000000",
+                    "upnl": "500000",
                     "isolated": false,
-                    "leverage": 10
+                    "lev": 10
                 }],
                 "balances": {
                     "usdc": "100000000",
