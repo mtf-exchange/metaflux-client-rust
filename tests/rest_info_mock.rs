@@ -303,7 +303,7 @@ async fn account_state_decodes_rich_shape_by_address() {
                 "init_margin": "20000000",
                 "health": "10000000",
                 "tier": "Safe",
-                "margin_mode": "Cross",
+                "mode": "Cross",
                 "pm_enabled": false,
                 "positions": [{
                     "asset": 0,

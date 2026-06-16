@@ -361,6 +361,7 @@ pub struct AccountState {
     /// Liquidation tier.
     pub tier: Tier,
     /// Margin mode.
+    #[serde(rename = "mode")]
     pub margin_mode: MarginMode,
     /// Portfolio-margin opt-in state.
     pub pm_enabled: bool,
@@ -855,7 +856,7 @@ mod tests {
             "init_margin": "20000000",
             "health": "10000000",
             "tier": "Safe",
-            "margin_mode": "Cross",
+            "mode": "Cross",
             "pm_enabled": false,
             "positions": [{
                 "asset": 0,
