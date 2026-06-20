@@ -1,33 +1,40 @@
-//! Devnet/testnet market-maker bot — keeps every perp order book full and the
-//! trade tape alive so a UI has realistic-looking data.
+//! Devnet/testnet market-maker bot — keeps every perp order book full AND prints
+//! a steady trade tape (so candles/K-lines form) using N accounts quoting around
+//! REAL reference prices pulled from a public CEX (Binance).
 //!
-//! Each cycle: a MAKER wallet refreshes a laddered set of resting bids/asks
-//! around every perp market's mark; an optional TAKER wallet crosses one market
-//! with a small marketable order to print a trade. Sizes are tuned so the faucet
-//! grant covers the reserved margin.
+//! Each cycle: fetch CEX spot prices; for every perp market pick a reference
+//! (CEX `<NAME>USDT` when available, else the node mark); every bot wallet
+//! re-ladders resting bids/asks around it AND fires one marketable order that
+//! crosses another wallet's book — those fills drive the candle stream.
+//!
+//! N wallets are derived deterministically from MTF_MAKER_KEY (keccak(seed‖i)),
+//! so re-runs reuse the same funded accounts. All self-faucet on startup.
 //!
 //! Env:
-//!   MTF_BASE_URL   trading API base (default `http://127.0.0.1:8080`)
-//!   MTF_MAKER_KEY  64-char hex private key, faucet-funded (required)
-//!   MTF_TAKER_KEY  optional second hex key for crossing trades
-//!   MTF_LEVELS     ladder depth per side (default 8)
-//!   MTF_NOTIONAL   per-order notional in USD (default 60)
-//!   MTF_REFRESH    seconds between cycles (default 12)
+//!   MTF_BASE_URL    trading API base (default `http://127.0.0.1:8080`)
+//!   MTF_MAKER_KEY   64-char hex seed key (required) — N accounts derive from it
+//!   MTF_ACCOUNTS    number of bot wallets (default 6)
+//!   MTF_LEVELS      ladder depth per side (default 8)
+//!   MTF_NOTIONAL    per-order notional in USD (default 60)
+//!   MTF_REFRESH     seconds between cycles (default 10)
+//!   MTF_CEX_URL     CEX ticker URL (default Binance /api/v3/ticker/price)
 //!
 //! ```bash
-//! MTF_BASE_URL=<gateway> MTF_MAKER_KEY=0x.. MTF_TAKER_KEY=0x.. \
+//! MTF_BASE_URL=<gateway> MTF_MAKER_KEY=0x.. MTF_ACCOUNTS=6 \
 //!   cargo run --release --example devnet_market_maker
 //! ```
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use serde_json::{json, Value};
+use tiny_keccak::{Hasher, Keccak};
 
 use metaflux_client::{
     faucet::request_faucet,
     types::{
-        MarketId,
         order::{CancelAllOrders, Order, OrderKind, OrderStatus, Side, StpMode, TimeInForce},
+        MarketId,
     },
     wallet::{Address, Wallet},
     Client,
@@ -46,18 +53,23 @@ fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
-/// Quantize a USD price to the market's tick: `round(px * 1e8 / tick) * tick`.
 fn to_limit_px(price_usd: f64, tick: u64) -> u64 {
     let q = ((price_usd * 1e8) / tick as f64).round().max(1.0) as u64;
     (q * tick).max(tick)
 }
 
-/// Raw order size = `base_units * 10^sz_decimals`.
 fn to_size(base_units: f64, sz_decimals: u8) -> u64 {
     (base_units * 10f64.powi(sz_decimals as i32)).round().max(1.0) as u64
 }
 
-fn make_order(owner: Address, market: MarketId, side: Side, size: u64, limit_px: u64) -> Order {
+fn make_order(
+    owner: Address,
+    market: MarketId,
+    side: Side,
+    size: u64,
+    limit_px: u64,
+    tif: TimeInForce,
+) -> Order {
     Order {
         owner,
         market,
@@ -65,7 +77,7 @@ fn make_order(owner: Address, market: MarketId, side: Side, size: u64, limit_px:
         kind: OrderKind::Limit,
         size,
         limit_px,
-        tif: TimeInForce::Gtc,
+        tif,
         stp_mode: StpMode::CancelOldest,
         reduce_only: false,
         cloid: None,
@@ -75,10 +87,49 @@ fn make_order(owner: Address, market: MarketId, side: Side, size: u64, limit_px:
     }
 }
 
-/// Parse the `markets` /info reply (`{data:{perp:[...]}}`) into the perp list.
+/// Derive the i-th bot key from a seed: `keccak256(seed_bytes ‖ i_le)`.
+fn derive_key(seed: &[u8; 32], i: usize) -> [u8; 32] {
+    let mut k = Keccak::v256();
+    k.update(seed);
+    k.update(&(i as u64).to_le_bytes());
+    let mut out = [0u8; 32];
+    k.finalize(&mut out);
+    out
+}
+
+fn parse_seed(hex: &str) -> [u8; 32] {
+    let h = hex.strip_prefix("0x").unwrap_or(hex);
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&h[i * 2..i * 2 + 2], 16).unwrap_or(0);
+    }
+    out
+}
+
+/// Fetch `<SYMBOL>` → USD spot from the CEX ticker (`[{symbol, price}]`). Keyed by
+/// the bare base asset (`BTCUSDT` → `BTC`). Best-effort: returns empty on failure.
+async fn fetch_cex_prices(url: &str) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    let resp = match reqwest::get(url).await {
+        Ok(r) => r,
+        Err(_) => return out,
+    };
+    let arr: Vec<Value> = resp.json().await.unwrap_or_default();
+    for t in arr {
+        let (Some(sym), Some(px)) = (t.get("symbol").and_then(Value::as_str), t.get("price")) else {
+            continue;
+        };
+        let price: f64 = px.as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+        if price > 0.0 {
+            if let Some(base) = sym.strip_suffix("USDT") {
+                out.insert(base.to_string(), price);
+            }
+        }
+    }
+    out
+}
+
 fn parse_perps(v: &Value) -> Vec<Mkt> {
-    // The client unwraps the `{data, type}` envelope, so `data` (`{perp, spot}`)
-    // arrives directly; tolerate the wrapped form too.
     let perp = v
         .get("perp")
         .or_else(|| v.get("data").and_then(|d| d.get("perp")));
@@ -90,17 +141,13 @@ fn parse_perps(v: &Value) -> Vec<Mkt> {
             let mark: f64 = m.get("mark_px")?.as_str()?.parse().ok()?;
             let tick: u64 = m.get("tick_size")?.as_str()?.parse().ok()?;
             let sz_decimals = m.get("sz_decimals")?.as_u64()? as u8;
-            if mark > 0.0 && tick > 0 {
-                Some(Mkt {
-                    asset_id,
-                    name,
-                    mark,
-                    tick,
-                    sz_decimals,
-                })
-            } else {
-                None
-            }
+            (mark > 0.0 && tick > 0).then_some(Mkt {
+                asset_id,
+                name,
+                mark,
+                tick,
+                sz_decimals,
+            })
         })
         .collect()
 }
@@ -108,27 +155,30 @@ fn parse_perps(v: &Value) -> Vec<Mkt> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let base = env_or("MTF_BASE_URL", "http://127.0.0.1:8080");
+    let n_accounts: usize = env_or("MTF_ACCOUNTS", "6").parse().unwrap_or(6).max(2);
     let levels: usize = env_or("MTF_LEVELS", "8").parse().unwrap_or(8);
     let notional: f64 = env_or("MTF_NOTIONAL", "60").parse().unwrap_or(60.0);
-    let refresh: u64 = env_or("MTF_REFRESH", "12").parse().unwrap_or(12);
+    let refresh: u64 = env_or("MTF_REFRESH", "10").parse().unwrap_or(10);
+    let cex_url = env_or(
+        "MTF_CEX_URL",
+        "https://api.binance.com/api/v3/ticker/price",
+    );
 
-    let maker = Wallet::from_hex(&std::env::var("MTF_MAKER_KEY").map_err(|_| "set MTF_MAKER_KEY")?)?;
-    let taker = std::env::var("MTF_TAKER_KEY")
-        .ok()
-        .and_then(|k| Wallet::from_hex(&k).ok());
+    let seed = parse_seed(&std::env::var("MTF_MAKER_KEY").map_err(|_| "set MTF_MAKER_KEY")?);
+    let wallets: Vec<Wallet> = (0..n_accounts)
+        .map(|i| Wallet::from_bytes(derive_key(&seed, i)))
+        .collect::<Result<_, _>>()?;
     let client = Client::new(&base)?;
 
-    println!("maker {} @ {base}", maker.address());
-    if let Some(t) = &taker {
-        println!("taker {}", t.address());
+    println!("{n_accounts} bot wallets @ {base}");
+    for w in &wallets {
+        println!("  {}", w.address());
     }
 
-    // Top up both wallets a few times so reserved margin is comfortable, then
-    // let the credits land before quoting.
-    for _ in 0..6 {
-        let _ = request_faucet(&base, &maker.address().to_string(), None).await;
-        if let Some(t) = &taker {
-            let _ = request_faucet(&base, &t.address().to_string(), None).await;
+    // Top up every wallet a few times so reserved margin is comfortable.
+    for _ in 0..5 {
+        for w in &wallets {
+            let _ = request_faucet(&base, &w.address().to_string(), None).await;
         }
     }
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -146,77 +196,95 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         let perps = parse_perps(&raw);
         if perps.is_empty() {
-            eprintln!("no perp markets parsed; retrying");
             tokio::time::sleep(Duration::from_secs(refresh)).await;
             continue;
         }
+        let cex = fetch_cex_prices(&cex_url).await;
 
-        // Fresh quotes: cancel everything, then re-ladder each market.
-        let _ = client
-            .exchange()
-            .cancel_all_orders(&maker, &CancelAllOrders { asset: None })
-            .await;
+        let mut resting = 0usize;
+        let mut trades = 0usize;
 
-        let mut placed = 0usize;
-        let mut first_err: Option<String> = None;
-        for m in &perps {
-            let market = MarketId(m.asset_id);
-            for k in 1..=levels {
-                // Widen ~6 bps per level; vary size so the book looks organic.
-                let off = 0.0006 * k as f64;
-                let sz = notional * (1.0 + 0.15 * ((k % 3) as f64));
-                for (side, price) in [
-                    (Side::Bid, m.mark * (1.0 - off)),
-                    (Side::Ask, m.mark * (1.0 + off)),
-                ] {
-                    let order = make_order(
-                        maker.address(),
-                        market,
-                        side,
-                        to_size(sz / m.mark, m.sz_decimals),
-                        to_limit_px(price, m.tick),
-                    );
-                    match client.exchange().submit_order(&maker, &order).await {
-                        Ok(resp) => {
-                            for s in &resp.statuses {
-                                if let OrderStatus::Error(msg) = s {
-                                    first_err.get_or_insert_with(|| format!("{}: {msg}", m.name));
-                                } else {
-                                    placed += 1;
-                                }
+        // First half = MAKERS (rest depth, refreshed every 5th cycle — cancel +
+        // re-ladder is the slow op). Second half = TAKERS (cross EVERY market each
+        // cycle with IOC orders that hit the makers' books — different accounts, so
+        // no self-trade STP — printing the fills that drive the candle stream).
+        let n_makers = (wallets.len() / 2).max(1);
+        let reladder = cycle % 5 == 1;
+
+        if reladder {
+            for w in &wallets[..n_makers] {
+                let _ = client
+                    .exchange()
+                    .cancel_all_orders(w, &CancelAllOrders { asset: None })
+                    .await;
+                for m in &perps {
+                    let refpx = *cex.get(&m.name).unwrap_or(&m.mark);
+                    let market = MarketId(m.asset_id);
+                    for k in 1..=levels {
+                        let off = 0.0006 * k as f64;
+                        let sz = notional * (1.0 + 0.12 * (k % 3) as f64);
+                        for (side, price) in [
+                            (Side::Bid, refpx * (1.0 - off)),
+                            (Side::Ask, refpx * (1.0 + off)),
+                        ] {
+                            let order = make_order(
+                                w.address(),
+                                market,
+                                side,
+                                to_size(sz / refpx, m.sz_decimals),
+                                to_limit_px(price, m.tick),
+                                TimeInForce::Gtc,
+                            );
+                            if let Ok(resp) = client.exchange().submit_order(w, &order).await {
+                                resting += resp
+                                    .statuses
+                                    .iter()
+                                    .filter(|s| !matches!(s, OrderStatus::Error(_)))
+                                    .count();
                             }
-                        }
-                        Err(e) => {
-                            first_err.get_or_insert_with(|| format!("{} submit: {e}", m.name));
                         }
                     }
                 }
             }
         }
 
-        // One marketable cross per cycle to print a trade + tape/candle/volume.
-        if let Some(t) = &taker {
-            let m = &perps[(cycle as usize) % perps.len()];
-            let side = if cycle % 2 == 0 { Side::Bid } else { Side::Ask };
-            let px = if side == Side::Bid {
-                m.mark * 1.003
-            } else {
-                m.mark * 0.997
-            };
-            let order = make_order(
-                t.address(),
-                MarketId(m.asset_id),
-                side,
-                to_size((notional * 0.8) / m.mark, m.sz_decimals),
-                to_limit_px(px, m.tick),
-            );
-            let _ = client.exchange().submit_order(t, &order).await;
+        for (ti, w) in wallets[n_makers..].iter().enumerate() {
+            for (mi, m) in perps.iter().enumerate() {
+                let refpx = *cex.get(&m.name).unwrap_or(&m.mark);
+                let side = if (cycle as usize + ti + mi) % 2 == 0 {
+                    Side::Bid
+                } else {
+                    Side::Ask
+                };
+                // Cross ~0.3% through the reference so it sweeps the top levels;
+                // IOC fills what's resting and cancels the rest (no taker overhang).
+                let px = if side == Side::Bid {
+                    refpx * 1.003
+                } else {
+                    refpx * 0.997
+                };
+                let order = make_order(
+                    w.address(),
+                    MarketId(m.asset_id),
+                    side,
+                    to_size((notional * 0.6) / refpx, m.sz_decimals),
+                    to_limit_px(px, m.tick),
+                    TimeInForce::Ioc,
+                );
+                if let Ok(resp) = client.exchange().submit_order(w, &order).await {
+                    trades += resp
+                        .statuses
+                        .iter()
+                        .filter(|s| matches!(s, OrderStatus::Filled(_)))
+                        .count();
+                }
+            }
         }
 
         println!(
-            "cycle {cycle}: {} perps, {placed} resting orders{}",
+            "cycle {cycle}: {} perps, {} CEX refs, +{resting} resting, {trades} fills",
             perps.len(),
-            first_err.map(|e| format!(" (e.g. {e})")).unwrap_or_default()
+            cex.len()
         );
         tokio::time::sleep(Duration::from_secs(refresh)).await;
     }
