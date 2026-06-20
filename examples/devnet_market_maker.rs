@@ -2,10 +2,16 @@
 //! a steady trade tape (so candles/K-lines form) using N accounts quoting around
 //! REAL reference prices pulled from a public CEX (Binance).
 //!
-//! Each cycle: fetch CEX spot prices; for every perp market pick a reference
-//! (CEX `<NAME>USDT` when available, else the node mark); every bot wallet
-//! re-ladders resting bids/asks around it AND fires one marketable order that
-//! crosses another wallet's book — those fills drive the candle stream.
+//! Each cycle: fetch CEX spot prices; for every perp pick a reference (CEX
+//! `<NAME>USDT` when available, else the node mark). Wallets split into MAKERS
+//! (rest a full GTC ladder, refreshed periodically) and TAKERS (cross every
+//! market with IOC each cycle, hitting the makers' books) — those cross-account
+//! fills drive the candle stream.
+//!
+//! HEAVY by construction: each wallet submits its whole ladder / cross-set as one
+//! BATCH (single signature + nonce + round-trip, up to 1000 orders), and all
+//! wallets' batches fire CONCURRENTLY — a cycle is one parallel wave, not
+//! hundreds of serial POSTs.
 //!
 //! N wallets are derived deterministically from MTF_MAKER_KEY (keccak(seed‖i)),
 //! so re-runs reuse the same funded accounts. All self-faucet on startup.
@@ -27,13 +33,17 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use futures_util::future::join_all;
 use serde_json::{json, Value};
 use tiny_keccak::{Hasher, Keccak};
 
 use metaflux_client::{
     faucet::request_faucet,
     types::{
-        order::{CancelAllOrders, Order, OrderKind, OrderStatus, Side, StpMode, TimeInForce},
+        order::{
+            BatchOrder, CancelAllOrders, Order, OrderGrouping, OrderKind, Side, StpMode,
+            TimeInForce,
+        },
         MarketId,
     },
     wallet::{Address, Wallet},
@@ -85,6 +95,102 @@ fn make_order(
         position_side: None,
         trigger: None,
     }
+}
+
+/// Reference price for a market at phase `t` (advances once per cycle):
+/// - listed on the CEX → its live spot price;
+/// - `MTF` (our own coin, on no CEX) → a deterministic oscillation in 4..8 so it
+///   prints a lively candle instead of a flat line;
+/// - any other unlisted coin → a gentle ±1.5% wobble around the node mark.
+/// The per-market phase offset (`asset_id`) decorrelates the synthetic markets.
+fn reference_px(m: &Mkt, cex: &HashMap<String, f64>, t: f64) -> f64 {
+    if let Some(&p) = cex.get(&m.name) {
+        return p;
+    }
+    let phase = t * 0.4 + m.asset_id as f64;
+    if m.name == "MTF" {
+        return 6.0 + 2.0 * phase.sin();
+    }
+    m.mark * (1.0 + 0.015 * phase.sin())
+}
+
+/// Build a wallet's full resting GTC ladder across every perp, as one batch.
+fn build_ladder(
+    owner: Address,
+    perps: &[Mkt],
+    cex: &HashMap<String, f64>,
+    t: f64,
+    levels: usize,
+    notional: f64,
+) -> Vec<Order> {
+    let mut out = Vec::new();
+    for m in perps {
+        let refpx = reference_px(m, cex, t);
+        let market = MarketId(m.asset_id);
+        for k in 1..=levels {
+            let off = 0.0006 * k as f64;
+            let sz = notional * (1.0 + 0.12 * (k % 3) as f64);
+            for (side, price) in [
+                (Side::Bid, refpx * (1.0 - off)),
+                (Side::Ask, refpx * (1.0 + off)),
+            ] {
+                out.push(make_order(
+                    owner,
+                    market,
+                    side,
+                    to_size(sz / refpx, m.sz_decimals),
+                    to_limit_px(price, m.tick),
+                    TimeInForce::Gtc,
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Build a wallet's IOC crosses through the top of every market, as one batch.
+/// `salt` rotates which side each market is hit from for a two-sided tape.
+fn build_crosses(
+    owner: Address,
+    perps: &[Mkt],
+    cex: &HashMap<String, f64>,
+    t: f64,
+    notional: f64,
+    salt: usize,
+) -> Vec<Order> {
+    let mut out = Vec::new();
+    for (mi, m) in perps.iter().enumerate() {
+        let refpx = reference_px(m, cex, t);
+        let side = if (salt + mi) % 2 == 0 {
+            Side::Bid
+        } else {
+            Side::Ask
+        };
+        // Cross ~0.3% through the reference so it sweeps the resting top levels;
+        // IOC fills what's there and cancels the rest (no taker overhang).
+        let px = if side == Side::Bid {
+            refpx * 1.003
+        } else {
+            refpx * 0.997
+        };
+        out.push(make_order(
+            owner,
+            MarketId(m.asset_id),
+            side,
+            to_size((notional * 0.6) / refpx, m.sz_decimals),
+            to_limit_px(px, m.tick),
+            TimeInForce::Ioc,
+        ));
+    }
+    out
+}
+
+/// `/exchange` admits actions ASYNCHRONOUSLY — a `batch_order` returns an ack
+/// (`{accepted, action_hash, mempool_depth, nonce}`), and the orders match in a
+/// later block. So success here means "admitted to the mempool", and fills are
+/// observed out-of-band via `recent_trades` / `candle`, not in this response.
+fn accepted(v: &Value) -> bool {
+    v.get("accepted").and_then(Value::as_bool).unwrap_or(false)
 }
 
 /// Derive the i-th bot key from a seed: `keccak256(seed_bytes ‖ i_le)`.
@@ -155,10 +261,10 @@ fn parse_perps(v: &Value) -> Vec<Mkt> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let base = env_or("MTF_BASE_URL", "http://127.0.0.1:8080");
-    let n_accounts: usize = env_or("MTF_ACCOUNTS", "6").parse().unwrap_or(6).max(2);
+    let n_accounts: usize = env_or("MTF_ACCOUNTS", "8").parse().unwrap_or(8).max(2);
     let levels: usize = env_or("MTF_LEVELS", "8").parse().unwrap_or(8);
     let notional: f64 = env_or("MTF_NOTIONAL", "60").parse().unwrap_or(60.0);
-    let refresh: u64 = env_or("MTF_REFRESH", "10").parse().unwrap_or(10);
+    let refresh: u64 = env_or("MTF_REFRESH", "5").parse().unwrap_or(5);
     let cex_url = env_or(
         "MTF_CEX_URL",
         "https://api.binance.com/api/v3/ticker/price",
@@ -201,90 +307,87 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         let cex = fetch_cex_prices(&cex_url).await;
 
-        let mut resting = 0usize;
-        let mut trades = 0usize;
-
-        // First half = MAKERS (rest depth, refreshed every 5th cycle — cancel +
-        // re-ladder is the slow op). Second half = TAKERS (cross EVERY market each
-        // cycle with IOC orders that hit the makers' books — different accounts, so
-        // no self-trade STP — printing the fills that drive the candle stream).
+        // MAKERS (first half) rest a full GTC ladder; TAKERS (second half) cross
+        // EVERY market with IOC — different accounts, so no self-trade STP cancel,
+        // and the cross-account fills drive the candle stream. The book is refreshed
+        // EVERY cycle so takers always have depth to hit (and stale prices clear as
+        // the reference drifts).
+        //
+        // THROUGHPUT: each wallet places its WHOLE ladder / cross-set in ONE batch
+        // (one signature, one nonce, one round-trip — `MAX_BATCH` = 1000), and every
+        // wallet's batch is fired CONCURRENTLY via `join_all`. A cycle is one wave of
+        // N parallel requests regardless of order count, not hundreds of serial POSTs.
+        let t = cycle as f64;
         let n_makers = (wallets.len() / 2).max(1);
-        let reladder = cycle % 5 == 1;
 
-        if reladder {
-            for w in &wallets[..n_makers] {
+        // Capture a shared reference in the per-wallet async blocks (each `async
+        // move` then moves only the Copy `&Client`, not the client itself).
+        let client = &client;
+
+        let mfuts = wallets[..n_makers].iter().map(|w| {
+            let orders = build_ladder(w.address(), &perps, &cex, t, levels, notional);
+            let n = orders.len();
+            async move {
                 let _ = client
                     .exchange()
                     .cancel_all_orders(w, &CancelAllOrders { asset: None })
                     .await;
-                for m in &perps {
-                    let refpx = *cex.get(&m.name).unwrap_or(&m.mark);
-                    let market = MarketId(m.asset_id);
-                    for k in 1..=levels {
-                        let off = 0.0006 * k as f64;
-                        let sz = notional * (1.0 + 0.12 * (k % 3) as f64);
-                        for (side, price) in [
-                            (Side::Bid, refpx * (1.0 - off)),
-                            (Side::Ask, refpx * (1.0 + off)),
-                        ] {
-                            let order = make_order(
-                                w.address(),
-                                market,
-                                side,
-                                to_size(sz / refpx, m.sz_decimals),
-                                to_limit_px(price, m.tick),
-                                TimeInForce::Gtc,
-                            );
-                            if let Ok(resp) = client.exchange().submit_order(w, &order).await {
-                                resting += resp
-                                    .statuses
-                                    .iter()
-                                    .filter(|s| !matches!(s, OrderStatus::Error(_)))
-                                    .count();
-                            }
-                        }
-                    }
-                }
+                let ok = client
+                    .exchange()
+                    .batch_order(
+                        w,
+                        &BatchOrder {
+                            orders,
+                            grouping: OrderGrouping::Na,
+                        },
+                    )
+                    .await
+                    .map(|v| accepted(&v))
+                    .unwrap_or(false);
+                (ok, n)
+            }
+        });
+        let (mut maker_ok, mut placed) = (0usize, 0usize);
+        for (ok, n) in join_all(mfuts).await {
+            if ok {
+                maker_ok += 1;
+                placed += n;
             }
         }
 
-        for (ti, w) in wallets[n_makers..].iter().enumerate() {
-            for (mi, m) in perps.iter().enumerate() {
-                let refpx = *cex.get(&m.name).unwrap_or(&m.mark);
-                let side = if (cycle as usize + ti + mi) % 2 == 0 {
-                    Side::Bid
-                } else {
-                    Side::Ask
-                };
-                // Cross ~0.3% through the reference so it sweeps the top levels;
-                // IOC fills what's resting and cancels the rest (no taker overhang).
-                let px = if side == Side::Bid {
-                    refpx * 1.003
-                } else {
-                    refpx * 0.997
-                };
-                let order = make_order(
-                    w.address(),
-                    MarketId(m.asset_id),
-                    side,
-                    to_size((notional * 0.6) / refpx, m.sz_decimals),
-                    to_limit_px(px, m.tick),
-                    TimeInForce::Ioc,
-                );
-                if let Ok(resp) = client.exchange().submit_order(w, &order).await {
-                    trades += resp
-                        .statuses
-                        .iter()
-                        .filter(|s| matches!(s, OrderStatus::Filled(_)))
-                        .count();
-                }
+        let tfuts = wallets[n_makers..].iter().enumerate().map(|(ti, w)| {
+            let orders = build_crosses(w.address(), &perps, &cex, t, notional, cycle as usize + ti);
+            let n = orders.len();
+            async move {
+                let ok = client
+                    .exchange()
+                    .batch_order(
+                        w,
+                        &BatchOrder {
+                            orders,
+                            grouping: OrderGrouping::Na,
+                        },
+                    )
+                    .await
+                    .map(|v| accepted(&v))
+                    .unwrap_or(false);
+                (ok, n)
+            }
+        });
+        let (mut taker_ok, mut crossed) = (0usize, 0usize);
+        let t0 = std::time::Instant::now();
+        for (ok, n) in join_all(tfuts).await {
+            if ok {
+                taker_ok += 1;
+                crossed += n;
             }
         }
+        let taker_ms = t0.elapsed().as_millis();
 
         println!(
-            "cycle {cycle}: {} perps, {} CEX refs, +{resting} resting, {trades} fills",
+            "cycle {cycle}: {} perps, {} CEX refs | makers {maker_ok}/{n_makers} ({placed} resting) | takers {taker_ok} ({crossed} crosses) | taker wave {taker_ms}ms",
             perps.len(),
-            cex.len()
+            cex.len(),
         );
         tokio::time::sleep(Duration::from_secs(refresh)).await;
     }
