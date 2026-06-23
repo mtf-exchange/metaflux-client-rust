@@ -148,20 +148,30 @@ fn build_ladder(
     out
 }
 
-/// Build a wallet's IOC crosses through the top of every market, as one batch.
-/// `salt` rotates which side each market is hit from for a two-sided tape.
+/// Build a wallet's DIRECTIONAL IOC trades — one per market, as a batch. The
+/// side is chosen by the live CEX vs the on-chain mark (NOT alternating): when
+/// the CEX is above the stale on-chain mark the market is under-priced → BUY
+/// (lift offers, drag the mark up toward the CEX); when below → SELL. So the
+/// on-chain price TRACKS the real CEX trend, the tape is directional (real
+/// momentum, not churn), and these accounts accumulate real positions/PnL.
+/// `wobble` injects a per-(wallet,market) counter-trade fraction so the tape
+/// stays two-sided (real markets have both) and candles keep an OHLC range.
 fn build_crosses(
     owner: Address,
     perps: &[Mkt],
     cex: &HashMap<String, f64>,
     t: f64,
     notional: f64,
-    salt: usize,
+    wobble: usize,
 ) -> Vec<Order> {
     let mut out = Vec::new();
     for (mi, m) in perps.iter().enumerate() {
         let refpx = reference_px(m, cex, t);
-        let side = if (salt + mi) % 2 == 0 {
+        // Dominant direction = trade toward the CEX (close the on-chain gap);
+        // ~1 in 4 (wobble) takes the other side so the book gets two-sided flow.
+        let toward_cex = refpx >= m.mark;
+        let contrarian = (wobble + mi) % 4 == 0;
+        let side = if toward_cex != contrarian {
             Side::Bid
         } else {
             Side::Ask
@@ -173,11 +183,15 @@ fn build_crosses(
         } else {
             refpx * 0.997
         };
+        // Size scales with the CEX↔mark gap so a bigger dislocation trades more
+        // (faster convergence + a livelier candle on real moves).
+        let gap = ((refpx - m.mark).abs() / m.mark).min(0.02);
+        let sz_usd = notional * (0.6 + 20.0 * gap);
         out.push(make_order(
             owner,
             MarketId(m.asset_id),
             side,
-            to_size((notional * 0.6) / refpx, m.sz_decimals),
+            to_size(sz_usd / refpx, m.sz_decimals),
             to_limit_px(px, m.tick),
             TimeInForce::Ioc,
         ));
@@ -337,6 +351,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .batch_order(
                         w,
                         &BatchOrder {
+                            owner: w.address(),
                             orders,
                             grouping: OrderGrouping::Na,
                         },
@@ -364,6 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .batch_order(
                         w,
                         &BatchOrder {
+                            owner: w.address(),
                             orders,
                             grouping: OrderGrouping::Na,
                         },

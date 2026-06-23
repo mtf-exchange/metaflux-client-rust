@@ -403,7 +403,7 @@ async fn create_vault_posts_signed_params_envelope() {
 }
 
 #[tokio::test]
-async fn batch_order_rejects_mismatched_owner_locally() {
+async fn batch_order_accepts_params_level_owner() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/exchange"))
@@ -413,7 +413,7 @@ async fn batch_order_rejects_mismatched_owner_locally() {
 
     let client = Client::new(server.uri()).unwrap();
     let wallet = sample_wallet();
-    let other =
+    let vault =
         Wallet::from_hex("1111111111111111111111111111111111111111111111111111111111111111")
             .unwrap();
     let mk = |owner| Order {
@@ -431,17 +431,19 @@ async fn batch_order_rejects_mismatched_owner_locally() {
         position_side: None,
         trigger: None,
     };
-    // Second order is owned by a different address → local validation rejects.
+    // The params-level owner is a VAULT distinct from the signer (operator
+    // trading). The SDK no longer enforces owner == signer — the node authorizes
+    // the registered operator — so batch_order posts instead of rejecting locally.
     let batch = BatchOrder {
-        orders: vec![mk(wallet.address()), mk(other.address())],
+        owner: vault.address(),
+        orders: vec![mk(vault.address())],
         grouping: Default::default(),
     };
-    let err = client
+    client
         .exchange()
         .batch_order(&wallet, &batch)
         .await
-        .unwrap_err();
-    assert!(matches!(err, metaflux_client::ClientError::Validation(_)));
+        .unwrap();
 }
 
 fn decode_sig(hex_str: &str) -> metaflux_client::wallet::Signature {

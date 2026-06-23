@@ -54,7 +54,10 @@ async fn markets_decodes_array_of_market_info() {
         .and(path("/info"))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
             "markets",
-            json!([market(0, "BTC", 50), market(1, "ETH", 40)]),
+            json!({
+                "perp": [market(0, "BTC", 50), market(1, "ETH", 40)],
+                "spot": { "pairs": [], "tokens": [] }
+            }),
         )))
         .mount(&server)
         .await;
@@ -315,7 +318,7 @@ async fn account_state_decodes_rich_shape_by_address() {
                 }],
                 "balances": {
                     "usdc": "100000000",
-                    "spot": { "ETH": "5000000000" }
+                    "spot": { "ETH": { "asset_id": 102, "total": "5000000000", "hold": "0", "value": "0" } }
                 }
             }),
         )))
@@ -334,7 +337,7 @@ async fn account_state_decodes_rich_shape_by_address() {
     assert_eq!(a.positions[0].leverage, 10);
     assert_eq!(a.balances.usdc, "100000000");
     assert_eq!(
-        a.balances.spot.get("ETH").map(String::as_str),
+        a.balances.spot.get("ETH").map(|b| b.total.as_str()),
         Some("5000000000")
     );
 }
