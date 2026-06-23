@@ -287,14 +287,27 @@ pub enum Tier {
 }
 
 /// Account margin mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MarginMode {
     /// Cross margin — shared collateral across positions.
+    #[default]
     Cross,
     /// Isolated margin.
     Isolated,
     /// Strict isolated margin.
     StrictIso,
+}
+
+/// Position mode. The deployed gateway emits this as `account_state.position_mode`
+/// (the older `mode` margin-mode field is currently absent from its payload).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PositionMode {
+    /// One-way (single net position per market).
+    #[default]
+    OneWay,
+    /// Hedge (separate long/short legs).
+    Hedge,
 }
 
 /// One open position inside an [`AccountState`].
@@ -332,10 +345,31 @@ pub struct AccountPosition {
 pub struct Balances {
     /// USDC collateral, 6-decimal base units as a decimal string.
     pub usdc: String,
-    /// Spot balances keyed by asset symbol, fixed-point strings. `BTreeMap`
+    /// Spot balances keyed by asset symbol. The deployed gateway maps each
+    /// symbol to an [`AccountSpotBalance`] OBJECT (not a bare string). `BTreeMap`
     /// for deterministic key ordering.
     #[serde(default)]
-    pub spot: std::collections::BTreeMap<String, String>,
+    pub spot: std::collections::BTreeMap<String, AccountSpotBalance>,
+}
+
+/// One spot-asset balance inside [`Balances`] (account_state). Magnitudes are
+/// fixed-point decimal strings; extra gateway fields (`pnl`, `evm_contract`)
+/// are ignored. Distinct from [`SpotBalance`] (the `spot_clearinghouse_state`
+/// element, which is keyed differently).
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AccountSpotBalance {
+    /// Spot asset id (the token's id, e.g. MTF = 104).
+    #[serde(default)]
+    pub asset_id: Option<u32>,
+    /// Total balance (fixed-point decimal string).
+    pub total: String,
+    /// Amount on hold in resting orders (fixed-point decimal string).
+    #[serde(default)]
+    pub hold: String,
+    /// USD value of the balance (fixed-point decimal string).
+    #[serde(default)]
+    pub value: String,
 }
 
 /// `account_state` response — rich per-account snapshot keyed by `address`.
@@ -360,10 +394,15 @@ pub struct AccountState {
     pub health: String,
     /// Liquidation tier.
     pub tier: Tier,
-    /// Margin mode.
-    #[serde(rename = "mode")]
+    /// Margin mode. The deployed gateway does NOT currently emit `mode`; absent
+    /// → default Cross (it sends `position_mode` instead, captured below).
+    #[serde(default, rename = "mode")]
     pub margin_mode: MarginMode,
-    /// Portfolio-margin opt-in state.
+    /// Position mode (one-way / hedge) — the gateway's `position_mode` field.
+    #[serde(default)]
+    pub position_mode: PositionMode,
+    /// Portfolio-margin opt-in state. Absent on the deployed gateway → false.
+    #[serde(default)]
     pub pm_enabled: bool,
     /// Per-asset open positions.
     #[serde(default)]
@@ -515,19 +554,27 @@ pub struct SpotClearinghouseState {
 impl<'a> Info<'a> {
     /// List all markets and their rich metadata.
     ///
-    /// Returns a JSON array of [`MarketInfo`] objects (the same record served
-    /// per-market by [`Info::market_info`]).
+    /// Returns the perp [`MarketInfo`] records.
     ///
-    /// NOTE: the `/info` contract does not define a bulk `markets` query type —
-    /// only the per-market `market_info`. This method targets a gateway-surface
-    /// `markets` aggregate that mirrors the `market_info` record shape.
+    /// The deployed gateway serves `markets.data` as an OBJECT
+    /// `{ "perp": [MarketInfo...], "spot": { pairs, tokens } }`, NOT a flat
+    /// array. We decode that wrapper and return the `perp` markets (use
+    /// [`Info::spot_meta`] for spot). Decoding `data` straight into a sequence
+    /// (the old behaviour) failed with `invalid type: map, expected a sequence`.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn markets(&self) -> Result<Vec<MarketInfo>, ClientError> {
-        self.client
+        #[derive(serde::Deserialize)]
+        struct MarketsResp {
+            #[serde(default)]
+            perp: Vec<MarketInfo>,
+        }
+        let resp: MarketsResp = self
+            .client
             .post_json("/info", &json!({ "type": "markets" }))
-            .await
+            .await?;
+        Ok(resp.perp)
     }
 
     /// Fetch the L2 book snapshot for a market.
@@ -868,7 +915,7 @@ mod tests {
             }],
             "balances": {
                 "usdc": "100000000",
-                "spot": { "ETH": "5000000000" }
+                "spot": { "ETH": { "asset_id": 102, "total": "5000000000", "hold": "0", "value": "0" } }
             }
         });
         let a: AccountState = serde_json::from_value(data).unwrap();
@@ -883,12 +930,82 @@ mod tests {
         assert_eq!(a.positions[0].leverage, 10);
         assert_eq!(a.balances.usdc, "100000000");
         assert_eq!(
-            a.balances.spot.get("ETH").map(String::as_str),
+            a.balances.spot.get("ETH").map(|b| b.total.as_str()),
             Some("5000000000")
         );
         // Round-trips.
         let dec: AccountState = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
         assert_eq!(a, dec);
+    }
+
+    /// Decode the DEPLOYED gateway `account_state.data` shape (probed live
+    /// 2026-06): it sends `position_mode` + `abstraction` and OMITS `mode` +
+    /// `pm_enabled`; `balances` carries an extra `usdc_evm_contract`. The
+    /// pre-fix struct failed here with `missing field 'mode'`.
+    #[test]
+    fn account_state_decodes_live_gateway_shape() {
+        let data = serde_json::json!({
+            "abstraction": "unified",
+            "address": "0x000000000000000000000000000000000000beef",
+            "account_value": "100000000",
+            "free_collateral": "100000000",
+            "maint_margin": "0",
+            "init_margin": "0",
+            "health": "100000000",
+            "tier": "Safe",
+            "position_mode": "one_way",
+            "positions": [{
+                "asset": 2, "size": "67", "entry": "74.36", "upnl": "-3.64",
+                "isolated": false, "lev": 7,
+                "funding": "0", "liq": "0", "margin": "1.49", "notional": "46.18", "roe": "0"
+            }],
+            "balances": {
+                "usdc": "100000000",
+                // gateway maps each spot symbol to an OBJECT (not a string)
+                "spot": { "MTF": { "asset_id": 104, "evm_contract": null, "hold": "0",
+                                   "pnl": null, "total": "10", "value": "50" } },
+                "usdc_evm_contract": "0x0000000000000000000000000000000000010000"
+            }
+        });
+        let a: AccountState = serde_json::from_value(data).unwrap();
+        assert_eq!(a.margin_mode, MarginMode::Cross); // defaulted (absent)
+        assert_eq!(a.position_mode, PositionMode::OneWay);
+        assert!(!a.pm_enabled); // defaulted (absent)
+        assert_eq!(a.account_value, "100000000");
+        assert_eq!(a.tier, Tier::Safe);
+        assert_eq!(a.positions.len(), 1); // rich position (extra fields ignored)
+        assert_eq!(a.positions[0].leverage, 7);
+        assert_eq!(a.balances.usdc, "100000000");
+        assert_eq!(a.balances.spot.get("MTF").map(|b| b.total.as_str()), Some("10"));
+    }
+
+    /// Decode the DEPLOYED gateway `markets.data` shape: an object
+    /// `{ "perp": [...], "spot": {...} }`, not a flat array. markets() must
+    /// return the perp records (pre-fix: `invalid type: map, expected sequence`).
+    #[test]
+    fn markets_decodes_perp_spot_object() {
+        #[derive(serde::Deserialize)]
+        struct MarketsResp {
+            #[serde(default)]
+            perp: Vec<MarketInfo>,
+        }
+        let data = serde_json::json!({
+            "perp": [{
+                "asset_id": 0, "name": "BTC", "kind": "perp", "sz_decimals": 5,
+                "mark_px": "64000", "oracle_px": "64000", "mid_px": "64000",
+                "mark_source": "oracle_median", "fba_enabled": false,
+                "change_24h": "0", "day_ntl_vlm": "0", "premium": "0", "prev_day_px": "64000",
+                "tick_size": "1000000", "step_size": "1", "min_order": "1",
+                "max_leverage": 50, "init_margin_ratio": "200", "maint_margin_ratio": "300",
+                "open_interest": "0", "funding": {
+                    "rate_per_hr": "0", "cap_per_hr": "400", "interval_ms": 3600000,
+                    "next_payment_ts": 0 }
+            }],
+            "spot": { "pairs": [], "tokens": [] }
+        });
+        let resp: MarketsResp = serde_json::from_value(data).unwrap();
+        assert_eq!(resp.perp.len(), 1);
+        assert_eq!(resp.perp[0].name, "BTC");
     }
 
     /// Decode the exact `l2_book.data` payload from the `/info` contract.

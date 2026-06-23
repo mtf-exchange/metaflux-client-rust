@@ -342,27 +342,21 @@ impl<'a> Exchange<'a> {
 
     /// Place N orders under one signature.
     ///
-    /// Each order's `owner` MUST equal the wallet address. Unlike
+    /// Ownership is the params-level [`BatchOrder::owner`] (the gateway ignores
+    /// per-order `owner`). For self-trading set `batch.owner = wallet.address()`.
+    /// For operator-driven vault trading set `batch.owner` to the VAULT address;
+    /// it may differ from the signer — the node authorizes the registered
+    /// operator, so the SDK does NOT enforce owner == signer here. Unlike
     /// [`Exchange::submit_order`], a batch returns the admission envelope (not a
     /// synchronous per-order status); observe fills via `/info` / WS.
     ///
     /// # Errors
-    /// - [`ClientError::Validation`] if any order's `owner != wallet.address()`.
-    /// - HTTP / decode / protocol errors per [`crate::ClientError`].
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn batch_order(
         &self,
         wallet: &Wallet,
         batch: &BatchOrder,
     ) -> Result<Value, ClientError> {
-        for (i, o) in batch.orders.iter().enumerate() {
-            if o.owner != wallet.address() {
-                return Err(ClientError::Validation(format!(
-                    "batch order[{i}].owner {} != wallet address {}",
-                    o.owner,
-                    wallet.address()
-                )));
-            }
-        }
         let action = json!({ "type": "batch_order", "params": batch });
         self.post_typed_trade(wallet, action, TypedTradingAction::BatchOrder(batch))
             .await
