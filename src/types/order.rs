@@ -229,8 +229,14 @@ pub enum OrderGrouping {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct BatchOrder {
-    /// Orders to place, in priority order. Each order's `owner` must equal the
-    /// signing wallet.
+    /// Account that OWNS the orders. The deployed gateway reads ownership from
+    /// this params-level field; the per-order [`Order::owner`] is IGNORED. For
+    /// normal self-trading set this to the signing wallet's address. For
+    /// operator-driven vault trading set it to the VAULT address — the signer
+    /// must be a registered operator of that vault and the node authorizes it
+    /// (so it MAY differ from the signer).
+    pub owner: Address,
+    /// Orders to place, in priority order.
     pub orders: Vec<Order>,
     /// Grouping semantics.
     #[serde(default)]

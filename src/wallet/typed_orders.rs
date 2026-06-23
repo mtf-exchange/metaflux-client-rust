@@ -161,7 +161,7 @@ const TY_SCHEDULE_CANCEL: &[u8] =
 const TY_TWAP_ORDER: &[u8] = b"MetaFluxTransaction:TwapOrder(string metafluxChain,uint32 market,string side,uint64 totalSize,uint32 sliceCount,uint64 delayMs,bool reduceOnly,uint64 nonce)";
 const TY_TWAP_CANCEL: &[u8] =
     b"MetaFluxTransaction:TwapCancel(string metafluxChain,uint64 twapId,uint64 nonce)";
-const TY_BATCH_ORDER: &[u8] = b"MetaFluxTransaction:BatchOrder(string metafluxChain,bytes32 orders,string grouping,uint64 nonce)";
+const TY_BATCH_ORDER: &[u8] = b"MetaFluxTransaction:BatchOrder(string metafluxChain,address owner,bytes32 orders,string grouping,uint64 nonce)";
 const TY_BATCH_CANCEL: &[u8] =
     b"MetaFluxTransaction:BatchCancel(string metafluxChain,bytes32 cancels,uint64 nonce)";
 
@@ -326,6 +326,7 @@ impl TypedTradingAction<'_> {
             }
             Self::TwapCancel(p) => words.push(enc_u64(p.twap_id)),
             Self::BatchOrder(p) => {
+                words.push(enc_addr_word(&p.owner)); // params-level owner (vault for operator trading)
                 let items: Vec<[u8; 32]> = p.orders.iter().flat_map(order_words).collect();
                 words.push(hash_items(&items));
                 words.push(enc_string(grouping_str(p.grouping)));
@@ -601,12 +602,14 @@ mod tests {
     #[test]
     fn batch_order_kat() {
         let p = BatchOrder {
+            owner: owner(),
             orders: vec![plain_order(), rich_order()],
             grouping: OrderGrouping::NormalTpsl,
         };
         assert_eq!(
             hexd(TypedTradingAction::BatchOrder(&p)),
-            "b651927dbe803c1aac685e34faf8a76e126f4c7ed5f24616bae255f1d40be9d5"
+            // includes the params-level `owner` (added for operator/vault trading)
+            "ef21c04ccb568652ab2d8950dffd1bd289acaafde846199f74a8ba72e0f5dad8"
         );
     }
     #[test]
