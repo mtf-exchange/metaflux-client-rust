@@ -290,8 +290,8 @@ pub struct CancelAllOrders {
 /// {"error":   "<reason>"}
 /// ```
 ///
-/// `total_sz` / `avg_px` are 8-decimal fixed-point **u128 strings** on the wire
-/// (native JSON numbers would lose precision past 2^53); `oid` is a JSON number
+/// `total_sz` / `avg_px` are CANONICAL decimal **strings** on the wire
+/// (string-typed so precision survives past 2^53); `oid` is a JSON number
 /// (uint64). The variant is selected by the single present key.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -339,9 +339,9 @@ pub struct RestingStatus {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct FilledStatus {
-    /// Total size filled, 8-decimal fixed-point as a decimal string.
+    /// Total size filled, canonical decimal string.
     pub total_sz: String,
-    /// Volume-weighted average fill price, 8-decimal fixed-point as a string.
+    /// Volume-weighted average fill price, canonical decimal string.
     pub avg_px: String,
     /// Server-assigned order id.
     pub oid: OrderId,

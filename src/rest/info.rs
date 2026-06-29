@@ -39,15 +39,17 @@ pub struct Info<'a> {
 
 /// One level of the L2 book.
 ///
-/// Per the gateway `/info` `l2_book` wire: `px` / `size` are 8-decimal
-/// fixed-point **decimal strings** (precision past 2^53), `n_orders` is a JSON
-/// number. (The price field is `size` on the REST read — not `sz`.)
+/// Per the `/info` `l2_book` wire: `px` / `size` are CANONICAL decimal strings
+/// (string-typed so precision survives past 2^53) — `px` is tick-snapped whole
+/// USDC (e.g. `"62500.12"`), `size` is whole base units (e.g. `"1.5"`), NOT the
+/// raw 1e8 / raw-lot planes. `n_orders` is a JSON number. (The size field is
+/// `size` on the REST read — not `sz`.)
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct L2Level {
-    /// Price, 8-decimal fixed-point as a decimal string.
+    /// Price, canonical whole-USDC decimal string (tick-snapped).
     pub px: String,
-    /// Aggregate raw-lot size at this price, decimal string.
+    /// Aggregate size at this price, canonical whole-base-unit decimal string.
     pub size: String,
     /// Number of resting orders at this price.
     pub n_orders: u32,
@@ -79,9 +81,9 @@ pub enum OrderSide {
 
 /// One resting order in an [`OpenOrders`] snapshot.
 ///
-/// `px` is x1e8 fixed-point (positive canonical price for **both** sides);
-/// `size` is raw lots (`whole × 10^sz_decimals`). `oid` / `market_id` /
-/// `inserted_at_ms` are bare integers.
+/// `px` / `size` are CANONICAL decimal strings — `px` is tick-snapped whole
+/// USDC (positive for **both** sides), `size` is whole base units. `oid` /
+/// `market_id` / `inserted_at_ms` are bare integers.
 ///
 /// LIVE GATEWAY GAP: a resting order currently reads back with `oid: 0` and
 /// `inserted_at_ms: 0` even though it is on the book — so an order is NOT
@@ -98,9 +100,9 @@ pub struct OpenOrder {
     pub market_id: u32,
     /// Side, lowercase `"bid"` / `"ask"`.
     pub side: OrderSide,
-    /// Limit price, x1e8 fixed-point decimal string.
+    /// Limit price, canonical whole-USDC decimal string (tick-snapped).
     pub px: String,
-    /// Remaining size, raw lots (`whole × 10^sz_decimals`) decimal string.
+    /// Remaining size, canonical whole-base-unit decimal string.
     pub size: String,
     /// Insertion timestamp (unix ms). See the struct note: currently `0`.
     pub inserted_at_ms: u64,
@@ -209,10 +211,10 @@ pub struct FeeSchedule {
 pub struct StakingState {
     /// Echo of requested address.
     pub address: Address,
-    /// Total MTF staked across all delegations.
-    pub total_staked: u128,
-    /// Accrued but unclaimed rewards.
-    pub pending_rewards: u128,
+    /// Total MTF staked across all delegations, canonical decimal string.
+    pub total_staked: String,
+    /// Accrued but unclaimed rewards, canonical decimal string.
+    pub pending_rewards: String,
     /// Active delegations.
     pub delegations: Vec<Delegation>,
     /// Pending unbond entries.
@@ -225,8 +227,8 @@ pub struct StakingState {
 pub struct Delegation {
     /// Validator address.
     pub validator: Address,
-    /// Staked MTF.
-    pub amount: u128,
+    /// Staked MTF, canonical decimal string.
+    pub amount: String,
     /// Delegation timestamp (unix ms).
     pub since_ms: u64,
 }
@@ -237,8 +239,8 @@ pub struct Delegation {
 pub struct UnbondingEntry {
     /// Validator address.
     pub validator: Address,
-    /// Amount being unbonded.
-    pub amount: u128,
+    /// Amount being unbonded, canonical decimal string.
+    pub amount: String,
     /// Earliest claim timestamp (unix ms).
     pub claim_at_ms: u64,
 }
@@ -437,11 +439,16 @@ pub struct Funding {
 
 /// `market_info` response — rich per-market metadata.
 ///
-/// Per the `/info` contract (`market_info`). Fixed-point magnitudes
-/// (`tick_size`, `step_size`, `min_order`, ratios, `open_interest`) are
-/// **string** numerics; `asset_id` / `max_leverage` are JSON numbers.
-/// Resolvable by `asset_id` or by `coin` (see [`Info::market_info`] /
-/// [`Info::market_info_by_coin`]).
+/// Per the `/info` contract (`market_info`). Magnitudes (`tick_size`,
+/// `step_size`, `min_order`, ratios, `open_interest`) are CANONICAL decimal
+/// **string** numerics — NOT the raw 1e8 / raw-lot planes; `asset_id` /
+/// `max_leverage` are JSON numbers. Resolvable by `asset_id` or by `coin` (see
+/// [`Info::market_info`] / [`Info::market_info_by_coin`]).
+///
+/// PLANE BRIDGE: `tick_size` is whole USDC while an order's `limit_px` is on the
+/// 1e8 plane, and `step_size` / `min_order` are whole base units while an
+/// order's `size` is raw lots (`whole × 10^sz_decimals`). Use
+/// [`crate::round_order_to_grid`] to snap a desired price / size onto this grid.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct MarketInfo {
@@ -458,11 +465,14 @@ pub struct MarketInfo {
     pub mark_px: String,
     /// Oracle price, whole-USDC decimal string (tick-snapped; `"0"` fallback).
     pub oracle_px: String,
-    /// Tick size (smallest price increment), fixed-point string.
+    /// Tick size (smallest price increment), canonical whole-USDC decimal string
+    /// (e.g. `"0.01"`). Scale to the order `limit_px` plane via `× 10^8`.
     pub tick_size: String,
-    /// Step size (smallest size increment), fixed-point string.
+    /// Step size (smallest size increment), canonical whole-base-unit decimal
+    /// string (e.g. `"0.001"`). Scale to the order `size` plane via `× 10^sz_decimals`.
     pub step_size: String,
-    /// Minimum order size, fixed-point string.
+    /// Minimum order size, canonical whole-base-unit decimal string. Scale to
+    /// the order `size` plane via `× 10^sz_decimals`.
     pub min_order: String,
     /// Maximum leverage multiple.
     pub max_leverage: u32,
@@ -855,9 +865,9 @@ mod tests {
             "sz_decimals": 5,
             "mark_px": "50000",
             "oracle_px": "50000",
-            "tick_size": "100",
-            "step_size": "10000",
-            "min_order": "10000",
+            "tick_size": "0.01",
+            "step_size": "0.1",
+            "min_order": "0.1",
             "max_leverage": 50,
             "maint_margin_ratio": "5000",
             "init_margin_ratio": "10000",
@@ -878,7 +888,7 @@ mod tests {
         assert_eq!(m.sz_decimals, 5);
         assert_eq!(m.mark_px, "50000");
         assert_eq!(m.oracle_px, "50000");
-        assert_eq!(m.tick_size, "100");
+        assert_eq!(m.tick_size, "0.01");
         assert_eq!(m.max_leverage, 50);
         assert_eq!(m.funding.interval_ms, 3_600_000);
         assert_eq!(m.mark_source, "MedianOfOraclesAndMid");

@@ -259,7 +259,10 @@ fn parse_perps(v: &Value) -> Vec<Mkt> {
             let asset_id = m.get("asset_id")?.as_u64()? as u32;
             let name = m.get("name")?.as_str()?.to_string();
             let mark: f64 = m.get("mark_px")?.as_str()?.parse().ok()?;
-            let tick: u64 = m.get("tick_size")?.as_str()?.parse().ok()?;
+            // tick_size is a CANONICAL whole-USDC decimal string ("0.01"); rescale
+            // to the 1e8 limit_px plane to_limit_px / the tick>0 filter expect.
+            let tick_dec: f64 = m.get("tick_size")?.as_str()?.parse().ok()?;
+            let tick = (tick_dec * 1e8).round() as u64;
             let sz_decimals = m.get("sz_decimals")?.as_u64()? as u8;
             (mark > 0.0 && tick > 0).then_some(Mkt {
                 asset_id,
