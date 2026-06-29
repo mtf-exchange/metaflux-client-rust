@@ -344,6 +344,7 @@ fn newly_typed_kat_vectors_match_pinned_digests() {
             // asset present => hasAsset=true, asset=4.
             TypedAction::CancelAllOrders {
                 metaflux_chain: "Testnet".into(),
+                owner: None,
                 has_asset: true,
                 asset: 4,
                 nonce: 62,
@@ -396,6 +397,7 @@ fn optional_absent_typed_kat_vectors_match_pinned_digests() {
 
     let cancel_all_orders_no_asset = TypedAction::CancelAllOrders {
         metaflux_chain: "Testnet".into(),
+        owner: None,
         has_asset: false,
         asset: 0,
         nonce: 63,
@@ -671,6 +673,7 @@ fn every_typed_action_signs_and_recovers() {
         },
         TypedAction::CancelAllOrders {
             metaflux_chain: chain.clone(),
+            owner: None,
             has_asset: false,
             asset: 0,
             nonce: 39,

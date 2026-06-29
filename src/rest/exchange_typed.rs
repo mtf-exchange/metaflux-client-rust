@@ -1185,6 +1185,7 @@ impl<'a> Exchange<'a> {
         self.post_signed_typed(wallet, |chain, nonce| {
             let action = TypedAction::CancelAllOrders {
                 metaflux_chain: chain,
+                owner: None,
                 has_asset: asset.is_some(),
                 asset: asset.unwrap_or(0),
                 nonce,

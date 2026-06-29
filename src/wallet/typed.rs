@@ -662,13 +662,20 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
-    /// `CancelAllOrders(string metafluxChain,bool hasAsset,uint32 asset,uint64 nonce)`
+    /// `CancelAllOrders(string metafluxChain,bool hasAsset,uint32 asset,uint64 nonce)`,
+    /// or its `*_WITH_OWNER` shape (`address owner` right after `metafluxChain`)
+    /// when an agent-resolved `owner` is bound.
     ///
     /// The optional asset filter flattens to a presence `bool` + value (`0` when
     /// "all assets").
     CancelAllOrders {
         /// Chain tag.
         metaflux_chain: String,
+        /// Agent-resolved params-level `owner` for operator / vault trading.
+        /// `None` signs the owner-less digest (byte-identical to today); `Some`
+        /// binds the `owner` right after `metafluxChain`, selecting the
+        /// `*_WITH_OWNER` type string.
+        owner: Option<Address>,
         /// Asset-filter presence flag.
         has_asset: bool,
         /// Asset filter (`0` when "all assets").
@@ -743,7 +750,13 @@ impl TypedAction {
             TypedAction::UserDexAbstraction { .. } => account::USER_DEX_ABSTRACTION_TYPE,
             TypedAction::UserSetAbstraction { .. } => account::USER_SET_ABSTRACTION_TYPE,
             TypedAction::PriorityBid { .. } => account::PRIORITY_BID_TYPE,
-            TypedAction::CancelAllOrders { .. } => account::CANCEL_ALL_ORDERS_TYPE,
+            TypedAction::CancelAllOrders { owner, .. } => {
+                if owner.is_some() {
+                    account::CANCEL_ALL_ORDERS_WITH_OWNER_TYPE
+                } else {
+                    account::CANCEL_ALL_ORDERS_TYPE
+                }
+            }
             TypedAction::SubmitEncryptedOrder { .. } => account::SUBMIT_ENCRYPTED_ORDER_TYPE,
         }
     }
@@ -1198,10 +1211,22 @@ impl TypedAction {
             } => account::priority_bid_words(metaflux_chain, *asset, *bid_bps, *nonce),
             TypedAction::CancelAllOrders {
                 metaflux_chain,
+                owner,
                 has_asset,
                 asset,
                 nonce,
-            } => account::cancel_all_orders_words(metaflux_chain, *has_asset, *asset, *nonce),
+            } => match owner {
+                Some(o) => account::cancel_all_orders_words_with_owner(
+                    metaflux_chain,
+                    o,
+                    *has_asset,
+                    *asset,
+                    *nonce,
+                ),
+                None => {
+                    account::cancel_all_orders_words(metaflux_chain, *has_asset, *asset, *nonce)
+                }
+            },
             TypedAction::SubmitEncryptedOrder {
                 metaflux_chain,
                 ciphertext,
@@ -1472,6 +1497,50 @@ mod tests {
                 "digest drift for {action:?}"
             );
         }
+    }
+
+    /// `cancel_all_orders` with an agent-resolved `owner` (operator / vault):
+    /// (1) the selected encodeType bytes equal the node's
+    /// `CANCEL_ALL_ORDERS_WITH_OWNER_TYPE` (literal copied from the node's
+    /// account typed-signing contract); (2) the owner-present digest matches the
+    /// pinned vector; (3) it DIFFERS from the owner-less digest; and (4) the
+    /// owner-less digest is byte-identical to the pre-owner KAT
+    /// (`9088140f…`, the value pinned in `tests/typed_signing_kat.rs`).
+    #[test]
+    fn cancel_all_orders_with_owner_kat() {
+        let with_owner = TypedAction::CancelAllOrders {
+            metaflux_chain: "Testnet".into(),
+            owner: Some(addr(0xbb)),
+            has_asset: true,
+            asset: 4,
+            nonce: 62,
+        };
+        let without_owner = TypedAction::CancelAllOrders {
+            metaflux_chain: "Testnet".into(),
+            owner: None,
+            has_asset: true,
+            asset: 4,
+            nonce: 62,
+        };
+        // (1) encodeType bytes == node CANCEL_ALL_ORDERS_WITH_OWNER_TYPE (verbatim).
+        assert_eq!(
+            with_owner.type_string(),
+            b"MetaFluxTransaction:CancelAllOrders(string metafluxChain,address owner,bool hasAsset,uint32 asset,uint64 nonce)" as &[u8]
+        );
+        assert_eq!(without_owner.type_string(), account::CANCEL_ALL_ORDERS_TYPE);
+        // (2) pinned owner-present digest.
+        let d_owner = hex::encode(TypedActionDigest::new(&with_owner, 114514).to_digest());
+        let d_plain = hex::encode(TypedActionDigest::new(&without_owner, 114514).to_digest());
+        assert_eq!(
+            d_owner,
+            "c1d74d89c9b07b884ccde57768b17de760c6efb22fd59066c9595ad0cd8c45ba"
+        );
+        // (3) owner-present differs from owner-less; (4) owner-less == pre-owner KAT.
+        assert_ne!(d_owner, d_plain);
+        assert_eq!(
+            d_plain,
+            "9088140fe0311f99071e2c45e5eff506052fa787e6eb44e0d110a198fb5a3bf7"
+        );
     }
 
     #[test]

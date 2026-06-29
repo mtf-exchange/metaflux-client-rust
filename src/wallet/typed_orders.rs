@@ -30,6 +30,7 @@ use crate::types::order::{
 };
 use crate::types::spot::{SpotCancel, SpotOrder};
 use crate::types::twap::{TwapCancel, TwapOrder};
+use crate::wallet::key::Address;
 use crate::wallet::sign::Eip712;
 use crate::wallet::typed::{metaflux_chain_tag, metaflux_domain_separator};
 
@@ -165,6 +166,24 @@ const TY_BATCH_ORDER: &[u8] = b"MetaFluxTransaction:BatchOrder(string metafluxCh
 const TY_BATCH_CANCEL: &[u8] =
     b"MetaFluxTransaction:BatchCancel(string metafluxChain,bytes32 cancels,uint64 nonce)";
 
+// ===== `*_WITH_OWNER` encodeType strings (agent-resolved owner; operator / vault
+// trading) — CONSENSUS-FROZEN, byte-identical to the node's `*_WITH_OWNER_TYPE`.
+//
+// Used ONLY when the wire action carries an `owner`; the `owner` sits right after
+// `metafluxChain`, before the action's own fields. Owner-ABSENT signs the base
+// string above (byte-identical to the pre-owner digest).
+
+const TY_SPOT_ORDER_WITH_OWNER: &[u8] = b"MetaFluxTransaction:SpotOrder(string metafluxChain,address owner,uint32 pair,string side,uint64 size,uint64 limitPx,string tif,string stpMode,string cloid,uint64 nonce)";
+const TY_SPOT_CANCEL_WITH_OWNER: &[u8] = b"MetaFluxTransaction:SpotCancel(string metafluxChain,address owner,uint32 pair,uint64 oid,uint64 nonce)";
+const TY_CANCEL_BY_CLOID_WITH_OWNER: &[u8] = b"MetaFluxTransaction:CancelByCloid(string metafluxChain,address owner,uint32 asset,string cloid,uint64 nonce)";
+const TY_MODIFY_WITH_OWNER: &[u8] = b"MetaFluxTransaction:Modify(string metafluxChain,address owner,uint32 market,uint64 oid,bool hasNewPx,uint64 newPx,bool hasNewSize,uint64 newSize,string cloid,bool alwaysPlace,uint64 nonce)";
+const TY_BATCH_MODIFY_WITH_OWNER: &[u8] =
+    b"MetaFluxTransaction:BatchModify(string metafluxChain,address owner,bytes32 modifications,uint64 nonce)";
+const TY_TWAP_CANCEL_WITH_OWNER: &[u8] =
+    b"MetaFluxTransaction:TwapCancel(string metafluxChain,address owner,uint64 twapId,uint64 nonce)";
+const TY_BATCH_CANCEL_WITH_OWNER: &[u8] =
+    b"MetaFluxTransaction:BatchCancel(string metafluxChain,address owner,bytes32 cancels,uint64 nonce)";
+
 // ===== Per-item word layouts =====
 
 /// Flatten one perp order into its 15 signed struct-hash words. `owner` is NOT
@@ -280,16 +299,57 @@ impl TypedTradingAction<'_> {
         }
     }
 
-    /// `keccak256(encodeType)`.
-    fn type_hash(&self) -> [u8; 32] {
-        keccak(self.type_string())
+    /// Whether this action has an owner-carrying (`*_WITH_OWNER`) typed form,
+    /// used for operator / vault trading where the agent-resolved params-level
+    /// `owner` differs from the signer. `submit_order` / `cancel_order` /
+    /// `schedule_cancel` / `twap_order` have no owner form; `batch_order` carries
+    /// its owner inside its own struct, not via the digest-level owner.
+    const fn supports_owner(&self) -> bool {
+        matches!(
+            self,
+            Self::SpotOrder(_)
+                | Self::SpotCancel(_)
+                | Self::CancelByCloid(_)
+                | Self::Modify(_)
+                | Self::BatchModify(_)
+                | Self::TwapCancel(_)
+                | Self::BatchCancel(_)
+        )
     }
 
-    /// The full ordered word list: chain tag first, action fields, nonce last.
-    fn encode_data(&self, chain_tag: &str, nonce: u64) -> Result<Vec<[u8; 32]>, ClientError> {
-        let chain = enc_string(chain_tag);
+    /// The `encodeType` string for this action, selecting the `*_WITH_OWNER`
+    /// shape when an agent-resolved `owner` is bound. Owner-absent (or an action
+    /// with no owner form) returns the base [`Self::type_string`], byte-identical
+    /// to the pre-owner digest.
+    fn type_string_for(&self, owner: Option<&Address>) -> &'static [u8] {
+        match (owner, self) {
+            (Some(_), Self::SpotOrder(_)) => TY_SPOT_ORDER_WITH_OWNER,
+            (Some(_), Self::SpotCancel(_)) => TY_SPOT_CANCEL_WITH_OWNER,
+            (Some(_), Self::CancelByCloid(_)) => TY_CANCEL_BY_CLOID_WITH_OWNER,
+            (Some(_), Self::Modify(_)) => TY_MODIFY_WITH_OWNER,
+            (Some(_), Self::BatchModify(_)) => TY_BATCH_MODIFY_WITH_OWNER,
+            (Some(_), Self::TwapCancel(_)) => TY_TWAP_CANCEL_WITH_OWNER,
+            (Some(_), Self::BatchCancel(_)) => TY_BATCH_CANCEL_WITH_OWNER,
+            _ => self.type_string(),
+        }
+    }
+
+    /// The full ordered word list: chain tag first, then the agent-resolved
+    /// `owner` (only for the owner-carrying actions), the action fields, and the
+    /// nonce last. With `owner = None` the words are byte-identical to today.
+    fn encode_data(
+        &self,
+        chain_tag: &str,
+        nonce: u64,
+        owner: Option<&Address>,
+    ) -> Result<Vec<[u8; 32]>, ClientError> {
         let nonce_word = enc_u64(nonce);
-        let mut words = vec![chain];
+        let mut words = vec![enc_string(chain_tag)];
+        // The params-level `owner` sits right after `metafluxChain`, before the
+        // action's own fields — mirroring the node's `*_WITH_OWNER` encoders.
+        if let (Some(o), true) = (owner, self.supports_owner()) {
+            words.push(enc_addr_word(o));
+        }
         match self {
             Self::SubmitOrder(o) => words.extend(order_words(o)),
             Self::CancelOrder(c) => words.extend(cancel_words(c)?),
@@ -343,11 +403,17 @@ impl TypedTradingAction<'_> {
         Ok(words)
     }
 
-    /// `hashStruct(s) = keccak256(typeHash ‖ encodeData(s))`.
-    fn hash_struct(&self, chain_tag: &str, nonce: u64) -> Result<[u8; 32], ClientError> {
+    /// `hashStruct(s) = keccak256(typeHash ‖ encodeData(s))`, selecting the
+    /// owner-carrying `typeHash` + words when `owner` is bound.
+    fn hash_struct(
+        &self,
+        chain_tag: &str,
+        nonce: u64,
+        owner: Option<&Address>,
+    ) -> Result<[u8; 32], ClientError> {
         let mut k = Keccak::v256();
-        k.update(&self.type_hash());
-        for w in self.encode_data(chain_tag, nonce)? {
+        k.update(&keccak(self.type_string_for(owner)));
+        for w in self.encode_data(chain_tag, nonce, owner)? {
             k.update(&w);
         }
         let mut out = [0u8; 32];
@@ -364,16 +430,43 @@ impl TypedTradingAction<'_> {
 #[derive(Clone, Copy, Debug)]
 pub struct TypedTradingDigest<'a> {
     action: TypedTradingAction<'a>,
+    owner: Option<Address>,
     chain_id: u64,
     nonce: u64,
 }
 
 impl<'a> TypedTradingDigest<'a> {
-    /// Bind `action` to `chain_id` + `nonce`.
+    /// Bind `action` to `chain_id` + `nonce` (no agent-resolved owner). The
+    /// digest is byte-identical to the pre-owner form.
     #[must_use]
     pub fn new(action: TypedTradingAction<'a>, chain_id: u64, nonce: u64) -> Self {
         Self {
             action,
+            owner: None,
+            chain_id,
+            nonce,
+        }
+    }
+
+    /// Bind `action` to `chain_id` + `nonce` with an agent-resolved `owner`
+    /// (operator / vault trading: the signer is an approved agent of `owner`).
+    ///
+    /// The `owner` enters the digest right after `metafluxChain` for the
+    /// owner-carrying actions (`modify` / `batch_modify` / `batch_cancel` /
+    /// `cancel_by_cloid` / `twap_cancel` / `spot_order` / `spot_cancel`),
+    /// selecting the node's `*_WITH_OWNER` type string. For actions with no owner
+    /// form the `owner` is ignored, so the digest stays byte-identical to
+    /// [`TypedTradingDigest::new`].
+    #[must_use]
+    pub fn new_with_owner(
+        action: TypedTradingAction<'a>,
+        owner: Address,
+        chain_id: u64,
+        nonce: u64,
+    ) -> Self {
+        Self {
+            action,
+            owner: Some(owner),
             chain_id,
             nonce,
         }
@@ -384,9 +477,11 @@ impl<'a> TypedTradingDigest<'a> {
     /// zero-oid digest in that case, so prefer this for cancels.
     pub fn digest(&self) -> Result<[u8; 32], ClientError> {
         let domain = metaflux_domain_separator(self.chain_id);
-        let strukt = self
-            .action
-            .hash_struct(metaflux_chain_tag(self.chain_id), self.nonce)?;
+        let strukt = self.action.hash_struct(
+            metaflux_chain_tag(self.chain_id),
+            self.nonce,
+            self.owner.as_ref(),
+        )?;
         let mut h = Keccak::v256();
         h.update(&[0x19, 0x01]);
         h.update(&domain);
@@ -404,7 +499,11 @@ impl Eip712 for TypedTradingDigest<'_> {
 
     fn struct_hash(&self) -> [u8; 32] {
         self.action
-            .hash_struct(metaflux_chain_tag(self.chain_id), self.nonce)
+            .hash_struct(
+                metaflux_chain_tag(self.chain_id),
+                self.nonce,
+                self.owner.as_ref(),
+            )
             .unwrap_or([0u8; 32])
     }
 }
@@ -621,5 +720,203 @@ mod tests {
             hexd(TypedTradingAction::BatchCancel(&p)),
             "46d484036118744ef5996146ec9d35e1a54f550913238564831d5cc33d3af449"
         );
+    }
+
+    // ── agent-resolved `owner` (operator / vault trading) ──
+    //
+    // For each owner-carrying action: (1) the SDK's selected encodeType bytes
+    // equal the node's `*_WITH_OWNER_TYPE` (literals copied verbatim from the
+    // node's typed-order signing contract); (2) the owner-present digest matches the
+    // pinned vector; (3) the owner-present digest DIFFERS from the owner-less one
+    // (the owner is cryptographically bound); and (4) the owner-LESS digest is
+    // byte-identical to the pre-owner KAT (backward compat). Owner = 0xbb..bb,
+    // chain 114514, nonce 1 — same fixtures as the owner-less KATs above.
+
+    /// The agent-resolved owner used by the `*_WITH_OWNER` vectors (`0xbb..bb`).
+    fn owner_bind() -> Address {
+        Address([0xbb; 20])
+    }
+    /// Owner-bound digest hex for `action`.
+    fn hexd_owner(action: TypedTradingAction) -> String {
+        hex::encode(
+            TypedTradingDigest::new_with_owner(action, owner_bind(), CHAIN, NONCE)
+                .digest()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn modify_with_owner_kat() {
+        let o = owner_bind();
+        let a = TypedTradingAction::Modify(&modify());
+        // (1) encodeType bytes == node MODIFY_WITH_OWNER_TYPE (verbatim).
+        assert_eq!(
+            a.type_string_for(Some(&o)),
+            b"MetaFluxTransaction:Modify(string metafluxChain,address owner,uint32 market,uint64 oid,bool hasNewPx,uint64 newPx,bool hasNewSize,uint64 newSize,string cloid,bool alwaysPlace,uint64 nonce)" as &[u8]
+        );
+        // (2) pinned owner-present digest.
+        assert_eq!(
+            hexd_owner(a),
+            "6c9f289d2785cd12fdad8f5933623cfcde275ba17f83d196dc667930577607a0"
+        );
+        // (3) differs from owner-less; (4) owner-less == pre-owner KAT.
+        assert_ne!(hexd_owner(a), hexd(a));
+        assert_eq!(
+            hexd(a),
+            "2ef6437095dd5d2a71265b78abe9ef5ef5db97d385d27e768225f326eff98d19"
+        );
+    }
+
+    #[test]
+    fn cancel_by_cloid_with_owner_kat() {
+        let o = owner_bind();
+        let p = CancelByCloid {
+            asset: MarketId(1),
+            cloid: cloid(),
+        };
+        let a = TypedTradingAction::CancelByCloid(&p);
+        assert_eq!(
+            a.type_string_for(Some(&o)),
+            b"MetaFluxTransaction:CancelByCloid(string metafluxChain,address owner,uint32 asset,string cloid,uint64 nonce)" as &[u8]
+        );
+        assert_eq!(
+            hexd_owner(a),
+            "607915958cc50aa3688744ce281f477a2a13ed74f7b49dd3b24492c2ebd10d40"
+        );
+        assert_ne!(hexd_owner(a), hexd(a));
+        assert_eq!(
+            hexd(a),
+            "575fdab951085e30a1f260cae0a8fc2dfdc416247a3e4f5707a0b09d25a2fc24"
+        );
+    }
+
+    #[test]
+    fn spot_order_with_owner_kat() {
+        let o = owner_bind();
+        let order = SpotOrder {
+            pair: 3,
+            side: Side::Bid,
+            size: 50,
+            limit_px: 100_000_000,
+            tif: TimeInForce::Ioc,
+            stp_mode: StpMode::CancelOldest,
+            cloid: Some(cloid()),
+        };
+        let a = TypedTradingAction::SpotOrder(&order);
+        assert_eq!(
+            a.type_string_for(Some(&o)),
+            b"MetaFluxTransaction:SpotOrder(string metafluxChain,address owner,uint32 pair,string side,uint64 size,uint64 limitPx,string tif,string stpMode,string cloid,uint64 nonce)" as &[u8]
+        );
+        assert_eq!(
+            hexd_owner(a),
+            "974960f541953bf10ad3677c41ebfa9d8cbeb90868f74ccdf44590327e7163fc"
+        );
+        assert_ne!(hexd_owner(a), hexd(a));
+        assert_eq!(
+            hexd(a),
+            "981902cfbf00fc9c9bb26acdebfe356cd0e2b8da69199ed9b8ae2a316cf1cb34"
+        );
+    }
+
+    #[test]
+    fn spot_cancel_with_owner_kat() {
+        let o = owner_bind();
+        let c = SpotCancel { pair: 3, oid: 99 };
+        let a = TypedTradingAction::SpotCancel(&c);
+        assert_eq!(
+            a.type_string_for(Some(&o)),
+            b"MetaFluxTransaction:SpotCancel(string metafluxChain,address owner,uint32 pair,uint64 oid,uint64 nonce)" as &[u8]
+        );
+        assert_eq!(
+            hexd_owner(a),
+            "378a4b73e59a10e121c05f47c82f599147f66faf9ff6510d489d7baedfabb8f5"
+        );
+        assert_ne!(hexd_owner(a), hexd(a));
+        assert_eq!(
+            hexd(a),
+            "5f794c0c7a2c1b473efd5e86a4386385ce4696ad2cdc8d849eb9b30745c5f7fc"
+        );
+    }
+
+    #[test]
+    fn batch_modify_with_owner_kat() {
+        let o = owner_bind();
+        let p = BatchModify {
+            modifications: vec![
+                modify(),
+                Modify {
+                    market: MarketId(2),
+                    oid: OrderId(5678),
+                    new_px: None,
+                    new_size: None,
+                },
+            ],
+        };
+        let a = TypedTradingAction::BatchModify(&p);
+        assert_eq!(
+            a.type_string_for(Some(&o)),
+            b"MetaFluxTransaction:BatchModify(string metafluxChain,address owner,bytes32 modifications,uint64 nonce)" as &[u8]
+        );
+        assert_eq!(
+            hexd_owner(a),
+            "a38064007bd676e1c7f524138bfd74853861a7e7ca8d971429bf16110ead06da"
+        );
+        assert_ne!(hexd_owner(a), hexd(a));
+        assert_eq!(
+            hexd(a),
+            "c0914a0623f6032bdc85adb0b572fab74d8c5f775bef10455bcebd5454e3dd14"
+        );
+    }
+
+    #[test]
+    fn batch_cancel_with_owner_kat() {
+        let o = owner_bind();
+        let p = BatchCancel {
+            cancels: vec![cancel(1, 1234), cancel(2, 5678)],
+        };
+        let a = TypedTradingAction::BatchCancel(&p);
+        assert_eq!(
+            a.type_string_for(Some(&o)),
+            b"MetaFluxTransaction:BatchCancel(string metafluxChain,address owner,bytes32 cancels,uint64 nonce)" as &[u8]
+        );
+        assert_eq!(
+            hexd_owner(a),
+            "331396c719d6bbf49572ec3366a430b78eb5193d73c5475ccd204c8a6d681aef"
+        );
+        assert_ne!(hexd_owner(a), hexd(a));
+        assert_eq!(
+            hexd(a),
+            "46d484036118744ef5996146ec9d35e1a54f550913238564831d5cc33d3af449"
+        );
+    }
+
+    #[test]
+    fn twap_cancel_with_owner_kat() {
+        let o = owner_bind();
+        let p = TwapCancel { twap_id: 42 };
+        let a = TypedTradingAction::TwapCancel(&p);
+        assert_eq!(
+            a.type_string_for(Some(&o)),
+            b"MetaFluxTransaction:TwapCancel(string metafluxChain,address owner,uint64 twapId,uint64 nonce)" as &[u8]
+        );
+        assert_eq!(
+            hexd_owner(a),
+            "2fe790c3e954f69cdd91734c4608c5568bf698a9ef19aa65f40356c3c0b9e3ce"
+        );
+        assert_ne!(hexd_owner(a), hexd(a));
+        assert_eq!(
+            hexd(a),
+            "08ebfec844ed708f1085d0251450503f309e0f44c450943227c4cf7e0b3a589f"
+        );
+    }
+
+    /// Actions with NO owner form (`submit_order` here) ignore a bound owner —
+    /// the digest is byte-identical to the owner-less form (no `*_WITH_OWNER`).
+    #[test]
+    fn owner_ignored_for_actions_without_owner_form() {
+        let order = rich_order();
+        let a = TypedTradingAction::SubmitOrder(&order);
+        assert_eq!(a.type_string_for(Some(&owner_bind())), a.type_string());
+        assert_eq!(hexd_owner(a), hexd(a));
     }
 }
