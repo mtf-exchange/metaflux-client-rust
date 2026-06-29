@@ -57,6 +57,13 @@ pub(crate) const PRIORITY_BID_TYPE: &[u8] =
 /// filter flattens to a presence `bool` + value (`0` when "all assets").
 pub(crate) const CANCEL_ALL_ORDERS_TYPE: &[u8] =
     b"MetaFluxTransaction:CancelAllOrders(string metafluxChain,bool hasAsset,uint32 asset,uint64 nonce)";
+/// `MetaFluxTransaction:CancelAllOrders` with the agent-resolved params-level
+/// `owner` bound (operator / vault trading) // CONSENSUS-FROZEN. `owner` sits
+/// right after `metafluxChain`, mirroring the orders set's `*_WITH_OWNER` shapes;
+/// used ONLY when the wire action carries an `owner` (absent →
+/// [`CANCEL_ALL_ORDERS_TYPE`], byte-identical to today).
+pub(crate) const CANCEL_ALL_ORDERS_WITH_OWNER_TYPE: &[u8] =
+    b"MetaFluxTransaction:CancelAllOrders(string metafluxChain,address owner,bool hasAsset,uint32 asset,uint64 nonce)";
 /// `MetaFluxTransaction:SubmitEncryptedOrder` // CONSENSUS-FROZEN. `ciphertext`
 /// is EIP-712 `bytes` (hashed `keccak256(raw)`); `commitment` is `bytes32`.
 pub(crate) const SUBMIT_ENCRYPTED_ORDER_TYPE: &[u8] =
@@ -188,6 +195,24 @@ pub(crate) fn cancel_all_orders_words(
 ) -> Vec<[u8; 32]> {
     vec![
         enc_string(chain),
+        enc_bool(has_asset),
+        enc_u32(asset),
+        enc_u64(nonce),
+    ]
+}
+
+/// `CancelAllOrders` words with the agent-resolved `owner` bound, after
+/// `metafluxChain` and before the asset-filter presence flag.
+pub(crate) fn cancel_all_orders_words_with_owner(
+    chain: &str,
+    owner: &crate::wallet::Address,
+    has_asset: bool,
+    asset: u32,
+    nonce: u64,
+) -> Vec<[u8; 32]> {
+    vec![
+        enc_string(chain),
+        enc_addr(owner),
         enc_bool(has_asset),
         enc_u32(asset),
         enc_u64(nonce),
