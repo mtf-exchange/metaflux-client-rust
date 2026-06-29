@@ -16,6 +16,7 @@
 //! - [`rest`]   — `/info`, `/exchange`, `/explorer` HTTP endpoints.
 //! - [`ws`]     — WebSocket subscriptions, reconnect + heartbeat.
 //! - [`types`]  — domain types shared by all transports.
+//! - [`grid`]   — snap an order price / size onto a market's tick / lot grid.
 //! - [`faucet`] — devnet / testnet test-USDC faucet helper.
 //! - [`error`]  — single [`ClientError`] thiserror enum.
 //!
@@ -38,6 +39,7 @@
 
 pub mod error;
 pub mod faucet;
+pub mod grid;
 pub mod mip3;
 pub mod rest;
 pub mod types;
@@ -46,6 +48,7 @@ pub mod ws;
 
 pub use error::ClientError;
 pub use faucet::{FaucetResponse, request_faucet};
+pub use grid::{GridError, GridOrder, round_order_to_grid};
 pub use rest::RestClient;
 pub use types::{MarketId, OrderId, VaultId};
 pub use wallet::Wallet;

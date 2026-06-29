@@ -356,9 +356,9 @@ async fn market_info_decodes_rich_shape_by_asset_id() {
                 "sz_decimals": 5,
                 "mark_px": "50000",
                 "oracle_px": "50000",
-                "tick_size": "100",
-                "step_size": "10000",
-                "min_order": "10000",
+                "tick_size": "0.01",
+                "step_size": "0.1",
+                "min_order": "0.1",
                 "max_leverage": 50,
                 "maint_margin_ratio": "5000",
                 "init_margin_ratio": "10000",
@@ -382,7 +382,7 @@ async fn market_info_decodes_rich_shape_by_asset_id() {
     assert_eq!(m.name, "BTC");
     assert_eq!(m.sz_decimals, 5);
     assert_eq!(m.mark_px, "50000");
-    assert_eq!(m.tick_size, "100");
+    assert_eq!(m.tick_size, "0.01");
     assert_eq!(m.open_interest, "5000000000");
     assert_eq!(m.funding.interval_ms, 3_600_000);
 }
@@ -396,8 +396,8 @@ async fn staking_state_decodes_by_account_id() {
             "staking_state",
             json!({
                 "address": "0x0000000000000000000000000000000000000003",
-                "total_staked": 0,
-                "pending_rewards": 0,
+                "total_staked": "0",
+                "pending_rewards": "0",
                 "delegations": [],
                 "unbonding": []
             }),
@@ -407,7 +407,7 @@ async fn staking_state_decodes_by_account_id() {
 
     let client = Client::new(server.uri()).unwrap();
     let s = client.rest().info().staking_state(42).await.unwrap();
-    assert_eq!(s.total_staked, 0);
+    assert_eq!(s.total_staked, "0");
     assert!(s.delegations.is_empty());
 }
 
