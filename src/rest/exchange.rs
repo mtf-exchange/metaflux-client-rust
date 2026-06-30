@@ -118,8 +118,14 @@ impl<'a> Exchange<'a> {
                 wallet.address()
             )));
         }
-        let action = json!({ "type": "submit_order", "order": order });
-        self.post_typed_trade(wallet, action, TypedTradingAction::SubmitOrder(order))
+        // Coerce a Market order's tif to IOC before building the action JSON +
+        // typed digest: the node lowers a Market kind to a limit, and a
+        // Market+Gtc/Alo would silently REST on the book. See
+        // `Order::coerce_market_tif`. Both the wire JSON and the signed digest
+        // read this same coerced order, so the signed payload carries IOC.
+        let order = order.market_tif_coerced();
+        let action = json!({ "type": "submit_order", "order": &order });
+        self.post_typed_trade(wallet, action, TypedTradingAction::SubmitOrder(&order))
             .await
     }
 
@@ -357,8 +363,11 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         batch: &BatchOrder,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "batch_order", "params": batch });
-        self.post_typed_trade(wallet, action, TypedTradingAction::BatchOrder(batch))
+        // Coerce every Market leg's tif to IOC before signing (a Market+Gtc/Alo
+        // would rest on the book); see `BatchOrder::market_tifs_coerced`.
+        let batch = batch.market_tifs_coerced();
+        let action = json!({ "type": "batch_order", "params": &batch });
+        self.post_typed_trade(wallet, action, TypedTradingAction::BatchOrder(&batch))
             .await
     }
 
