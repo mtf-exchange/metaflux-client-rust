@@ -395,9 +395,12 @@ impl WsClient {
                 wallet.address()
             )));
         }
-        let action = json!({ "type": "submit_order", "order": order });
+        // Coerce a Market order's tif to IOC before signing (a Market+Gtc/Alo
+        // would silently REST on the book); see `Order::coerce_market_tif`.
+        let order = order.market_tif_coerced();
+        let action = json!({ "type": "submit_order", "order": &order });
         let payload = self
-            .post_typed_trade(wallet, action, TypedTradingAction::SubmitOrder(order))
+            .post_typed_trade(wallet, action, TypedTradingAction::SubmitOrder(&order))
             .await?;
         Ok(serde_json::from_value(payload)?)
     }

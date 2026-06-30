@@ -138,6 +138,34 @@ pub struct Order {
     pub trigger: Option<Trigger>,
 }
 
+impl Order {
+    /// Force `tif` to [`TimeInForce::Ioc`] when this is an [`OrderKind::Market`]
+    /// order; every other field (and every non-market order) is left untouched.
+    ///
+    /// A market order is take-only by definition. The node LOWERS a `Market`
+    /// kind to a marketable limit order before matching; were its `tif` `Gtc`
+    /// (or `Alo`), the unfilled remainder would REST on the book at the supplied
+    /// price — a silent resting limit where the caller asked for an immediate
+    /// take (the footgun). Coercing to IOC makes the node cancel any unmatched
+    /// remainder instead of resting it. Limit orders keep the caller's `tif`.
+    pub fn coerce_market_tif(&mut self) {
+        if self.kind == OrderKind::Market {
+            self.tif = TimeInForce::Ioc;
+        }
+    }
+
+    /// Owned copy with [`Order::coerce_market_tif`] applied. The SDK calls this
+    /// at the order-BUILD boundary, BEFORE building the EIP-712 digest, so the
+    /// SIGNED payload carries the coerced `tif` (the node verifies the signed
+    /// `tif`). A `Limit` order is returned unchanged.
+    #[must_use]
+    pub fn market_tif_coerced(&self) -> Order {
+        let mut o = self.clone();
+        o.coerce_market_tif();
+        o
+    }
+}
+
 /// TP/SL discriminator for an order [`Trigger`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -241,6 +269,20 @@ pub struct BatchOrder {
     /// Grouping semantics.
     #[serde(default)]
     pub grouping: OrderGrouping,
+}
+
+impl BatchOrder {
+    /// Owned copy with [`Order::coerce_market_tif`] applied to every order, so a
+    /// `Market` leg in a batch can never rest on the book. Called at the build
+    /// boundary before signing; see [`Order::market_tif_coerced`].
+    #[must_use]
+    pub fn market_tifs_coerced(&self) -> BatchOrder {
+        let mut b = self.clone();
+        for o in &mut b.orders {
+            o.coerce_market_tif();
+        }
+        b
+    }
 }
 
 /// Action — apply N [`CancelOrder`]s under one signature.
@@ -695,6 +737,128 @@ mod tests {
         assert_eq!(
             serde_json::to_value(one).unwrap()["asset"],
             serde_json::json!(3)
+        );
+    }
+
+    // ── O8: Market orders are coerced to IOC (take-only) ──
+
+    fn market_order(tif: TimeInForce) -> Order {
+        Order {
+            kind: OrderKind::Market,
+            tif,
+            ..sample_order()
+        }
+    }
+
+    #[test]
+    fn market_order_coerces_gtc_tif_to_ioc() {
+        // Market + Gtc would REST on the book once the node lowers Market to a
+        // limit — the footgun. The build boundary forces IOC.
+        let coerced = market_order(TimeInForce::Gtc).market_tif_coerced();
+        assert_eq!(coerced.tif, TimeInForce::Ioc);
+        assert_eq!(coerced.kind, OrderKind::Market);
+    }
+
+    #[test]
+    fn market_order_coerces_alo_tif_to_ioc() {
+        let coerced = market_order(TimeInForce::Alo).market_tif_coerced();
+        assert_eq!(coerced.tif, TimeInForce::Ioc);
+    }
+
+    #[test]
+    fn market_order_keeps_ioc_tif() {
+        let coerced = market_order(TimeInForce::Ioc).market_tif_coerced();
+        assert_eq!(coerced.tif, TimeInForce::Ioc);
+    }
+
+    #[test]
+    fn limit_order_tif_is_untouched() {
+        // Limit orders keep whatever tif the caller chose — coercion is
+        // Market-only.
+        for tif in [
+            TimeInForce::Gtc,
+            TimeInForce::Ioc,
+            TimeInForce::Aon,
+            TimeInForce::Alo,
+        ] {
+            let o = Order {
+                kind: OrderKind::Limit,
+                tif,
+                ..sample_order()
+            };
+            assert_eq!(o.market_tif_coerced().tif, tif);
+        }
+    }
+
+    #[test]
+    fn coerce_market_tif_in_place_only_touches_tif() {
+        let mut o = market_order(TimeInForce::Gtc);
+        let before = o.clone();
+        o.coerce_market_tif();
+        assert_eq!(o.tif, TimeInForce::Ioc);
+        // Nothing else moved.
+        assert_eq!(
+            Order {
+                tif: TimeInForce::Gtc,
+                ..o.clone()
+            },
+            before
+        );
+    }
+
+    #[test]
+    fn coerced_market_order_serializes_tif_ioc() {
+        // The wire JSON the node sees must show tif:"ioc".
+        let j = serde_json::to_value(market_order(TimeInForce::Gtc).market_tif_coerced()).unwrap();
+        assert_eq!(j["tif"], serde_json::json!("ioc"));
+        assert_eq!(j["kind"], serde_json::json!("market"));
+    }
+
+    #[test]
+    fn batch_coerces_each_market_leg_keeps_limit() {
+        let batch = BatchOrder {
+            owner: Address::ZERO,
+            orders: vec![
+                market_order(TimeInForce::Gtc),
+                Order {
+                    kind: OrderKind::Limit,
+                    tif: TimeInForce::Gtc,
+                    ..sample_order()
+                },
+                market_order(TimeInForce::Alo),
+            ],
+            grouping: OrderGrouping::Na,
+        };
+        let coerced = batch.market_tifs_coerced();
+        assert_eq!(coerced.orders[0].tif, TimeInForce::Ioc); // market -> ioc
+        assert_eq!(coerced.orders[1].tif, TimeInForce::Gtc); // limit untouched
+        assert_eq!(coerced.orders[2].tif, TimeInForce::Ioc); // market -> ioc
+    }
+
+    /// The coercion MUST happen before the EIP-712 digest, so the SIGNED bytes
+    /// carry IOC (the node verifies the signed `tif`). Proof: the digest of a
+    /// coerced Market+Gtc order equals the digest of an explicit Market+Ioc
+    /// order, and differs from the UNCOERCED Market+Gtc digest (so `tif` really
+    /// is part of the signed payload).
+    #[test]
+    fn coerced_market_order_signs_as_ioc() {
+        use crate::rest::exchange_typed::_typed_trade_digest_for_test as digest;
+        use crate::wallet::TypedTradingAction;
+
+        let nonce = 7;
+        let mkt_gtc = market_order(TimeInForce::Gtc);
+        let mkt_ioc = market_order(TimeInForce::Ioc);
+        let coerced = mkt_gtc.market_tif_coerced();
+
+        assert_eq!(
+            digest(TypedTradingAction::SubmitOrder(&coerced), nonce),
+            digest(TypedTradingAction::SubmitOrder(&mkt_ioc), nonce),
+            "coerced Market+Gtc must sign identically to Market+Ioc"
+        );
+        assert_ne!(
+            digest(TypedTradingAction::SubmitOrder(&mkt_gtc), nonce),
+            digest(TypedTradingAction::SubmitOrder(&mkt_ioc), nonce),
+            "tif must be part of the signed bytes"
         );
     }
 }
