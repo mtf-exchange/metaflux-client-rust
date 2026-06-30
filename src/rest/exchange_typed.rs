@@ -53,6 +53,16 @@ fn mb_chain_name(chain: crate::types::meta_bridge::MbChain) -> &'static str {
     }
 }
 
+/// The `uint8` the typed `RfqRequest` / `FbaSubmit` digests sign for a side
+/// (`Bid = 0`, `Ask = 1`). Independent of the PascalCase `"Bid"` / `"Ask"` the
+/// POST `params.side` carries.
+fn core_side_to_u8(side: crate::types::rfq::CoreSide) -> u8 {
+    match side {
+        crate::types::rfq::CoreSide::Bid => 0,
+        crate::types::rfq::CoreSide::Ask => 1,
+    }
+}
+
 impl<'a> Exchange<'a> {
     // ---- typed-scheme signed actions (structured EIP-712) ----
     //
@@ -1237,6 +1247,185 @@ impl<'a> Exchange<'a> {
         .await
     }
 
+    /// Submit a threshold-encrypted order via the `encrypted_order_submit` tag
+    /// under the typed scheme.
+    ///
+    /// An ALIAS of [`Self::submit_encrypted_order_typed`]: it signs the IDENTICAL
+    /// `SubmitEncryptedOrder` digest (same 5-field params) and differs ONLY in the
+    /// wire `type` tag. The node lowers both onto the same encrypted-order handler.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn encrypted_order_submit_typed(
+        &self,
+        wallet: &Wallet,
+        ciphertext: Vec<u8>,
+        commitment: [u8; 32],
+        threshold: u8,
+        target_block: u64,
+        reveal_deadline_ms: u64,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SubmitEncryptedOrder {
+                metaflux_chain: chain,
+                ciphertext: ciphertext.clone(),
+                commitment,
+                threshold,
+                target_block,
+                reveal_deadline_ms,
+                nonce,
+            };
+            let params = json!({
+                "ciphertext": ciphertext,
+                "commitment": commitment.to_vec(),
+                "threshold": threshold,
+                "target_block": target_block,
+                "reveal_deadline_ms": reveal_deadline_ms,
+            });
+            (action, "encrypted_order_submit", params)
+        })
+        .await
+    }
+
+    /// Unenroll the sender from portfolio margin via the `pm_unenroll` tag under
+    /// the typed scheme.
+    ///
+    /// An ALIAS of [`Self::user_portfolio_margin_typed`]` (enroll = false)`: it
+    /// signs the IDENTICAL `UserPortfolioMargin` digest with `enroll = false`, but
+    /// posts the no-params `{ "type": "pm_unenroll" }` wire form.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn pm_unenroll_typed(&self, wallet: &Wallet) -> Result<Value, ClientError> {
+        self.post_signed_typed_raw(wallet, |chain, nonce| {
+            let action = TypedAction::UserPortfolioMargin {
+                metaflux_chain: chain,
+                enroll: false,
+                nonce,
+            };
+            (action, json!({ "type": "pm_unenroll" }))
+        })
+        .await
+    }
+
+    /// Open an RFQ session as a taker via the `rfq_request` tag under the typed
+    /// scheme.
+    ///
+    /// `side` is PascalCase on the wire (`"Bid"` / `"Ask"`) but a `uint8`
+    /// (`0` / `1`) in the digest. `size` / `limit_px` are the raw `u64` wire form
+    /// (fixed-point lots / price). `limit_px` / `stp_group` are optional; absent →
+    /// presence `false` + `0` in the digest, `null` on the wire.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn rfq_request_typed(
+        &self,
+        wallet: &Wallet,
+        market: u32,
+        side: crate::types::rfq::CoreSide,
+        size: u64,
+        limit_px: Option<u64>,
+        expiry_ms: u64,
+        stp_group: Option<u64>,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::RfqRequest {
+                metaflux_chain: chain,
+                market,
+                side: core_side_to_u8(side),
+                size,
+                has_limit_px: limit_px.is_some(),
+                limit_px: limit_px.unwrap_or(0),
+                expiry_ms,
+                has_stp_group: stp_group.is_some(),
+                stp_group: stp_group.unwrap_or(0),
+                nonce,
+            };
+            let params = json!({
+                "market": market,
+                "side": side,
+                "size": size,
+                "limit_px": limit_px,
+                "expiry_ms": expiry_ms,
+                "stp_group": stp_group,
+            });
+            (action, "rfq_request", params)
+        })
+        .await
+    }
+
+    /// Cross against a specific resting RFQ quote via the `rfq_accept` tag under
+    /// the typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn rfq_accept_typed(
+        &self,
+        wallet: &Wallet,
+        rfq_id: u64,
+        quote_idx: u32,
+        size: u64,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::RfqAccept {
+                metaflux_chain: chain,
+                rfq_id,
+                quote_idx,
+                size,
+                nonce,
+            };
+            let params = json!({
+                "rfq_id": rfq_id,
+                "quote_idx": quote_idx,
+                "size": size,
+            });
+            (action, "rfq_accept", params)
+        })
+        .await
+    }
+
+    /// Submit an order into a market's frequent-batch-auction pool via the
+    /// `fba_submit` tag under the typed scheme.
+    ///
+    /// `side` is PascalCase on the wire but a `uint8` in the digest. `size` /
+    /// `price` are the raw `u64` wire form. The price field is named `price`
+    /// (NOT `limit_px`). `stp_group` is optional (absent → presence `false` + `0`).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn fba_submit_typed(
+        &self,
+        wallet: &Wallet,
+        market: u32,
+        side: crate::types::rfq::CoreSide,
+        size: u64,
+        price: u64,
+        stp_group: Option<u64>,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::FbaSubmit {
+                metaflux_chain: chain,
+                market,
+                side: core_side_to_u8(side),
+                size,
+                price,
+                has_stp_group: stp_group.is_some(),
+                stp_group: stp_group.unwrap_or(0),
+                nonce,
+            };
+            let params = json!({
+                "market": market,
+                "side": side,
+                "size": size,
+                "price": price,
+                "stp_group": stp_group,
+            });
+            (action, "fba_submit", params)
+        })
+        .await
+    }
+
     /// Sign + POST a structured (typed-scheme) action.
     ///
     /// The closure is handed the chain tag and a fresh nonce; it returns the
@@ -1249,12 +1438,31 @@ impl<'a> Exchange<'a> {
         F: FnOnce(String, u64) -> (TypedAction, &'static str, Value),
         R: serde::de::DeserializeOwned,
     {
+        self.post_signed_typed_raw(wallet, |chain, nonce| {
+            let (typed, ty, params) = build(chain, nonce);
+            (typed, json!({ "type": ty, "params": params }))
+        })
+        .await
+    }
+
+    /// Sign + POST a structured (typed-scheme) action with a CALLER-BUILT wire
+    /// `action` JSON.
+    ///
+    /// Same digest contract as [`Self::post_signed_typed`] — the closure binds the
+    /// [`TypedAction`] and the wire `action` to the SAME nonce — but the caller
+    /// shapes the full `{ type, … }` envelope. Used for actions whose wire form
+    /// is not the `{ type, params }` default: e.g. a no-params tag like
+    /// `pm_unenroll` (`{ "type": "pm_unenroll" }`, no `params` key).
+    async fn post_signed_typed_raw<F, R>(&self, wallet: &Wallet, build: F) -> Result<R, ClientError>
+    where
+        F: FnOnce(String, u64) -> (TypedAction, Value),
+        R: serde::de::DeserializeOwned,
+    {
         let nonce = next_nonce();
         let chain = metaflux_chain_tag(MTF_CHAIN_ID).to_string();
-        let (typed, ty, params) = build(chain, nonce);
+        let (typed, action) = build(chain, nonce);
         let digest = TypedActionDigest::new(&typed, MTF_CHAIN_ID).to_digest();
         let signature = wallet.sign_digest(&digest)?.to_hex();
-        let action = json!({ "type": ty, "params": params });
         let envelope = TypedSignedEnvelope {
             action: &action,
             nonce,

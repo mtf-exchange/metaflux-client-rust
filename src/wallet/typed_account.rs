@@ -68,6 +68,21 @@ pub(crate) const CANCEL_ALL_ORDERS_WITH_OWNER_TYPE: &[u8] =
 /// is EIP-712 `bytes` (hashed `keccak256(raw)`); `commitment` is `bytes32`.
 pub(crate) const SUBMIT_ENCRYPTED_ORDER_TYPE: &[u8] =
     b"MetaFluxTransaction:SubmitEncryptedOrder(string metafluxChain,bytes ciphertext,bytes32 commitment,uint8 threshold,uint64 targetBlock,uint64 revealDeadlineMs,uint64 nonce)";
+/// `MetaFluxTransaction:RfqRequest` // CONSENSUS-FROZEN. `side` is a `uint8`
+/// (`0` = bid, `1` = ask); numeric fields are the raw `uint64` wire form (NOT
+/// decimal-scaled). The optional `limitPx` / `stpGroup` each flatten to a
+/// presence `bool` + value (`0` when absent).
+pub(crate) const RFQ_REQUEST_TYPE: &[u8] =
+    b"MetaFluxTransaction:RfqRequest(string metafluxChain,uint32 market,uint8 side,uint64 size,bool hasLimitPx,uint64 limitPx,uint64 expiryMs,bool hasStpGroup,uint64 stpGroup,uint64 nonce)";
+/// `MetaFluxTransaction:RfqAccept` // CONSENSUS-FROZEN. Binds the parent `rfqId`,
+/// the accepted `quoteIdx`, and the accepted `uint64` `size`.
+pub(crate) const RFQ_ACCEPT_TYPE: &[u8] =
+    b"MetaFluxTransaction:RfqAccept(string metafluxChain,uint64 rfqId,uint32 quoteIdx,uint64 size,uint64 nonce)";
+/// `MetaFluxTransaction:FbaSubmit` // CONSENSUS-FROZEN. `side` is a `uint8`;
+/// `size` / `price` are the raw `uint64` wire form; the optional `stpGroup`
+/// flattens to a presence `bool` + value (`0` when absent).
+pub(crate) const FBA_SUBMIT_TYPE: &[u8] =
+    b"MetaFluxTransaction:FbaSubmit(string metafluxChain,uint32 market,uint8 side,uint64 size,uint64 price,bool hasStpGroup,uint64 stpGroup,uint64 nonce)";
 
 // ===== encodeData builders (called by `TypedAction::encode_data`) =====
 
@@ -237,6 +252,77 @@ pub(crate) fn submit_encrypted_order_words(
         enc_u8(threshold),
         enc_u64(target_block),
         enc_u64(reveal_deadline_ms),
+        enc_u64(nonce),
+    ]
+}
+
+/// `RfqRequest` words. `side` is a `uint8` (`0` = bid, `1` = ask); numeric fields
+/// are the raw `uint64` wire form; the optionals flatten to presence + value.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rfq_request_words(
+    chain: &str,
+    market: u32,
+    side: u8,
+    size: u64,
+    has_limit_px: bool,
+    limit_px: u64,
+    expiry_ms: u64,
+    has_stp_group: bool,
+    stp_group: u64,
+    nonce: u64,
+) -> Vec<[u8; 32]> {
+    vec![
+        enc_string(chain),
+        enc_u32(market),
+        enc_u8(side),
+        enc_u64(size),
+        enc_bool(has_limit_px),
+        enc_u64(limit_px),
+        enc_u64(expiry_ms),
+        enc_bool(has_stp_group),
+        enc_u64(stp_group),
+        enc_u64(nonce),
+    ]
+}
+
+/// `RfqAccept` words — `rfqId` / `quoteIdx` / the accepted `uint64` `size`.
+pub(crate) fn rfq_accept_words(
+    chain: &str,
+    rfq_id: u64,
+    quote_idx: u32,
+    size: u64,
+    nonce: u64,
+) -> Vec<[u8; 32]> {
+    vec![
+        enc_string(chain),
+        enc_u64(rfq_id),
+        enc_u32(quote_idx),
+        enc_u64(size),
+        enc_u64(nonce),
+    ]
+}
+
+/// `FbaSubmit` words. `side` is a `uint8`; `size` / `price` are the raw `uint64`
+/// wire form; the optional STP group flattens to presence + value.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn fba_submit_words(
+    chain: &str,
+    market: u32,
+    side: u8,
+    size: u64,
+    price: u64,
+    has_stp_group: bool,
+    stp_group: u64,
+    nonce: u64,
+) -> Vec<[u8; 32]> {
+    vec![
+        enc_string(chain),
+        enc_u32(market),
+        enc_u8(side),
+        enc_u64(size),
+        enc_u64(price),
+        enc_bool(has_stp_group),
+        enc_u64(stp_group),
         enc_u64(nonce),
     ]
 }

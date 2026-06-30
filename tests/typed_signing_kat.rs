@@ -409,6 +409,67 @@ fn optional_absent_typed_kat_vectors_match_pinned_digests() {
     );
 }
 
+/// (1e) The three W1 microstructure typed actions (`rfq_request` / `rfq_accept`
+/// / `fba_submit`) must reproduce the node's frozen contract digests
+/// byte-for-byte. The pinned literals are the EXACT bytes the node emits for the
+/// same field values (chain id 114514 / `"Testnet"`); a drift in any encodeType
+/// string, the `uint8` side / `uint64` numeric encoding, the optional-flatten
+/// (`hasLimitPx` / `hasStpGroup`), the domain, or the envelope would change them.
+///
+/// `encrypted_order_submit` and `pm_unenroll` are NOT pinned here: they are pure
+/// wire-tag ALIASES that reuse the already-pinned `SubmitEncryptedOrder` /
+/// `UserPortfolioMargin` digests (see (1c) + the sign/recover sweep).
+#[test]
+fn w1_micro_typed_kat_vectors_match_pinned_digests() {
+    // side 0 = Bid; numeric fields are the raw u64 wire form (NOT decimal-scaled).
+    let rfq_request = TypedAction::RfqRequest {
+        metaflux_chain: "Testnet".into(),
+        market: 7,
+        side: 0,
+        size: 1_000,
+        has_limit_px: true,
+        limit_px: 105,
+        expiry_ms: 0,
+        has_stp_group: false,
+        stp_group: 0,
+        nonce: 53,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&rfq_request)),
+        "0f5ddd54fd82663e103728721fffa73a50c28f639373597d2c46bd6de16d459f",
+        "RfqRequest digest drift vs node"
+    );
+
+    let rfq_accept = TypedAction::RfqAccept {
+        metaflux_chain: "Testnet".into(),
+        rfq_id: 9,
+        quote_idx: 2,
+        size: 500,
+        nonce: 55,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&rfq_accept)),
+        "fc8da74189fbbaf2a10430dc41df54e0495b2489ab8d79f2a5f0fe4920df0f3d",
+        "RfqAccept digest drift vs node"
+    );
+
+    let fba_submit = TypedAction::FbaSubmit {
+        metaflux_chain: "Testnet".into(),
+        market: 7,
+        side: 0,
+        size: 1_000,
+        price: 100,
+        has_stp_group: true,
+        stp_group: 5,
+        nonce: 56,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&fba_submit)),
+        "3cc62ef670c2f4276cd3aad36c3c073173bd3fd215f797af25f67ed7cc945d86",
+        "FbaSubmit digest drift vs node"
+    );
+}
+
 /// (2) Every typed action signs to a 65-byte `r||s||v` that recovers the
 /// signing wallet — proving the SDK's digest + signature are accepted by the
 /// node's recovery contract across the whole typed surface.
@@ -679,7 +740,7 @@ fn every_typed_action_signs_and_recovers() {
             nonce: 39,
         },
         TypedAction::SubmitEncryptedOrder {
-            metaflux_chain: chain,
+            metaflux_chain: chain.clone(),
             ciphertext: vec![1, 2, 3, 4],
             commitment: [0x11; 32],
             threshold: 2,
@@ -687,8 +748,37 @@ fn every_typed_action_signs_and_recovers() {
             reveal_deadline_ms: 5000,
             nonce: 40,
         },
+        TypedAction::RfqRequest {
+            metaflux_chain: chain.clone(),
+            market: 7,
+            side: 0,
+            size: 1_000,
+            has_limit_px: true,
+            limit_px: 105,
+            expiry_ms: 0,
+            has_stp_group: false,
+            stp_group: 0,
+            nonce: 41,
+        },
+        TypedAction::RfqAccept {
+            metaflux_chain: chain.clone(),
+            rfq_id: 9,
+            quote_idx: 2,
+            size: 500,
+            nonce: 42,
+        },
+        TypedAction::FbaSubmit {
+            metaflux_chain: chain,
+            market: 7,
+            side: 1,
+            size: 1_000,
+            price: 100,
+            has_stp_group: true,
+            stp_group: 5,
+            nonce: 43,
+        },
     ];
-    assert_eq!(actions.len(), 41, "all 41 reachable typed actions covered");
+    assert_eq!(actions.len(), 44, "all 44 reachable typed actions covered");
 
     for action in &actions {
         let digest = _typed_digest_for_test(action);
