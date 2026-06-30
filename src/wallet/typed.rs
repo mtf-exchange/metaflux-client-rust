@@ -703,6 +703,72 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `RfqRequest(string metafluxChain,uint32 market,uint8 side,uint64 size,bool hasLimitPx,uint64 limitPx,uint64 expiryMs,bool hasStpGroup,uint64 stpGroup,uint64 nonce)`
+    ///
+    /// Sender-authorized RFQ taker request. `side` is a `uint8` (`0` = bid,
+    /// `1` = ask); numeric fields are the raw `uint64` wire form (fixed-point
+    /// lots / price, NOT decimal-scaled). The optional `limit_px` / `stp_group`
+    /// each flatten to a presence `bool` + value (`0` when absent).
+    RfqRequest {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Market to request a quote on.
+        market: u32,
+        /// Taker side (`0` = bid, `1` = ask).
+        side: u8,
+        /// Requested size (the `u64` wire form).
+        size: u64,
+        /// Whether a taker limit price is present.
+        has_limit_px: bool,
+        /// Taker limit price (`0` when absent; the `u64` wire form).
+        limit_px: u64,
+        /// Server-clock expiry (ms; `0` = handler default window).
+        expiry_ms: u64,
+        /// Whether an STP group is present.
+        has_stp_group: bool,
+        /// STP group id (`0` when absent).
+        stp_group: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `RfqAccept(string metafluxChain,uint64 rfqId,uint32 quoteIdx,uint64 size,uint64 nonce)`
+    ///
+    /// Sender-authorized accept of a specific resting RFQ quote.
+    RfqAccept {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Parent RFQ session id.
+        rfq_id: u64,
+        /// Index of the accepted quote in the session's quote vector.
+        quote_idx: u32,
+        /// Accepted size (the `u64` wire form).
+        size: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `FbaSubmit(string metafluxChain,uint32 market,uint8 side,uint64 size,uint64 price,bool hasStpGroup,uint64 stpGroup,uint64 nonce)`
+    ///
+    /// Sender-authorized submit into a market's frequent-batch-auction pool.
+    /// `side` is a `uint8`; `size` / `price` are the raw `uint64` wire form; the
+    /// optional `stp_group` flattens to a presence `bool` + value.
+    FbaSubmit {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Target market.
+        market: u32,
+        /// Side (`0` = bid, `1` = ask).
+        side: u8,
+        /// Submitted size (the `u64` wire form).
+        size: u64,
+        /// Limit / worst-acceptable price (the `u64` wire form).
+        price: u64,
+        /// Whether an STP group is present.
+        has_stp_group: bool,
+        /// STP group id (`0` when absent).
+        stp_group: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
 }
 
 impl TypedAction {
@@ -758,6 +824,9 @@ impl TypedAction {
                 }
             }
             TypedAction::SubmitEncryptedOrder { .. } => account::SUBMIT_ENCRYPTED_ORDER_TYPE,
+            TypedAction::RfqRequest { .. } => account::RFQ_REQUEST_TYPE,
+            TypedAction::RfqAccept { .. } => account::RFQ_ACCEPT_TYPE,
+            TypedAction::FbaSubmit { .. } => account::FBA_SUBMIT_TYPE,
         }
     }
 
@@ -1242,6 +1311,55 @@ impl TypedAction {
                 *threshold,
                 *target_block,
                 *reveal_deadline_ms,
+                *nonce,
+            ),
+            TypedAction::RfqRequest {
+                metaflux_chain,
+                market,
+                side,
+                size,
+                has_limit_px,
+                limit_px,
+                expiry_ms,
+                has_stp_group,
+                stp_group,
+                nonce,
+            } => account::rfq_request_words(
+                metaflux_chain,
+                *market,
+                *side,
+                *size,
+                *has_limit_px,
+                *limit_px,
+                *expiry_ms,
+                *has_stp_group,
+                *stp_group,
+                *nonce,
+            ),
+            TypedAction::RfqAccept {
+                metaflux_chain,
+                rfq_id,
+                quote_idx,
+                size,
+                nonce,
+            } => account::rfq_accept_words(metaflux_chain, *rfq_id, *quote_idx, *size, *nonce),
+            TypedAction::FbaSubmit {
+                metaflux_chain,
+                market,
+                side,
+                size,
+                price,
+                has_stp_group,
+                stp_group,
+                nonce,
+            } => account::fba_submit_words(
+                metaflux_chain,
+                *market,
+                *side,
+                *size,
+                *price,
+                *has_stp_group,
+                *stp_group,
                 *nonce,
             ),
         }
