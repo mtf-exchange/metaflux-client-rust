@@ -29,6 +29,23 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   optional-absent variants (`create_sub_account` with no index,
   `cancel_all_orders` with no asset).
 
+## [0.10.0]
+
+### Added
+
+- EIP-712 owner-routing for order-lifecycle actions: an operator/agent can sign
+  `/exchange` actions on behalf of another owner (`*_as` variants), including
+  `cancel_all_orders_as` — an agent-signed `cancelAllOrders` for another owner.
+- Signing for the five W1 microstructure actions on the typed-only `/exchange`
+  path.
+- API-precision policy: a round-to-grid helper plus canonical response types.
+
+### Changed
+
+- Market orders now force `tif = Ioc` (O8) — a market order is never silently
+  rested as a resting order.
+- Dropped the vestigial `sig_scheme: "typed"` field from `/exchange` requests.
+
 ## [Unreleased]
 
 ### Added
