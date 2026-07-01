@@ -30,24 +30,29 @@
 //!   cargo run --release --example devnet_market_maker
 //! ```
 
+// This example quotes around live f64 CEX reference prices, so it opts out of
+// the crate-wide `float_arithmetic = "deny"` policy (which targets production
+// order-math paths that use u128 / i64).
+#![allow(clippy::float_arithmetic)]
+
 use std::collections::HashMap;
 use std::time::Duration;
 
 use futures_util::future::join_all;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tiny_keccak::{Hasher, Keccak};
 
 use metaflux_client::{
+    Client,
     faucet::request_faucet,
     types::{
+        MarketId,
         order::{
             BatchOrder, CancelAllOrders, Order, OrderGrouping, OrderKind, Side, StpMode,
             TimeInForce,
         },
-        MarketId,
     },
     wallet::{Address, Wallet},
-    Client,
 };
 
 /// A perp market reduced to what the bot needs to quote it.
@@ -69,7 +74,9 @@ fn to_limit_px(price_usd: f64, tick: u64) -> u64 {
 }
 
 fn to_size(base_units: f64, sz_decimals: u8) -> u64 {
-    (base_units * 10f64.powi(sz_decimals as i32)).round().max(1.0) as u64
+    (base_units * 10f64.powi(sz_decimals as i32))
+        .round()
+        .max(1.0) as u64
 }
 
 fn make_order(
@@ -102,6 +109,7 @@ fn make_order(
 /// - `MTF` (our own coin, on no CEX) → a deterministic oscillation in 4..8 so it
 ///   prints a lively candle instead of a flat line;
 /// - any other unlisted coin → a gentle ±1.5% wobble around the node mark.
+///
 /// The per-market phase offset (`asset_id`) decorrelates the synthetic markets.
 fn reference_px(m: &Mkt, cex: &HashMap<String, f64>, t: f64) -> f64 {
     if let Some(&p) = cex.get(&m.name) {
@@ -230,13 +238,13 @@ fn parse_seed(hex: &str) -> [u8; 32] {
 /// the bare base asset (`BTCUSDT` → `BTC`). Best-effort: returns empty on failure.
 async fn fetch_cex_prices(url: &str) -> HashMap<String, f64> {
     let mut out = HashMap::new();
-    let resp = match reqwest::get(url).await {
-        Ok(r) => r,
-        Err(_) => return out,
+    let Ok(resp) = reqwest::get(url).await else {
+        return out;
     };
     let arr: Vec<Value> = resp.json().await.unwrap_or_default();
     for t in arr {
-        let (Some(sym), Some(px)) = (t.get("symbol").and_then(Value::as_str), t.get("price")) else {
+        let (Some(sym), Some(px)) = (t.get("symbol").and_then(Value::as_str), t.get("price"))
+        else {
             continue;
         };
         let price: f64 = px.as_str().and_then(|s| s.parse().ok()).unwrap_or(0.0);
@@ -282,10 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let levels: usize = env_or("MTF_LEVELS", "8").parse().unwrap_or(8);
     let notional: f64 = env_or("MTF_NOTIONAL", "60").parse().unwrap_or(60.0);
     let refresh: u64 = env_or("MTF_REFRESH", "5").parse().unwrap_or(5);
-    let cex_url = env_or(
-        "MTF_CEX_URL",
-        "https://api.binance.com/api/v3/ticker/price",
-    );
+    let cex_url = env_or("MTF_CEX_URL", "https://api.binance.com/api/v3/ticker/price");
 
     let seed = parse_seed(&std::env::var("MTF_MAKER_KEY").map_err(|_| "set MTF_MAKER_KEY")?);
     let wallets: Vec<Wallet> = (0..n_accounts)

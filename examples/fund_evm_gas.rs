@@ -7,7 +7,7 @@
 
 use tiny_keccak::{Hasher, Keccak};
 
-use metaflux_client::{wallet::Wallet, Client};
+use metaflux_client::{Client, wallet::Wallet};
 
 fn env_or(k: &str, d: &str) -> String {
     std::env::var(k).unwrap_or_else(|_| d.to_string())

@@ -178,7 +178,10 @@ mod tests {
     #[test]
     fn decimal_tick_scales_into_the_1e8_plane() {
         // tick "0.01" whole-USDC → 1_000_000 on the 1e8 plane.
-        assert_eq!(decimal_to_scaled("0.01", PRICE_PLANE_DECIMALS), Some(1_000_000));
+        assert_eq!(
+            decimal_to_scaled("0.01", PRICE_PLANE_DECIMALS),
+            Some(1_000_000)
+        );
         // step "0.001" whole-units → 100 lots at sz_decimals = 5.
         assert_eq!(decimal_to_scaled("0.001", 5), Some(100));
         // whole / half / zero.
@@ -210,7 +213,10 @@ mod tests {
     fn min_order_is_enforced_after_snapping() {
         let m = mkt("0.01", "0.001", "0.001", 5); // min = 100 lots
         // 50 lots floors to 0 of a 100-lot step → below the minimum.
-        assert_eq!(round_order_to_grid(&m, 6_673_525_000_000, 50), Err(GridError::BelowMinOrder));
+        assert_eq!(
+            round_order_to_grid(&m, 6_673_525_000_000, 50),
+            Err(GridError::BelowMinOrder)
+        );
     }
 
     #[test]

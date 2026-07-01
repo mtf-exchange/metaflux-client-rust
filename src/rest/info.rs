@@ -986,7 +986,10 @@ mod tests {
         assert_eq!(a.positions.len(), 1); // rich position (extra fields ignored)
         assert_eq!(a.positions[0].leverage, 7);
         assert_eq!(a.balances.usdc, "100000000");
-        assert_eq!(a.balances.spot.get("MTF").map(|b| b.total.as_str()), Some("10"));
+        assert_eq!(
+            a.balances.spot.get("MTF").map(|b| b.total.as_str()),
+            Some("10")
+        );
     }
 
     /// Decode the DEPLOYED gateway `markets.data` shape: an object
