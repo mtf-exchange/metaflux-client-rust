@@ -9,7 +9,7 @@
 
 use metaflux_client::{
     Client,
-    rest::exchange::{MTF_CHAIN_ID, _action_digest_for_test, _recover_for_test},
+    rest::exchange::{_action_digest_for_test, _recover_for_test, MTF_CHAIN_ID},
     rest::exchange_typed::{_typed_digest_for_test, _typed_trade_digest_for_test},
     types::{
         MarketId, OrderId,
@@ -175,7 +175,10 @@ async fn cancel_order_round_trips_through_exchange() {
     let nonce = body["nonce"].as_u64().unwrap();
     let sig_hex = body["signature"].as_str().unwrap();
     assert_eq!(action["type"].as_str(), Some("cancel_order"));
-    assert!(body.get("sig_scheme").is_none(), "vestigial sig_scheme must not be sent");
+    assert!(
+        body.get("sig_scheme").is_none(),
+        "vestigial sig_scheme must not be sent"
+    );
     let digest = _typed_trade_digest_for_test(TypedTradingAction::CancelOrder(&cancel), nonce);
     let sig = decode_sig(sig_hex);
     let recovered = _recover_for_test(&digest, &sig).expect("recover");
@@ -462,9 +465,10 @@ async fn cancel_all_orders_as_carries_owner_and_signs_owner_form() {
     // The signing wallet is the AGENT; `owner` is a DISTINCT account whose
     // orders are being cancelled (operator / vault trading).
     let agent = sample_wallet();
-    let owner = Wallet::from_hex("1111111111111111111111111111111111111111111111111111111111111111")
-        .unwrap()
-        .address();
+    let owner =
+        Wallet::from_hex("1111111111111111111111111111111111111111111111111111111111111111")
+            .unwrap()
+            .address();
 
     let resp: Value = client
         .exchange()
