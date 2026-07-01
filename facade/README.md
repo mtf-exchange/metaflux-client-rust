@@ -11,7 +11,7 @@ This crate re-exports the entire `metaflux-client` public API. Depend on
 
 ```toml
 [dependencies]
-metaflux = "0.1"
+metaflux = "0.10"
 ```
 
 ```rust,no_run

@@ -14,13 +14,13 @@ Published on [crates.io](https://crates.io/crates/metaflux-client):
 
 ```toml
 [dependencies]
-metaflux-client = "0.1"
+metaflux-client = "0.10"
 ```
 
 or `cargo add metaflux-client`. The crate is imported as `metaflux_client`.
 
 A short alias crate, [`metaflux`](https://crates.io/crates/metaflux), re-exports
-the entire API — `metaflux = "0.1"` and `use metaflux::...` work identically.
+the entire API — `metaflux = "0.10"` and `use metaflux::...` work identically.
 
 ## What it does
 
