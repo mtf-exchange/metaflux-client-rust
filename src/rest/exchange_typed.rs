@@ -1208,6 +1208,46 @@ impl<'a> Exchange<'a> {
         .await
     }
 
+    /// As an approved agent, cancel all of `owner`'s open orders (optionally for
+    /// one asset) under the typed scheme — the agent-resolved counterpart of
+    /// [`Self::cancel_all_orders_typed`].
+    ///
+    /// The signing `wallet` is a registered agent of `owner`; the action cancels
+    /// `owner`'s orders (operator / vault trading), not the signer's. The signed
+    /// digest binds `owner` right after `metafluxChain` (selecting the
+    /// `*_WITH_OWNER` type string), and the POST carries a params-level `owner`
+    /// (`0x`-hex) so the node's `NativeCancelAllOrders.owner` is set. `asset` is
+    /// optional exactly as in the owner-less form (`None` = all assets, omitted
+    /// from the wire).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn cancel_all_orders_as(
+        &self,
+        wallet: &Wallet,
+        owner: crate::wallet::Address,
+        asset: Option<u32>,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::CancelAllOrders {
+                metaflux_chain: chain,
+                owner: Some(owner),
+                has_asset: asset.is_some(),
+                asset: asset.unwrap_or(0),
+                nonce,
+            };
+            let mut params = match asset {
+                Some(a) => json!({ "asset": a }),
+                None => json!({}),
+            };
+            // The agent-resolved owner rides as a params-level `0x`-hex field;
+            // the node reads `NativeCancelAllOrders.owner` from it.
+            params["owner"] = json!(owner);
+            (action, "cancel_all_orders", params)
+        })
+        .await
+    }
+
     /// Submit a threshold-encrypted order under the typed scheme.
     ///
     /// `ciphertext` is signed as EIP-712 `bytes` (`keccak256(raw)`) and posted as
