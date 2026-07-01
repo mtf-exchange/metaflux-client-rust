@@ -337,7 +337,7 @@ impl WsClient {
     /// Issue a TRADING action (order / cancel / …) over the WS `post` channel,
     /// signed under the typed scheme. The 12 trading actions migrated to the
     /// typed scheme (the node rejects them under the opaque envelope), so the WS
-    /// `post` path carries `sig_scheme:"typed"` alongside the structured digest.
+    /// `post` path posts to the typed-only `/exchange` alongside the structured digest.
     async fn post_typed_trade(
         &self,
         wallet: &Wallet,
@@ -352,7 +352,6 @@ impl WsClient {
             "signature": signature,
             "nonce": nonce,
             "action": action,
-            "sig_scheme": "typed",
         });
         self.post_request("action", payload).await
     }

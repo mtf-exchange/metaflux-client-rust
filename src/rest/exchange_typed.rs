@@ -2,7 +2,7 @@
 //!
 //! These extend [`Exchange`] with the structured EIP-712 signing path: each
 //! action is signed as a named [`TypedAction`] struct (so wallets render its
-//! fields), and the POST carries `sig_scheme: "typed"`. Decimal magnitudes are
+//! fields), and the POST posts to the typed-only `/exchange`. Decimal magnitudes are
 //! signed AND posted as the identical canonical string, since the server hashes
 //! the received string before parsing it.
 //!
@@ -21,7 +21,7 @@ use crate::wallet::{
 
 /// A typed-scheme signed action ready to POST to `/exchange`.
 ///
-/// Carries `sig_scheme: "typed"` to select the structured EIP-712 path on the
+/// Posts to the typed-only `/exchange`; the structured EIP-712 path is the
 /// server, alongside the `{ type, params }` action object whose decimal fields
 /// are the exact canonical strings that were hashed.
 #[derive(Clone, Debug, Serialize)]
@@ -29,7 +29,6 @@ struct TypedSignedEnvelope<'a> {
     action: &'a Value,
     nonce: u64,
     signature: String,
-    sig_scheme: &'static str,
 }
 
 /// Map a [`crate::types::meta_bridge::MbChain`] to the `uint8` the typed `MbWithdraw` digest
@@ -69,7 +68,7 @@ impl<'a> Exchange<'a> {
     // These mirror the structured signing path: rather than hashing the opaque
     // canonical-JSON action body, each action is a named EIP-712 struct so a
     // wallet can render its fields. The server selects this path via
-    // `sig_scheme: "typed"`. Decimal magnitudes are signed AND posted as the
+    // the typed-only `/exchange`. Decimal magnitudes are signed AND posted as the
     // identical canonical string (the server hashes the received string, then
     // parses it), so pick one canonical decimal form per amount.
 
@@ -1467,7 +1466,6 @@ impl<'a> Exchange<'a> {
             action: &action,
             nonce,
             signature,
-            sig_scheme: "typed",
         };
         self.client.post_json("/exchange", &envelope).await
     }
@@ -1490,7 +1488,6 @@ impl<'a> Exchange<'a> {
             action: &action,
             nonce,
             signature,
-            sig_scheme: "typed",
         };
         self.client.post_json("/exchange", &envelope).await
     }
