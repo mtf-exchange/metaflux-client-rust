@@ -9,8 +9,8 @@
 
 use metaflux_client::{
     Client,
-    rest::exchange::{_action_digest_for_test, _recover_for_test},
-    rest::exchange_typed::_typed_trade_digest_for_test,
+    rest::exchange::{MTF_CHAIN_ID, _action_digest_for_test, _recover_for_test},
+    rest::exchange_typed::{_typed_digest_for_test, _typed_trade_digest_for_test},
     types::{
         MarketId, OrderId,
         account::UpdateLeverage,
@@ -20,7 +20,7 @@ use metaflux_client::{
         spot::{EarnWithdraw, SpotMarginOpen},
         vault::{CreateVault, VaultKind},
     },
-    wallet::{TypedTradingAction, Wallet},
+    wallet::{TypedAction, TypedTradingAction, Wallet, metaflux_chain_tag},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -443,6 +443,67 @@ async fn batch_order_accepts_params_level_owner() {
         .batch_order(&wallet, &batch)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn cancel_all_orders_as_carries_owner_and_signs_owner_form() {
+    let server = MockServer::start().await;
+    let captor = CapturingResponder {
+        last: Arc::new(Mutex::new(None)),
+        response: json!({ "accepted": true }),
+    };
+    Mock::given(method("POST"))
+        .and(path("/exchange"))
+        .respond_with(captor.clone())
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    // The signing wallet is the AGENT; `owner` is a DISTINCT account whose
+    // orders are being cancelled (operator / vault trading).
+    let agent = sample_wallet();
+    let owner = Wallet::from_hex("1111111111111111111111111111111111111111111111111111111111111111")
+        .unwrap()
+        .address();
+
+    let resp: Value = client
+        .exchange()
+        .cancel_all_orders_as(&agent, owner, Some(7))
+        .await
+        .unwrap();
+    assert_eq!(resp["accepted"], true);
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("cancel_all_orders"));
+    assert_eq!(action["params"]["asset"], json!(7));
+    // (1) The wire carries the agent-resolved owner as a `0x`-hex field so the
+    // node's NativeCancelAllOrders.owner is set.
+    let owner_str = action["params"]["owner"]
+        .as_str()
+        .expect("params.owner is a string");
+    assert!(owner_str.starts_with("0x"), "owner must be 0x-hex");
+    assert_eq!(action["params"]["owner"], json!(owner));
+
+    // (2) The signature is over the OWNER-FORM typed digest, recovered to the
+    // AGENT signer (NOT the owner).
+    let nonce = body["nonce"].as_u64().unwrap();
+    let reconstructed = TypedAction::CancelAllOrders {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        owner: Some(owner),
+        has_asset: true,
+        asset: 7,
+        nonce,
+    };
+    let digest = _typed_digest_for_test(&reconstructed);
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(_recover_for_test(&digest, &sig).unwrap(), agent.address());
+
+    // Guard: the vestigial sig_scheme field must not be reintroduced.
+    assert!(
+        body.get("sig_scheme").is_none(),
+        "sig_scheme must not be sent"
+    );
 }
 
 fn decode_sig(hex_str: &str) -> metaflux_client::wallet::Signature {
