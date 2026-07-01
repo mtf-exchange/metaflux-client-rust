@@ -125,10 +125,9 @@ async fn submit_order_envelope_includes_valid_signature() {
         Some("submit_order")
     );
     assert!(action.get("order").is_some());
-    assert_eq!(
-        captured.get("sig_scheme").and_then(Value::as_str),
-        Some("typed"),
-        "trading actions must sign under sig_scheme=typed"
+    assert!(
+        captured.get("sig_scheme").is_none(),
+        "the vestigial sig_scheme field must no longer be sent"
     );
 
     // Reproduce the typed trading digest and recover the signer.
@@ -176,7 +175,7 @@ async fn cancel_order_round_trips_through_exchange() {
     let nonce = body["nonce"].as_u64().unwrap();
     let sig_hex = body["signature"].as_str().unwrap();
     assert_eq!(action["type"].as_str(), Some("cancel_order"));
-    assert_eq!(body["sig_scheme"].as_str(), Some("typed"));
+    assert!(body.get("sig_scheme").is_none(), "vestigial sig_scheme must not be sent");
     let digest = _typed_trade_digest_for_test(TypedTradingAction::CancelOrder(&cancel), nonce);
     let sig = decode_sig(sig_hex);
     let recovered = _recover_for_test(&digest, &sig).expect("recover");

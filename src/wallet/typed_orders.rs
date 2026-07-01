@@ -1,5 +1,5 @@
 //! EIP-712 typed-action signing for the TRADING set (orders / cancels / TWAP /
-//! batches) — the structured `sig_scheme:"typed"` path for the formerly-opaque
+//! batches) — the structured typed-action path for the formerly-opaque
 //! actions. The node migrated the 12 trading actions to the typed scheme; the
 //! opaque `MetaFluxAction` envelope is no longer admitted for them.
 //!

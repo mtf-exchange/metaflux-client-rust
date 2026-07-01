@@ -178,10 +178,9 @@ async fn ws_post_action_info_and_error() {
         action.get("type").and_then(Value::as_str),
         Some("submit_order")
     );
-    assert_eq!(
-        payload.get("sig_scheme").and_then(Value::as_str),
-        Some("typed"),
-        "WS trading actions must sign under sig_scheme=typed"
+    assert!(
+        payload.get("sig_scheme").is_none(),
+        "the vestigial sig_scheme field must no longer be sent"
     );
     let digest = _typed_trade_digest_for_test(TypedTradingAction::SubmitOrder(&order), nonce);
     let recovered = _recover_for_test(&digest, &decode_sig(sig_hex)).expect("recover");
