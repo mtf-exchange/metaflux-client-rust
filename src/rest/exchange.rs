@@ -59,7 +59,7 @@ use crate::types::{
     twap::{TwapCancel, TwapOrder},
     vault::{CreateVault, VaultDistribute, VaultModify, VaultTransfer, VaultWithdraw},
 };
-use crate::wallet::{Eip712, Signature, TypedTradingAction, Wallet};
+use crate::wallet::{Address, Eip712, Signature, TypedTradingAction, Wallet};
 
 /// MetaFlux EIP-712 domain chain ids.
 ///
@@ -322,6 +322,29 @@ impl<'a> Exchange<'a> {
             .await
     }
 
+    /// As an approved agent, cancel a resting order of `owner` by its client
+    /// order id — the operator / vault counterpart of [`Self::cancel_by_cloid`].
+    ///
+    /// The signing `wallet` is a registered agent of `owner`; the action cancels
+    /// `owner`'s order (operator / vault trading), not the signer's. The signed
+    /// digest binds `owner` right after `metafluxChain` (selecting the
+    /// `CancelByCloid` `*_WITH_OWNER` type string), and the POST carries a
+    /// params-level `owner` (`0x`-hex) so the node's `NativeCancelByCloid.owner`
+    /// is set.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn cancel_by_cloid_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        params: &CancelByCloid,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "cancel_by_cloid", "params": params });
+        self.post_typed_trade_as(wallet, owner, action, TypedTradingAction::CancelByCloid(params))
+            .await
+    }
+
     /// Amend a resting order's price and/or size in place.
     ///
     /// # Errors
@@ -329,6 +352,28 @@ impl<'a> Exchange<'a> {
     pub async fn modify(&self, wallet: &Wallet, params: &Modify) -> Result<Value, ClientError> {
         let action = json!({ "type": "modify", "params": params });
         self.post_typed_trade(wallet, action, TypedTradingAction::Modify(params))
+            .await
+    }
+
+    /// As an approved agent, amend a resting order of `owner` in place — the
+    /// operator / vault counterpart of [`Self::modify`].
+    ///
+    /// The signing `wallet` is a registered agent of `owner`; the action amends
+    /// `owner`'s order (operator / vault trading), not the signer's. The signed
+    /// digest binds `owner` right after `metafluxChain` (selecting the `Modify`
+    /// `*_WITH_OWNER` type string), and the POST carries a params-level `owner`
+    /// (`0x`-hex) so the node's `NativeModify.owner` is set.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn modify_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        params: &Modify,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "modify", "params": params });
+        self.post_typed_trade_as(wallet, owner, action, TypedTradingAction::Modify(params))
             .await
     }
 
@@ -343,6 +388,30 @@ impl<'a> Exchange<'a> {
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "batch_modify", "params": params });
         self.post_typed_trade(wallet, action, TypedTradingAction::BatchModify(params))
+            .await
+    }
+
+    /// As an approved agent, apply N modifications to `owner`'s resting orders
+    /// under one signature — the operator / vault counterpart of
+    /// [`Self::batch_modify`].
+    ///
+    /// The signing `wallet` is a registered agent of `owner`; the action amends
+    /// `owner`'s orders (operator / vault trading), not the signer's. The signed
+    /// digest binds `owner` right after `metafluxChain` (selecting the
+    /// `BatchModify` `*_WITH_OWNER` type string), and the POST carries a
+    /// params-level `owner` (`0x`-hex) so the node's `NativeBatchModify.owner`
+    /// is set.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn batch_modify_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        params: &BatchModify,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "batch_modify", "params": params });
+        self.post_typed_trade_as(wallet, owner, action, TypedTradingAction::BatchModify(params))
             .await
     }
 
@@ -393,6 +462,31 @@ impl<'a> Exchange<'a> {
         }
         let action = json!({ "type": "batch_cancel", "params": batch });
         self.post_typed_trade(wallet, action, TypedTradingAction::BatchCancel(batch))
+            .await
+    }
+
+    /// As an approved agent, apply N cancels to `owner`'s resting orders under
+    /// one signature — the operator / vault counterpart of [`Self::batch_cancel`].
+    ///
+    /// The signing `wallet` is a registered agent of `owner`; the action cancels
+    /// `owner`'s orders (operator / vault trading), not the signer's. Unlike
+    /// [`Self::batch_cancel`], there is NO owner == signer guard — the node
+    /// authorizes the registered operator, so each cancel's `owner` may differ
+    /// from the signer. The signed digest binds `owner` right after
+    /// `metafluxChain` (selecting the `BatchCancel` `*_WITH_OWNER` type string),
+    /// and the POST carries a params-level `owner` (`0x`-hex) so the node's
+    /// `NativeBatchCancel.owner` is set.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn batch_cancel_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        batch: &BatchCancel,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "batch_cancel", "params": batch });
+        self.post_typed_trade_as(wallet, owner, action, TypedTradingAction::BatchCancel(batch))
             .await
     }
 
