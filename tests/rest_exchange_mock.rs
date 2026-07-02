@@ -12,15 +12,18 @@ use metaflux_client::{
     rest::exchange::{_action_digest_for_test, _recover_for_test, MTF_CHAIN_ID},
     rest::exchange_typed::{_typed_digest_for_test, _typed_trade_digest_for_test},
     types::{
-        MarketId, OrderId,
+        Cloid, MarketId, OrderId,
         account::UpdateLeverage,
         order::{
-            BatchOrder, CancelOrder, Order, OrderKind, OrderStatus, Side, StpMode, TimeInForce,
+            BatchCancel, BatchModify, BatchOrder, CancelByCloid, CancelOrder, Modify, Order,
+            OrderKind, OrderStatus, Side, StpMode, TimeInForce,
         },
         spot::{EarnWithdraw, SpotMarginOpen},
         vault::{CreateVault, VaultKind},
     },
-    wallet::{TypedAction, TypedTradingAction, Wallet, metaflux_chain_tag},
+    wallet::{
+        Address, TypedAction, TypedTradingAction, TypedTradingDigest, Wallet, metaflux_chain_tag,
+    },
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -508,6 +511,114 @@ async fn cancel_all_orders_as_carries_owner_and_signs_owner_form() {
         body.get("sig_scheme").is_none(),
         "sig_scheme must not be sent"
     );
+}
+
+/// The agent-resolved owner (a DISTINCT account whose orders are managed) used
+/// by the owner-bound `*_as` tests. Differs from `sample_wallet` (the agent).
+fn vault_owner() -> Address {
+    Wallet::from_hex("1111111111111111111111111111111111111111111111111111111111111111")
+        .unwrap()
+        .address()
+}
+
+/// Assert the captured `/exchange` body for an owner-bound `*_as` call: the wire
+/// carries a params-level `0x`-hex `owner`, and the signature is over the
+/// OWNER-FORM (`*_WITH_OWNER`) typed digest, recovering to the AGENT signer.
+fn assert_owner_bound(body: &Value, ty: &str, owner: Address, agent: &Wallet, typed: TypedTradingAction) {
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some(ty));
+    // (1) params-level owner is present, 0x-hex, and equals the vault.
+    let owner_str = action["params"]["owner"]
+        .as_str()
+        .expect("params.owner is a string");
+    assert!(owner_str.starts_with("0x"), "owner must be 0x-hex");
+    assert_eq!(action["params"]["owner"], json!(owner));
+    // (2) signature is over the owner-BOUND typed digest, recovered to the AGENT.
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = TypedTradingDigest::new_with_owner(typed, owner, MTF_CHAIN_ID, nonce)
+        .digest()
+        .unwrap();
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(_recover_for_test(&digest, &sig).unwrap(), agent.address());
+    // Guard: the vestigial sig_scheme field must not be reintroduced.
+    assert!(body.get("sig_scheme").is_none(), "sig_scheme must not be sent");
+}
+
+/// Spin up a capturing `/exchange` mock, returning `(client, captor, agent)`.
+async fn capturing_exchange() -> (Client, CapturingResponder, Wallet) {
+    let server = MockServer::start().await;
+    let captor = CapturingResponder {
+        last: Arc::new(Mutex::new(None)),
+        response: json!({ "accepted": true }),
+    };
+    Mock::given(method("POST"))
+        .and(path("/exchange"))
+        .respond_with(captor.clone())
+        .mount(&server)
+        .await;
+    // Leak the server so it outlives this fn (the client holds only the uri).
+    let client = Client::new(server.uri()).unwrap();
+    std::mem::forget(server);
+    (client, captor, sample_wallet())
+}
+
+#[tokio::test]
+async fn batch_cancel_as_carries_owner_and_signs_owner_form() {
+    let (client, captor, agent) = capturing_exchange().await;
+    let owner = vault_owner();
+    // Each cancel's owner is the VAULT (distinct from the signing agent) — the
+    // `_as` path has NO owner == signer guard.
+    let batch = BatchCancel {
+        cancels: vec![
+            CancelOrder { owner, market: MarketId(1), oid: Some(OrderId(1234)), cloid: None },
+            CancelOrder { owner, market: MarketId(2), oid: Some(OrderId(5678)), cloid: None },
+        ],
+    };
+    let _: Value = client.exchange().batch_cancel_as(&agent, owner, &batch).await.unwrap();
+    let body = captor.last.lock().await.clone().expect("body captured");
+    assert_owner_bound(&body, "batch_cancel", owner, &agent, TypedTradingAction::BatchCancel(&batch));
+}
+
+#[tokio::test]
+async fn batch_modify_as_carries_owner_and_signs_owner_form() {
+    let (client, captor, agent) = capturing_exchange().await;
+    let owner = vault_owner();
+    let params = BatchModify {
+        modifications: vec![Modify {
+            market: MarketId(1),
+            oid: OrderId(1234),
+            new_px: Some(6_900_000_000_000),
+            new_size: Some(200),
+        }],
+    };
+    let _: Value = client.exchange().batch_modify_as(&agent, owner, &params).await.unwrap();
+    let body = captor.last.lock().await.clone().expect("body captured");
+    assert_owner_bound(&body, "batch_modify", owner, &agent, TypedTradingAction::BatchModify(&params));
+}
+
+#[tokio::test]
+async fn modify_as_carries_owner_and_signs_owner_form() {
+    let (client, captor, agent) = capturing_exchange().await;
+    let owner = vault_owner();
+    let params = Modify {
+        market: MarketId(1),
+        oid: OrderId(1234),
+        new_px: Some(6_900_000_000_000),
+        new_size: Some(200),
+    };
+    let _: Value = client.exchange().modify_as(&agent, owner, &params).await.unwrap();
+    let body = captor.last.lock().await.clone().expect("body captured");
+    assert_owner_bound(&body, "modify", owner, &agent, TypedTradingAction::Modify(&params));
+}
+
+#[tokio::test]
+async fn cancel_by_cloid_as_carries_owner_and_signs_owner_form() {
+    let (client, captor, agent) = capturing_exchange().await;
+    let owner = vault_owner();
+    let params = CancelByCloid { asset: MarketId(1), cloid: Cloid([0xAB; 16]) };
+    let _: Value = client.exchange().cancel_by_cloid_as(&agent, owner, &params).await.unwrap();
+    let body = captor.last.lock().await.clone().expect("body captured");
+    assert_owner_bound(&body, "cancel_by_cloid", owner, &agent, TypedTradingAction::CancelByCloid(&params));
 }
 
 fn decode_sig(hex_str: &str) -> metaflux_client::wallet::Signature {

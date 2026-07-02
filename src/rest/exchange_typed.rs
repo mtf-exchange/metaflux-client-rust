@@ -1531,6 +1531,39 @@ impl<'a> Exchange<'a> {
         };
         self.client.post_json("/exchange", &envelope).await
     }
+
+    /// Sign + POST an agent-resolved (owner-bound) TRADING action — the
+    /// operator / vault counterpart of [`Self::post_typed_trade`].
+    ///
+    /// Identical to [`Self::post_typed_trade`] except (1) the digest binds
+    /// `owner` via [`TypedTradingDigest::new_with_owner`], which selects the
+    /// action's `*_WITH_OWNER` type string and inserts the owner word right after
+    /// `metafluxChain`; and (2) the POSTed `action` gains a params-level `owner`
+    /// (`0x`-hex) so the node's `Native*.owner` is set. The signing `wallet` is a
+    /// registered agent of `owner`; the recovered signer is the AGENT, not the
+    /// owner. For an owner-less action the owner-less [`Self::post_typed_trade`]
+    /// signs a byte-identical digest.
+    pub(crate) async fn post_typed_trade_as<R: serde::de::DeserializeOwned>(
+        &self,
+        wallet: &Wallet,
+        owner: crate::wallet::Address,
+        mut action: Value,
+        typed: TypedTradingAction<'_>,
+    ) -> Result<R, ClientError> {
+        let nonce = next_nonce();
+        let digest =
+            TypedTradingDigest::new_with_owner(typed, owner, MTF_CHAIN_ID, nonce).digest()?;
+        let signature = wallet.sign_digest(&digest)?.to_hex();
+        // The agent-resolved owner rides as a params-level `0x`-hex field; the
+        // node reads `Native*.owner` from it (mirrors `cancel_all_orders_as`).
+        action["params"]["owner"] = json!(owner);
+        let envelope = TypedSignedEnvelope {
+            action: &action,
+            nonce,
+            signature,
+        };
+        self.client.post_json("/exchange", &envelope).await
+    }
 }
 
 /// Test-only escape hatch: compute the typed-scheme EIP-712 digest the SDK

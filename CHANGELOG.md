@@ -29,6 +29,26 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   optional-absent variants (`create_sub_account` with no index,
   `cancel_all_orders` with no asset).
 
+## [0.11.0]
+
+### Added
+
+- Owner-bound (operator / vault) `Exchange` methods for the order-lifecycle
+  cancel / modify actions: `batch_cancel_as`, `batch_modify_as`, `modify_as`,
+  and `cancel_by_cloid_as`. Each mirrors its owner-less sibling but signs the
+  action's `*_WITH_OWNER` typed digest (owner bound right after `metafluxChain`,
+  via `TypedTradingDigest::new_with_owner`) and injects a params-level `owner`
+  (`0x`-hex) into the POSTed `action` so the node's `Native*.owner` is set. This
+  lets a registered agent cancel/modify a VAULT's resting orders on its behalf;
+  `batch_cancel_as` carries NO owner == signer guard (unlike `batch_cancel`).
+  Completes the `*_as` operator surface begun with `cancel_all_orders_as` in
+  0.10.0 (`place` already routed the owner via `BatchOrder.owner`).
+- Internal `Exchange::post_typed_trade_as` helper: the owner-bound counterpart
+  of `post_typed_trade` (owner-less digests stay byte-identical).
+- Mock-server tests pinning each `*_as` method's wire shape (params-level
+  `0x`-hex `owner`) and proving the signature recovers to the AGENT over the
+  owner-form typed digest.
+
 ## [0.10.0]
 
 ### Added
