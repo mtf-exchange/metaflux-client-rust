@@ -70,6 +70,20 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Added
 
+- Consolidated `/info` market reads: `recent_trades(coin)`,
+  `trades_by_time(coin, start, end)` (bounded recent window), `predicted_fundings()`
+  (clamped rate + next per-asset settlement boundary), and `candle_snapshot(coin,
+  interval, start, end)` — the single archive-first candle query (compact
+  single-letter wire keys). `MarketInfo` now carries `coin` (the market symbol)
+  and the inline `margin_tiers` ladder (`[{ max_open_interest: Option<String>,
+  max_leverage: u8, maint_margin_ratio: String }]`, upper-bound bands; `None` =
+  unbounded top tier).
+- WS `explorer_block` / `explorer_txs` channels plus `subscribe_spot_state`,
+  `subscribe_user_fundings`, `subscribe_explorer_block` and
+  `subscribe_explorer_txs` helpers. Doc notes for the non-empty `trades`
+  on-subscribe snapshot, the `user_fundings` record shape
+  (`{ coin, payment, szi, fundingRate, time }`), the `order_updates` `sz`
+  (filled) / `orig_sz` (original) fields, and the `explorer_txs` row `hash`.
 - Typed request types + `Exchange` methods for the node's full signed-action
   surface: `modify` / `batch_modify` / `batch_order` / `batch_cancel` /
   `cancel_by_cloid` / `schedule_cancel` / `cancel_all_orders`, `twap_order` /
@@ -84,6 +98,13 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Changed
 
+- **Breaking:** `/info` reads are keyed by `coin` (the market symbol) and
+  `address` (0x hex): `l2_book(coin, depth)`, `market_info(coin)` (folds in the
+  former `market_info_by_coin`), `staking_state(address)` and
+  `delegations(address)` replace the numeric `market_id` / `asset_id` /
+  `account_id` variants. Responses render coin symbols everywhere (e.g.
+  `Trade.coin = "BTC"`). Signed `/exchange` actions are UNCHANGED — `asset`
+  stays a numeric `u32` in the typed digests (consensus-frozen).
 - **Breaking:** removed signed actions the node does not accept — `rfq_request` /
   `rfq_accept`, `fba_submit`, `pm_enroll` / `pm_unenroll` / `pm_rebalance`,
   `cross_chain_send`, `encrypted_order_submit` (replaced by
@@ -95,4 +116,8 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Removed
 
+- **Breaking:** the `candle` info read (replaced by `candle_snapshot`), the
+  `web_data2` read and WS channel, the standalone `margin_table` read (the ladder
+  now rides inline on markets / `market_info` as `margin_tiers`), and the
+  `MarketInfo.name` field (use `coin`).
 - The optional `grpc` feature and the `tonic` / `prost` dependencies.

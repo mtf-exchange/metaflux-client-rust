@@ -38,7 +38,9 @@ pub enum Subscription {
         /// Market asset-id as a decimal string (e.g. `"1"`).
         coin: String,
     },
-    /// Public trade prints for one market.
+    /// Public trade prints for one market. On subscribe the server sends a
+    /// NON-EMPTY snapshot of the bounded recent tape (snapshot rows carry
+    /// `users: null`); subsequent frames are live prints.
     Trades {
         /// Market asset-id as a decimal string.
         coin: String,
@@ -74,7 +76,8 @@ pub enum Subscription {
         user: Address,
     },
     /// Per-account order lifecycle (open/filled/canceled/rejected) — replaces
-    /// the old `order_events`.
+    /// the old `order_events`. On a filled status the record carries `sz` (the
+    /// FILLED size) and `orig_sz` (the original order size).
     OrderUpdates {
         /// User `0x` address.
         user: Address,
@@ -89,7 +92,10 @@ pub enum Subscription {
         /// User `0x` address.
         user: Address,
     },
-    /// Per-account realized funding payments.
+    /// Per-account realized funding payments. Each record carries
+    /// `{ coin, payment, szi, fundingRate, time }` (symbol coin, signed payment,
+    /// signed position size at settlement, the applied rate, and the unix-ms
+    /// boundary).
     UserFundings {
         /// User `0x` address.
         user: Address,
@@ -121,6 +127,11 @@ pub enum Subscription {
         /// User `0x` address.
         user: Address,
     },
+    /// Global stream of committed explorer block headers, one per block.
+    ExplorerBlock,
+    /// Global stream of committed explorer transaction rows. Each row carries a
+    /// `hash` (the 0x action hash; empty for systemic transactions).
+    ExplorerTxs,
 }
 
 /// Typed channel frame (server -> client).
@@ -180,6 +191,11 @@ pub enum WsMessage {
     SpotState(serde_json::Value),
     /// Per-(user, market) leverage/margin context.
     ActiveAssetData(serde_json::Value),
+    /// Committed explorer block header frame.
+    ExplorerBlock(serde_json::Value),
+    /// Committed explorer transaction rows (each row carries a 0x action `hash`,
+    /// empty for systemic transactions).
+    ExplorerTxs(serde_json::Value),
     /// Pong reply to our heartbeat — a bare `{"channel":"pong"}` with no `data`.
     Pong,
     /// Any channel the SDK doesn't yet decode — carries no typed payload.
@@ -285,6 +301,18 @@ mod tests {
     }
 
     #[test]
+    fn subscription_explorer_channels_are_bare_type() {
+        for (sub, ty) in [
+            (Subscription::ExplorerBlock, "explorer_block"),
+            (Subscription::ExplorerTxs, "explorer_txs"),
+        ] {
+            let j = serde_json::to_value(&sub).unwrap();
+            assert_eq!(j["type"], ty);
+            assert!(j.get("coin").is_none() && j.get("user").is_none());
+        }
+    }
+
+    #[test]
     fn ws_message_decodes_data_channels() {
         for chan in [
             "l2_book",
@@ -295,6 +323,10 @@ mod tests {
             "fills",
             "order_updates",
             "account_state",
+            "spot_state",
+            "user_fundings",
+            "explorer_block",
+            "explorer_txs",
         ] {
             let raw = serde_json::json!({ "channel": chan, "data": { "x": 1 } });
             let m: WsMessage = serde_json::from_value(raw)

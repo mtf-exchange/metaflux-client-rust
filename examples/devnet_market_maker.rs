@@ -210,7 +210,7 @@ fn build_crosses(
 /// `/exchange` admits actions ASYNCHRONOUSLY — a `batch_order` returns an ack
 /// (`{accepted, action_hash, mempool_depth, nonce}`), and the orders match in a
 /// later block. So success here means "admitted to the mempool", and fills are
-/// observed out-of-band via `recent_trades` / `candle`, not in this response.
+/// observed out-of-band via `recent_trades` / `candle_snapshot`, not this response.
 fn accepted(v: &Value) -> bool {
     v.get("accepted").and_then(Value::as_bool).unwrap_or(false)
 }
@@ -265,7 +265,7 @@ fn parse_perps(v: &Value) -> Vec<Mkt> {
     arr.iter()
         .filter_map(|m| {
             let asset_id = m.get("asset_id")?.as_u64()? as u32;
-            let name = m.get("name")?.as_str()?.to_string();
+            let name = m.get("coin")?.as_str()?.to_string();
             let mark: f64 = m.get("mark_px")?.as_str()?.parse().ok()?;
             // tick_size is a CANONICAL whole-USDC decimal string ("0.01"); rescale
             // to the 1e8 limit_px plane to_limit_px / the tick>0 filter expect.

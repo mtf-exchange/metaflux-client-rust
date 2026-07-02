@@ -10,7 +10,7 @@
 use metaflux_client::{
     Client,
     rest::info::{MarginMode, MarketKind, Tier},
-    types::{MarketId, VaultId},
+    types::VaultId,
     wallet::Address,
 };
 use serde_json::{Value, json};
@@ -25,10 +25,10 @@ fn envelope(ty: &str, data: Value) -> Value {
 #[tokio::test]
 async fn markets_decodes_array_of_market_info() {
     let server = MockServer::start().await;
-    let market = |asset_id: u32, name: &str, max_lev: u32| {
+    let market = |asset_id: u32, coin: &str, max_lev: u32| {
         json!({
+            "coin": coin,
             "asset_id": asset_id,
-            "name": name,
             "kind": "perp",
             "sz_decimals": 5,
             "mark_px": "50000",
@@ -45,6 +45,10 @@ async fn markets_decodes_array_of_market_info() {
                 "interval_ms": 3_600_000u64,
                 "next_payment_ts": 1_735_693_200_000u64
             },
+            "margin_tiers": [
+                { "max_open_interest": "100000", "max_leverage": max_lev, "maint_margin_ratio": "100" },
+                { "max_open_interest": null, "max_leverage": 5, "maint_margin_ratio": "1000" }
+            ],
             "mark_source": "MedianOfOraclesAndMid",
             "fba_enabled": false,
             "open_interest": "5000000000"
@@ -65,10 +69,12 @@ async fn markets_decodes_array_of_market_info() {
     let client = Client::new(server.uri()).unwrap();
     let markets = client.rest().info().markets().await.unwrap();
     assert_eq!(markets.len(), 2);
-    assert_eq!(markets[0].name, "BTC");
+    assert_eq!(markets[0].coin, "BTC");
     assert_eq!(markets[0].asset_id, 0);
     assert_eq!(markets[0].kind, MarketKind::Perp);
-    assert_eq!(markets[1].name, "ETH");
+    assert_eq!(markets[0].margin_tiers.len(), 2);
+    assert!(markets[0].margin_tiers[1].max_open_interest.is_none());
+    assert_eq!(markets[1].coin, "ETH");
     assert_eq!(markets[1].max_leverage, 40);
 }
 
@@ -343,15 +349,15 @@ async fn account_state_decodes_rich_shape_by_address() {
 }
 
 #[tokio::test]
-async fn market_info_decodes_rich_shape_by_asset_id() {
+async fn market_info_decodes_rich_shape_by_coin() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
             "market_info",
             json!({
+                "coin": "BTC",
                 "asset_id": 0,
-                "name": "BTC",
                 "kind": "perp",
                 "sz_decimals": 5,
                 "mark_px": "50000",
@@ -368,6 +374,10 @@ async fn market_info_decodes_rich_shape_by_asset_id() {
                     "interval_ms": 3_600_000u64,
                     "next_payment_ts": 1_735_693_200_000u64
                 },
+                "margin_tiers": [
+                    { "max_open_interest": "100000", "max_leverage": 50, "maint_margin_ratio": "100" },
+                    { "max_open_interest": null, "max_leverage": 5, "maint_margin_ratio": "1000" }
+                ],
                 "mark_source": "MedianOfOraclesAndMid",
                 "fba_enabled": false,
                 "open_interest": "5000000000"
@@ -377,18 +387,19 @@ async fn market_info_decodes_rich_shape_by_asset_id() {
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let m = client.rest().info().market_info(MarketId(0)).await.unwrap();
-    assert_eq!(m.asset_id, 0);
-    assert_eq!(m.name, "BTC");
+    let m = client.rest().info().market_info("BTC").await.unwrap();
+    assert_eq!(m.coin, "BTC");
     assert_eq!(m.sz_decimals, 5);
     assert_eq!(m.mark_px, "50000");
     assert_eq!(m.tick_size, "0.01");
     assert_eq!(m.open_interest, "5000000000");
     assert_eq!(m.funding.interval_ms, 3_600_000);
+    assert_eq!(m.margin_tiers.len(), 2);
+    assert_eq!(m.margin_tiers[0].maint_margin_ratio, "100");
 }
 
 #[tokio::test]
-async fn staking_state_decodes_by_account_id() {
+async fn staking_state_decodes_by_address() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
@@ -406,7 +417,8 @@ async fn staking_state_decodes_by_account_id() {
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let s = client.rest().info().staking_state(42).await.unwrap();
+    let addr = Address::from_hex("0x0000000000000000000000000000000000000003").unwrap();
+    let s = client.rest().info().staking_state(addr).await.unwrap();
     assert_eq!(s.total_staked, "0");
     assert!(s.delegations.is_empty());
 }
@@ -427,28 +439,30 @@ async fn l2_book_decodes_levels() {
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let book = client.rest().info().l2_book(MarketId(1), 20).await.unwrap();
+    let book = client.rest().info().l2_book("BTC", 20).await.unwrap();
     assert_eq!(book.bids.len(), 1);
     assert_eq!(book.bids[0].size, "1000");
     assert_eq!(book.asks[0].n_orders, 2);
 }
 
 #[tokio::test]
-async fn candle_decodes_gateway_envelope() {
+async fn candle_snapshot_decodes_gateway_envelope() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "candle",
-            json!([
-                {
-                    "coin": "BTC", "interval": "1m",
-                    "open_time": 1_700_000_040_000u64, "close_time": 1_700_000_099_999u64,
-                    "open": "67000.00", "close": "67042.50",
-                    "high": "67080.00", "low": "66990.00",
-                    "volume": "12.5", "num_trades": 37
-                }
-            ]),
+            "candle_snapshot",
+            json!({
+                "candles": [
+                    {
+                        "s": "BTC", "i": "1m",
+                        "t": 1_700_000_040_000u64, "T": 1_700_000_099_999u64,
+                        "o": "67000.0", "c": "67042.5",
+                        "h": "67080.0", "l": "66990.0",
+                        "v": "12.5", "q": "838031.25", "n": 37
+                    }
+                ]
+            }),
         )))
         .mount(&server)
         .await;
@@ -457,11 +471,71 @@ async fn candle_decodes_gateway_envelope() {
     let bars = client
         .rest()
         .info()
-        .candle("BTC", "1m", Some(1_700_000_000_000), None)
+        .candle_snapshot("BTC", "1m", 1_700_000_000_000, 1_700_000_100_000)
         .await
         .unwrap();
     assert_eq!(bars.len(), 1);
     assert_eq!(bars[0].coin, "BTC");
-    assert_eq!(bars[0].close, "67042.50");
+    assert_eq!(bars[0].close, "67042.5");
+    assert_eq!(bars[0].quote_volume, "838031.25");
     assert_eq!(bars[0].num_trades, 37);
+}
+
+#[tokio::test]
+async fn trades_by_time_decodes_symbol_prints() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "trades_by_time",
+            json!({
+                "coin": "BTC",
+                "start_time": 0u64,
+                "end_time": 9_999_999_999_999u64,
+                "trades": [{
+                    "coin": "BTC", "px": "61643.70000000", "sz": "0.00024",
+                    "side": "A", "tid": 18_232_248_797_686_447_553u64, "block": 37697,
+                    "hash": "0xd3c94e061264a4e9fd3090f0a65da636377737bc7b8e6e5b0ee839ed3e5d07d7",
+                    "time": 1_783_000_783_768u64
+                }]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let trades = client
+        .rest()
+        .info()
+        .trades_by_time("BTC", 0, 9_999_999_999_999)
+        .await
+        .unwrap();
+    assert_eq!(trades.len(), 1);
+    assert_eq!(trades[0].coin, "BTC");
+    assert_eq!(trades[0].side, "A");
+    assert_eq!(trades[0].tid, 18_232_248_797_686_447_553);
+    assert!(trades[0].hash.starts_with("0x"));
+}
+
+#[tokio::test]
+async fn predicted_fundings_decodes_entries() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "predicted_fundings",
+            json!([
+                { "coin": "BTC", "predicted_rate": "0.00176", "next_funding_time": 1_783_011_600_000u64 },
+                { "coin": "ETH", "predicted_rate": "-0.0087", "next_funding_time": 1_783_011_600_000u64 }
+            ]),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let pf = client.rest().info().predicted_fundings().await.unwrap();
+    assert_eq!(pf.len(), 2);
+    assert_eq!(pf[0].coin, "BTC");
+    assert_eq!(pf[0].next_funding_time, 1_783_011_600_000);
+    assert_eq!(pf[1].predicted_rate, "-0.0087");
 }

@@ -24,10 +24,12 @@ the entire API — `metaflux = "0.10"` and `use metaflux::...` work identically.
 
 ## What it does
 
-- **REST** `/info` / `/exchange` / `/explorer` — snake_case JSON, plain-integer
-  numerics (sizes / prices on fixed-point planes), `market_id` rather than `coin`.
+- **REST** `/info` / `/exchange` / `/explorer` — snake_case JSON. `/info` reads
+  are keyed by `coin` (the market symbol, e.g. `"BTC"`) and `address` (0x hex);
+  responses render coin symbols everywhere.
 - **WebSocket** subscriptions — reconnect with backoff + heartbeat.
-- **EIP-712 signing** — secp256k1 with deterministic (RFC-6979) nonces.
+- **EIP-712 signing** — secp256k1 with deterministic (RFC-6979) nonces. Signed
+  `/exchange` actions keep the numeric `asset` on the wire (consensus-frozen).
 
 The `/exchange` surface is fully typed. Every signed action the node accepts has
 a first-class request type and an `Exchange` method, including:
@@ -85,6 +87,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("submitted: {resp:?}");
     Ok(())
 }
+```
+
+## Market data reads
+
+`/info` market reads are keyed by `coin` (the market symbol). Prices/sizes come
+back as canonical decimal strings; the maintenance-margin ladder rides inline on
+each market as `margin_tiers` (upper-bound bands; `max_open_interest = None` on
+the unbounded top tier).
+
+```rust,ignore
+// `client` as in the Quick start above.
+
+// All perp markets, with the inline margin-tier ladder.
+let markets = client.rest().info().markets().await?;
+for m in &markets {
+    println!("{}: mark {} tiers {}", m.coin, m.mark_px, m.margin_tiers.len());
+}
+
+// Depth, a bounded window of recent prints, and the single candle query.
+let book = client.rest().info().l2_book("BTC", 20).await?;
+let trades = client.rest().info().recent_trades("BTC").await?;
+let recent = client
+    .rest()
+    .info()
+    .trades_by_time("BTC", 0, u64::MAX)
+    .await?;
+let bars = client
+    .rest()
+    .info()
+    .candle_snapshot("BTC", "1m", 0, u64::MAX)
+    .await?;
+
+// Predicted per-asset funding — the clamped rate charged at the next boundary.
+for pf in client.rest().info().predicted_fundings().await? {
+    println!("{}: {} @ {}", pf.coin, pf.predicted_rate, pf.next_funding_time);
+}
+println!(
+    "book {}x{}, {} recent, {} windowed, {} bars",
+    book.bids.len(), book.asks.len(), trades.len(), recent.len(), bars.len()
+);
 ```
 
 ## Spot trading

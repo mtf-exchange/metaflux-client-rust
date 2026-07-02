@@ -151,8 +151,8 @@ mod tests {
 
     fn mkt(tick: &str, step: &str, min: &str, sz_decimals: u8) -> MarketInfo {
         MarketInfo {
+            coin: "BTC".into(),
             asset_id: 0,
-            name: "BTC".into(),
             kind: MarketKind::Perp,
             sz_decimals,
             mark_px: "0".into(),
@@ -169,6 +169,7 @@ mod tests {
                 interval_ms: 3_600_000,
                 next_payment_ts: 0,
             },
+            margin_tiers: Vec::new(),
             mark_source: "oracle_median".into(),
             fba_enabled: false,
             open_interest: "0".into(),

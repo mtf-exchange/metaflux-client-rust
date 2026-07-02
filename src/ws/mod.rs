@@ -7,11 +7,12 @@
 //! Wire shape (snake_case):
 //!
 //! ```json
-//! { "method": "subscribe",   "subscription": { "type": "l2_book", "market_id": 1 } }
-//! { "method": "unsubscribe", "subscription": { "type": "l2_book", "market_id": 1 } }
+//! { "method": "subscribe",   "subscription": { "type": "l2_book", "coin": "1" } }
+//! { "method": "unsubscribe", "subscription": { "type": "l2_book", "coin": "1" } }
 //! ```
 //!
-//! Subscriptions are keyed by integer `market_id`, not a `coin` symbol.
+//! Per-market channels carry `coin` (a quoted asset-id string, e.g. `"1"`);
+//! per-account channels carry a `0x`-hex `user` address.
 //!
 //! ## Heartbeat
 //!

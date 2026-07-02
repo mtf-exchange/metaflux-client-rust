@@ -3,19 +3,19 @@
 //! No signing required. Discriminator is `type` per the node's MTF-native
 //! `/info` handler; payload fields are snake_case.
 //!
-//! Two tiers of query:
+//! Query addressing follows the consolidated `/info` surface: markets are keyed
+//! by `coin` (the market symbol, e.g. `"BTC"`) and accounts by `address` (20-byte
+//! `0x` hex). The older numeric `market_id` / `asset_id` / `account_id` request
+//! params are gone — pass a `coin` or an `address`.
 //!
-//! - **Node-native** ([`Info::node_info`], [`Info::account_state`],
-//!   [`Info::market_info`], [`Info::vault_state`], [`Info::staking_state`],
-//!   [`Info::fee_schedule`], [`Info::spot_meta`],
-//!   [`Info::spot_clearinghouse_state`]) — 1:1 with the node's `handle_info`
-//!   dispatch. Keyed by internal numeric ids (`account_id` / `market_id` /
-//!   `vault_id`) or by 20-byte `address`.
-//! - **Gateway-surface** ([`Info::markets`], [`Info::l2_book`],
-//!   [`Info::user_state`], [`Info::pm_state`], [`Info::rfq_state`]) — richer
-//!   `address`-keyed / aggregate shapes served by the gateway's MTF-native
-//!   adapter (which translates `0x…` ↔ internal ids). Use these when pointed
-//!   at a gateway URL rather than a bare node.
+//! - **Market reads** — [`Info::markets`], [`Info::market_info`],
+//!   [`Info::l2_book`], [`Info::recent_trades`], [`Info::trades_by_time`],
+//!   [`Info::candle_snapshot`], [`Info::predicted_fundings`].
+//! - **Account reads** — [`Info::account_state`], [`Info::open_orders`],
+//!   [`Info::user_state`], [`Info::spot_clearinghouse_state`],
+//!   [`Info::staking_state`], [`Info::pm_state`].
+//! - **Static / misc** — [`Info::node_info`], [`Info::spot_meta`],
+//!   [`Info::fee_schedule`], [`Info::vault_state`], [`Info::rfq_state`].
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use crate::error::ClientError;
 use crate::rest::RestClient;
 use crate::types::{
-    MarketId, VaultId,
+    VaultId,
     pm::PmState,
     position::UserState,
     rfq::{RfqId, RfqState},
@@ -123,46 +123,117 @@ pub struct OpenOrders {
     pub orders: Vec<OpenOrder>,
 }
 
-/// One OHLCV bar from the `candle` `/info` read.
+/// One OHLCV bar from the `candle_snapshot` `/info` read.
 ///
 /// The REST companion to the live `candles` WS channel: the WS pushes the
 /// forming bar as trades land, this read returns the closed history. Bars are
 /// oldest-first by `open_time`; the newest element is the still-forming bar.
 ///
-/// **Price plane — does NOT match the WS `candles` frame.** This REST read's
-/// `open`/`close`/`high`/`low` are **whole-USDC** human-dollar decimal strings
-/// (`"67042.50"`); the WS `candles` frame carries the SAME bar's OHLC as RAW
-/// 1e8 fixed-point integers (`"6700000000000"`). Rescale if you mix the two
-/// sources. `volume` is base units (coin size, NOT notional); `num_trades` is a
-/// fill count, not notional.
+/// Wire fields use the compact single-letter keys the archive serves
+/// (`t`/`T`/`o`/`c`/`h`/`l`/`v`/`q`/`n`/`s`/`i`); this struct renames them to
+/// readable names. `open`/`close`/`high`/`low` are whole-USDC human-dollar
+/// decimal strings (`"61652.7"`), `volume` is base units (coin size),
+/// `quote_volume` is the quote-denominated notional, and `num_trades` is a fill
+/// count.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Candle {
+    /// Market symbol (e.g. `"BTC"`); wire key `s`.
+    #[serde(rename = "s", default)]
+    pub coin: String,
+    /// Bucket token (`1m`/`5m`/`15m`/`1h`/`4h`/`1d`); wire key `i`.
+    #[serde(rename = "i")]
+    pub interval: String,
+    /// Bar open timestamp (ms, bucket-aligned); wire key `t`.
+    #[serde(rename = "t")]
+    pub open_time: u64,
+    /// Bar close timestamp (ms); wire key `T`.
+    #[serde(rename = "T")]
+    pub close_time: u64,
+    /// Open price, whole-USDC decimal string; wire key `o`.
+    #[serde(rename = "o")]
+    pub open: String,
+    /// Close price, whole-USDC decimal string; wire key `c`.
+    #[serde(rename = "c")]
+    pub close: String,
+    /// High price, whole-USDC decimal string; wire key `h`.
+    #[serde(rename = "h")]
+    pub high: String,
+    /// Low price, whole-USDC decimal string; wire key `l`.
+    #[serde(rename = "l")]
+    pub low: String,
+    /// Traded base volume in the bar, decimal string (coin size); wire key `v`.
+    #[serde(rename = "v")]
+    pub volume: String,
+    /// Quote-denominated notional traded in the bar, decimal string; wire key `q`.
+    #[serde(rename = "q", default)]
+    pub quote_volume: String,
+    /// Fill count in the bar; wire key `n`.
+    #[serde(rename = "n")]
+    pub num_trades: u64,
+}
+
+/// One public trade print from [`Info::recent_trades`] / [`Info::trades_by_time`].
 ///
-/// GATEWAY-served, not node: candles are derived display data folded from the
-/// public trade stream — not committed chain state, so they must be queried
-/// against the **gateway** (`<net>-gateway.mtf.exchange/info`); a bare node
-/// returns `unknown info type: candle`.
+/// Prints render the market **symbol** in `coin` (`"BTC"`). `px` / `sz` are
+/// canonical decimal strings; `side` is the aggressor taker side, `"A"` (a
+/// sell hitting the bid) or `"B"` (a buy lifting the ask). `hash` is the 0x
+/// action hash that produced the fill (empty for systemic prints); `tid` is the
+/// unique trade id, `block` the block height, `time` the unix-ms timestamp.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct Candle {
-    /// Echoed market symbol (e.g. `"BTC"`).
+pub struct Trade {
+    /// Market symbol (e.g. `"BTC"`).
     pub coin: String,
-    /// Echoed bucket token (`1m`/`5m`/`15m`/`1h`/`4h`/`1d`).
-    pub interval: String,
-    /// Bar open timestamp (ms, bucket-aligned).
-    pub open_time: u64,
-    /// Bar close timestamp (ms) — `open_time + interval − 1`.
-    pub close_time: u64,
-    /// Open price, whole-USDC decimal string.
-    pub open: String,
-    /// Close price, whole-USDC decimal string.
-    pub close: String,
-    /// High price, whole-USDC decimal string.
-    pub high: String,
-    /// Low price, whole-USDC decimal string.
-    pub low: String,
-    /// Traded base volume in the bar, decimal string (coin size, not notional).
-    pub volume: String,
-    /// Fill count in the bar.
-    pub num_trades: u64,
+    /// Trade price, canonical whole-USDC decimal string.
+    pub px: String,
+    /// Trade size, canonical whole-base-unit decimal string.
+    pub sz: String,
+    /// Aggressor taker side: `"A"` (sell) or `"B"` (buy).
+    pub side: String,
+    /// Unique trade id.
+    pub tid: u64,
+    /// Block height the trade committed in.
+    pub block: u64,
+    /// 0x action hash that produced the fill; empty for systemic prints.
+    #[serde(default)]
+    pub hash: String,
+    /// Trade timestamp (unix ms).
+    pub time: u64,
+}
+
+/// One entry from [`Info::predicted_fundings`].
+///
+/// `predicted_rate` is the CLAMPED rate actually charged at the boundary (bounded
+/// by the per-asset cap, sign preserved); `next_funding_time` is the next aligned
+/// per-asset settlement boundary (unix ms). Funding settles discretely at those
+/// boundaries (1h default).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PredictedFunding {
+    /// Market symbol (e.g. `"BTC"`).
+    pub coin: String,
+    /// Clamped funding rate charged at the boundary, fixed-point decimal string.
+    pub predicted_rate: String,
+    /// Next aligned per-asset settlement boundary (unix ms).
+    pub next_funding_time: u64,
+}
+
+/// One leverage / margin band inside a [`MarketInfo::margin_tiers`] ladder.
+///
+/// Bands are upper-bound: a position with open interest at or below
+/// `max_open_interest` may use up to `max_leverage` and is charged
+/// `maint_margin_ratio` maintenance margin. `max_open_interest` is `None` on the
+/// unbounded top tier.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MarginTier {
+    /// Upper open-interest bound for this band, decimal string; `None` = unbounded.
+    #[serde(default)]
+    pub max_open_interest: Option<String>,
+    /// Maximum leverage multiple allowed in this band.
+    pub max_leverage: u8,
+    /// Maintenance margin ratio for this band, bps decimal string.
+    pub maint_margin_ratio: String,
 }
 
 /// One fee tier inside a [`FeeSchedule`]. All bps fields are decimal strings.
@@ -441,9 +512,8 @@ pub struct Funding {
 ///
 /// Per the `/info` contract (`market_info`). Magnitudes (`tick_size`,
 /// `step_size`, `min_order`, ratios, `open_interest`) are CANONICAL decimal
-/// **string** numerics — NOT the raw 1e8 / raw-lot planes; `asset_id` /
-/// `max_leverage` are JSON numbers. Resolvable by `asset_id` or by `coin` (see
-/// [`Info::market_info`] / [`Info::market_info_by_coin`]).
+/// **string** numerics — NOT the raw 1e8 / raw-lot planes; `max_leverage` is a
+/// JSON number. Resolved by `coin` (the market symbol) — see [`Info::market_info`].
 ///
 /// PLANE BRIDGE: `tick_size` is whole USDC while an order's `limit_px` is on the
 /// 1e8 plane, and `step_size` / `min_order` are whole base units while an
@@ -452,10 +522,12 @@ pub struct Funding {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct MarketInfo {
-    /// Canonical asset id.
+    /// Market symbol (e.g. `"BTC"`) — the canonical market key.
+    pub coin: String,
+    /// DEPRECATED numeric asset id, retained only as a temporary indexer shim.
+    /// Not a stable field: prefer `coin`. May be removed without a major bump.
+    #[serde(default)]
     pub asset_id: u32,
-    /// Human-readable market name (e.g. `"BTC"`).
-    pub name: String,
     /// Market kind (`"perp"` / `"spot"`).
     pub kind: MarketKind,
     /// Size precision: raw order/position `size` = `whole_units × 10^sz_decimals`.
@@ -482,6 +554,11 @@ pub struct MarketInfo {
     pub init_margin_ratio: String,
     /// Funding parameters.
     pub funding: Funding,
+    /// Leverage / maintenance-margin ladder — upper-bound bands by open interest
+    /// (the maintenance-margin schedule now rides inline on the market). Empty on
+    /// markets that publish no tiered ladder.
+    #[serde(default)]
+    pub margin_tiers: Vec<MarginTier>,
     /// Mark-price source descriptor.
     pub mark_source: String,
     /// Whether frequent-batch-auction matching is enabled for this market.
@@ -589,17 +666,82 @@ impl<'a> Info<'a> {
 
     /// Fetch the L2 book snapshot for a market.
     ///
-    /// Per the `/info` contract (`l2_book`): keyed by `asset_id`, `depth`
-    /// levels per side. The `data` payload is `{ bids, asks }`.
+    /// Per the `/info` contract (`l2_book`): keyed by `coin` (the market symbol,
+    /// e.g. `"BTC"`), `depth` levels per side. The `data` payload is
+    /// `{ bids, asks }`.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn l2_book(&self, market: MarketId, depth: u32) -> Result<L2Book, ClientError> {
+    pub async fn l2_book(&self, coin: &str, depth: u32) -> Result<L2Book, ClientError> {
         self.client
             .post_json(
                 "/info",
-                &json!({ "type": "l2_book", "market_id": market.0, "depth": depth }),
+                &json!({ "type": "l2_book", "coin": coin, "depth": depth }),
             )
+            .await
+    }
+
+    /// Fetch the most recent public trade prints for a market (bounded window).
+    ///
+    /// Keyed by `coin` (the market symbol). Deep history is served by the
+    /// gateway archive; this read returns the recent tape, newest-first.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn recent_trades(&self, coin: &str) -> Result<Vec<Trade>, ClientError> {
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            #[serde(default)]
+            trades: Vec<Trade>,
+        }
+        let resp: Resp = self
+            .client
+            .post_json("/info", &json!({ "type": "recent_trades", "coin": coin }))
+            .await?;
+        Ok(resp.trades)
+    }
+
+    /// Fetch public trade prints for a market within a time window (unix ms).
+    ///
+    /// Keyed by `coin` (the market symbol); `start_time` / `end_time` bound a
+    /// recent window. For deep history use the gateway archive query types.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn trades_by_time(
+        &self,
+        coin: &str,
+        start_time: u64,
+        end_time: u64,
+    ) -> Result<Vec<Trade>, ClientError> {
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            #[serde(default)]
+            trades: Vec<Trade>,
+        }
+        let resp: Resp = self
+            .client
+            .post_json(
+                "/info",
+                &json!({
+                    "type": "trades_by_time",
+                    "coin": coin,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                }),
+            )
+            .await?;
+        Ok(resp.trades)
+    }
+
+    /// Fetch the predicted per-asset funding rates and their next settlement
+    /// boundaries. No parameters; returns one entry per active market.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn predicted_fundings(&self) -> Result<Vec<PredictedFunding>, ClientError> {
+        self.client
+            .post_json("/info", &json!({ "type": "predicted_fundings" }))
             .await
     }
 
@@ -626,18 +768,15 @@ impl<'a> Info<'a> {
             .await
     }
 
-    /// Fetch the staking state for an account.
-    ///
-    /// The node keys this query by numeric `account_id` (a gateway translates
-    /// `user: 0x…` → `account_id`). Mirrors the node's `staking_state` read.
+    /// Fetch the staking state for an account, keyed by `address` (0x hex).
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn staking_state(&self, account_id: u64) -> Result<StakingState, ClientError> {
+    pub async fn staking_state(&self, addr: Address) -> Result<StakingState, ClientError> {
         self.client
             .post_json(
                 "/info",
-                &json!({ "type": "staking_state", "account_id": account_id }),
+                &json!({ "type": "staking_state", "address": addr }),
             )
             .await
     }
@@ -687,61 +826,53 @@ impl<'a> Info<'a> {
             .await
     }
 
-    /// `candle` — historical OHLCV bars for `(coin, interval)` over a window.
+    /// `candle_snapshot` — historical OHLCV bars for `(coin, interval)` over a
+    /// window. This is the single candle query: archive-first, with a fold
+    /// fallback derived from the public trade stream.
     ///
-    /// The REST companion to the live `candles` WS channel. `coin` is a market
-    /// **symbol** (e.g. `"BTC"`), not a numeric id. `start_time` / `end_time`
-    /// are unix-ms filters on bar open (`None` = unbounded / from 0). Bars come
-    /// oldest-first; the newest is the still-forming bar.
-    ///
-    /// GATEWAY-served, not node: a bare node returns `unknown info type:
-    /// candle`. An empty vec is the honest-empty answer for an unsupported
-    /// `interval`, a market with no indexed trades, or a deployment with no
-    /// indexer wired.
+    /// `coin` is a market **symbol** (e.g. `"BTC"`). `start_time` / `end_time`
+    /// bound the window (unix ms). Bars come oldest-first; the newest is the
+    /// still-forming bar. An empty vec is the honest-empty answer for an
+    /// unsupported `interval` or a market with no indexed trades in the window.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn candle(
+    pub async fn candle_snapshot(
         &self,
         coin: &str,
         interval: &str,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
+        start_time: u64,
+        end_time: u64,
     ) -> Result<Vec<Candle>, ClientError> {
-        let mut req = json!({ "type": "candle", "coin": coin, "interval": interval });
-        if let Some(s) = start_time {
-            req["start_time"] = json!(s);
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            #[serde(default)]
+            candles: Vec<Candle>,
         }
-        if let Some(e) = end_time {
-            req["end_time"] = json!(e);
-        }
-        self.client.post_json("/info", &req).await
-    }
-
-    /// `market_info` — rich single-market snapshot by canonical `asset_id`.
-    ///
-    /// Per the `/info` contract (`market_info`). To resolve by human-readable
-    /// name use [`Info::market_info_by_coin`].
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn market_info(&self, market: MarketId) -> Result<MarketInfo, ClientError> {
-        self.client
+        let resp: Resp = self
+            .client
             .post_json(
                 "/info",
-                &json!({ "type": "market_info", "asset_id": market.0 }),
+                &json!({
+                    "type": "candle_snapshot",
+                    "req": {
+                        "coin": coin,
+                        "interval": interval,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                    },
+                }),
             )
-            .await
+            .await?;
+        Ok(resp.candles)
     }
 
-    /// `market_info` — rich single-market snapshot by human-readable `coin`.
-    ///
-    /// Per the `/info` contract: `asset_id` is canonical, `coin` is a convenience
-    /// alias; both resolve to the same record. See [`Info::market_info`].
+    /// `market_info` — rich single-market snapshot keyed by `coin` (the market
+    /// symbol, e.g. `"BTC"`).
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn market_info_by_coin(&self, coin: &str) -> Result<MarketInfo, ClientError> {
+    pub async fn market_info(&self, coin: &str) -> Result<MarketInfo, ClientError> {
         self.client
             .post_json("/info", &json!({ "type": "market_info", "coin": coin }))
             .await
@@ -793,8 +924,8 @@ impl<'a> Info<'a> {
     ///
     /// # Errors
     /// See [`Info::staking_state`].
-    pub async fn delegations(&self, account_id: u64) -> Result<Vec<Delegation>, ClientError> {
-        Ok(self.staking_state(account_id).await?.delegations)
+    pub async fn delegations(&self, addr: Address) -> Result<Vec<Delegation>, ClientError> {
+        Ok(self.staking_state(addr).await?.delegations)
     }
 
     /// Fetch the portfolio-margin state for an address.
@@ -859,8 +990,8 @@ mod tests {
     #[test]
     fn market_info_decodes_doc_fixture() {
         let data = serde_json::json!({
+            "coin": "BTC",
             "asset_id": 0,
-            "name": "BTC",
             "kind": "perp",
             "sz_decimals": 5,
             "mark_px": "50000",
@@ -877,13 +1008,17 @@ mod tests {
                 "interval_ms": 3600000u64,
                 "next_payment_ts": 1735693200000u64
             },
+            "margin_tiers": [
+                { "max_open_interest": "100000", "max_leverage": 50, "maint_margin_ratio": "100" },
+                { "max_open_interest": null, "max_leverage": 5, "maint_margin_ratio": "1000" }
+            ],
             "mark_source": "MedianOfOraclesAndMid",
             "fba_enabled": false,
             "open_interest": "5000000000"
         });
         let m: MarketInfo = serde_json::from_value(data).unwrap();
+        assert_eq!(m.coin, "BTC");
         assert_eq!(m.asset_id, 0);
-        assert_eq!(m.name, "BTC");
         assert_eq!(m.kind, MarketKind::Perp);
         assert_eq!(m.sz_decimals, 5);
         assert_eq!(m.mark_px, "50000");
@@ -893,13 +1028,21 @@ mod tests {
         assert_eq!(m.funding.interval_ms, 3_600_000);
         assert_eq!(m.mark_source, "MedianOfOraclesAndMid");
         assert_eq!(m.open_interest, "5000000000");
+        // Inline maintenance-margin ladder; `null` upper bound = unbounded top.
+        assert_eq!(m.margin_tiers.len(), 2);
+        assert_eq!(
+            m.margin_tiers[0].max_open_interest.as_deref(),
+            Some("100000")
+        );
+        assert_eq!(m.margin_tiers[0].max_leverage, 50);
+        assert!(m.margin_tiers[1].max_open_interest.is_none());
         // Fixed-point magnitudes serialize back as strings; kind is lowercase.
         let j = serde_json::to_value(&m).unwrap();
         assert_eq!(j["kind"], "perp");
+        assert_eq!(j["coin"], "BTC");
         assert!(j["sz_decimals"].is_number());
         assert!(j["tick_size"].is_string());
         assert!(j["open_interest"].is_string());
-        assert!(j["asset_id"].is_number());
     }
 
     /// Decode the exact `account_state.data` payload from the `/info` contract.
@@ -1004,12 +1147,16 @@ mod tests {
         }
         let data = serde_json::json!({
             "perp": [{
-                "asset_id": 0, "name": "BTC", "kind": "perp", "sz_decimals": 5,
+                "coin": "BTC", "asset_id": 0, "kind": "perp", "sz_decimals": 5,
                 "mark_px": "64000", "oracle_px": "64000", "mid_px": "64000",
                 "mark_source": "oracle_median", "fba_enabled": false,
                 "change_24h": "0", "day_ntl_vlm": "0", "premium": "0", "prev_day_px": "64000",
                 "tick_size": "1000000", "step_size": "1", "min_order": "1",
                 "max_leverage": 50, "init_margin_ratio": "200", "maint_margin_ratio": "300",
+                "margin_tiers": [
+                    { "max_open_interest": "100000", "max_leverage": 50, "maint_margin_ratio": "100" },
+                    { "max_open_interest": null, "max_leverage": 5, "maint_margin_ratio": "1000" }
+                ],
                 "open_interest": "0", "funding": {
                     "rate_per_hr": "0", "cap_per_hr": "400", "interval_ms": 3600000,
                     "next_payment_ts": 0 }
@@ -1018,7 +1165,8 @@ mod tests {
         });
         let resp: MarketsResp = serde_json::from_value(data).unwrap();
         assert_eq!(resp.perp.len(), 1);
-        assert_eq!(resp.perp[0].name, "BTC");
+        assert_eq!(resp.perp[0].coin, "BTC");
+        assert_eq!(resp.perp[0].margin_tiers.len(), 2);
     }
 
     /// Decode the exact `l2_book.data` payload from the `/info` contract.
@@ -1164,36 +1312,79 @@ mod tests {
         assert_eq!(o, dec);
     }
 
-    /// Decode the gateway `candle.data` array (whole-USDC prices, base volume).
+    /// Decode a `candle_snapshot` bar using the compact single-letter wire keys.
     #[test]
-    fn candle_decodes_gateway_fixture() {
-        let data = serde_json::json!([
-            {
-                "coin": "BTC",
-                "interval": "1m",
-                "open_time": 1_700_000_040_000u64,
-                "close_time": 1_700_000_099_999u64,
-                "open": "67000.00",
-                "close": "67042.50",
-                "high": "67080.00",
-                "low": "66990.00",
-                "volume": "12.5",
-                "num_trades": 37
-            }
-        ]);
-        let bars: Vec<Candle> = serde_json::from_value(data).unwrap();
-        assert_eq!(bars.len(), 1);
-        assert_eq!(bars[0].coin, "BTC");
-        assert_eq!(bars[0].interval, "1m");
-        assert_eq!(bars[0].open_time, 1_700_000_040_000);
-        assert_eq!(bars[0].close_time, 1_700_000_099_999);
-        assert_eq!(bars[0].close, "67042.50");
-        assert_eq!(bars[0].num_trades, 37);
-        // OHLC / volume are strings; times + count are numbers.
-        let j = serde_json::to_value(&bars[0]).unwrap();
-        assert!(j["open"].is_string());
-        assert!(j["volume"].is_string());
-        assert!(j["open_time"].is_number());
-        assert!(j["num_trades"].is_number());
+    fn candle_snapshot_bar_decodes_compact_keys() {
+        let data = serde_json::json!({
+            "s": "BTC",
+            "i": "1m",
+            "t": 1_700_000_040_000u64,
+            "T": 1_700_000_099_999u64,
+            "o": "67000.0",
+            "c": "67042.5",
+            "h": "67080.0",
+            "l": "66990.0",
+            "v": "12.5",
+            "q": "838031.25",
+            "n": 37
+        });
+        let bar: Candle = serde_json::from_value(data).unwrap();
+        assert_eq!(bar.coin, "BTC");
+        assert_eq!(bar.interval, "1m");
+        assert_eq!(bar.open_time, 1_700_000_040_000);
+        assert_eq!(bar.close_time, 1_700_000_099_999);
+        assert_eq!(bar.close, "67042.5");
+        assert_eq!(bar.volume, "12.5");
+        assert_eq!(bar.quote_volume, "838031.25");
+        assert_eq!(bar.num_trades, 37);
+        // Round-trips back to the compact keys.
+        let j = serde_json::to_value(&bar).unwrap();
+        assert_eq!(j["s"], "BTC");
+        assert!(j["o"].is_string());
+        assert!(j["t"].is_number());
+        assert!(j["n"].is_number());
+    }
+
+    /// Decode a public `trades_by_time` / `recent_trades` print: symbol coin,
+    /// A/B side, 0x action hash, big-integer `tid`.
+    #[test]
+    fn trade_decodes_symbol_coin_and_hash() {
+        let data = serde_json::json!({
+            "coin": "BTC",
+            "px": "61643.70000000",
+            "sz": "0.00024",
+            "side": "A",
+            "tid": 18232248797686447553u64,
+            "block": 37697,
+            "hash": "0xd3c94e061264a4e9fd3090f0a65da636377737bc7b8e6e5b0ee839ed3e5d07d7",
+            "time": 1783000783768u64
+        });
+        let t: Trade = serde_json::from_value(data).unwrap();
+        assert_eq!(t.coin, "BTC");
+        assert_eq!(t.side, "A");
+        assert_eq!(t.tid, 18_232_248_797_686_447_553);
+        assert_eq!(t.block, 37697);
+        assert!(t.hash.starts_with("0x"));
+        // A systemic print with no action hash decodes to an empty string.
+        let systemic = serde_json::json!({
+            "coin": "BTC", "px": "1", "sz": "1", "side": "B",
+            "tid": 1u64, "block": 1, "time": 1u64
+        });
+        let s: Trade = serde_json::from_value(systemic).unwrap();
+        assert!(s.hash.is_empty());
+    }
+
+    /// Decode a `predicted_fundings` entry: clamped rate + next boundary.
+    #[test]
+    fn predicted_funding_decodes() {
+        let data = serde_json::json!({
+            "coin": "ETH",
+            "predicted_rate": "0.0087084893337279276017913756",
+            "next_funding_time": 1783011600000u64
+        });
+        let p: PredictedFunding = serde_json::from_value(data).unwrap();
+        assert_eq!(p.coin, "ETH");
+        assert_eq!(p.next_funding_time, 1_783_011_600_000);
+        assert!(p.predicted_rate.starts_with("0.008"));
     }
 }

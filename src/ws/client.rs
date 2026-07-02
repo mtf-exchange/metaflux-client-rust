@@ -301,6 +301,45 @@ impl WsClient {
         self.subscribe(Subscription::AccountState { user }).await
     }
 
+    /// Subscribe to the per-user live spot clearinghouse-state stream.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_spot_state(
+        &self,
+        user: crate::wallet::Address,
+    ) -> Result<(), ClientError> {
+        self.subscribe(Subscription::SpotState { user }).await
+    }
+
+    /// Subscribe to per-user realized funding payments.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_user_fundings(
+        &self,
+        user: crate::wallet::Address,
+    ) -> Result<(), ClientError> {
+        self.subscribe(Subscription::UserFundings { user }).await
+    }
+
+    /// Subscribe to the global explorer block-header stream.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_explorer_block(&self) -> Result<(), ClientError> {
+        self.subscribe(Subscription::ExplorerBlock).await
+    }
+
+    /// Subscribe to the global explorer transaction stream (each row carries a
+    /// 0x action `hash`).
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_explorer_txs(&self) -> Result<(), ClientError> {
+        self.subscribe(Subscription::ExplorerTxs).await
+    }
+
     /// Receive inbound channel frames.
     ///
     /// Each call returns a fresh [`broadcast::Receiver`] so multiple consumers
