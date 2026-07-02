@@ -524,7 +524,13 @@ fn vault_owner() -> Address {
 /// Assert the captured `/exchange` body for an owner-bound `*_as` call: the wire
 /// carries a params-level `0x`-hex `owner`, and the signature is over the
 /// OWNER-FORM (`*_WITH_OWNER`) typed digest, recovering to the AGENT signer.
-fn assert_owner_bound(body: &Value, ty: &str, owner: Address, agent: &Wallet, typed: TypedTradingAction) {
+fn assert_owner_bound(
+    body: &Value,
+    ty: &str,
+    owner: Address,
+    agent: &Wallet,
+    typed: TypedTradingAction,
+) {
     let action = body["action"].clone();
     assert_eq!(action["type"].as_str(), Some(ty));
     // (1) params-level owner is present, 0x-hex, and equals the vault.
@@ -541,7 +547,10 @@ fn assert_owner_bound(body: &Value, ty: &str, owner: Address, agent: &Wallet, ty
     let sig = decode_sig(body["signature"].as_str().unwrap());
     assert_eq!(_recover_for_test(&digest, &sig).unwrap(), agent.address());
     // Guard: the vestigial sig_scheme field must not be reintroduced.
-    assert!(body.get("sig_scheme").is_none(), "sig_scheme must not be sent");
+    assert!(
+        body.get("sig_scheme").is_none(),
+        "sig_scheme must not be sent"
+    );
 }
 
 /// Spin up a capturing `/exchange` mock, returning `(client, captor, agent)`.
@@ -570,13 +579,33 @@ async fn batch_cancel_as_carries_owner_and_signs_owner_form() {
     // `_as` path has NO owner == signer guard.
     let batch = BatchCancel {
         cancels: vec![
-            CancelOrder { owner, market: MarketId(1), oid: Some(OrderId(1234)), cloid: None },
-            CancelOrder { owner, market: MarketId(2), oid: Some(OrderId(5678)), cloid: None },
+            CancelOrder {
+                owner,
+                market: MarketId(1),
+                oid: Some(OrderId(1234)),
+                cloid: None,
+            },
+            CancelOrder {
+                owner,
+                market: MarketId(2),
+                oid: Some(OrderId(5678)),
+                cloid: None,
+            },
         ],
     };
-    let _: Value = client.exchange().batch_cancel_as(&agent, owner, &batch).await.unwrap();
+    let _: Value = client
+        .exchange()
+        .batch_cancel_as(&agent, owner, &batch)
+        .await
+        .unwrap();
     let body = captor.last.lock().await.clone().expect("body captured");
-    assert_owner_bound(&body, "batch_cancel", owner, &agent, TypedTradingAction::BatchCancel(&batch));
+    assert_owner_bound(
+        &body,
+        "batch_cancel",
+        owner,
+        &agent,
+        TypedTradingAction::BatchCancel(&batch),
+    );
 }
 
 #[tokio::test]
@@ -591,9 +620,19 @@ async fn batch_modify_as_carries_owner_and_signs_owner_form() {
             new_size: Some(200),
         }],
     };
-    let _: Value = client.exchange().batch_modify_as(&agent, owner, &params).await.unwrap();
+    let _: Value = client
+        .exchange()
+        .batch_modify_as(&agent, owner, &params)
+        .await
+        .unwrap();
     let body = captor.last.lock().await.clone().expect("body captured");
-    assert_owner_bound(&body, "batch_modify", owner, &agent, TypedTradingAction::BatchModify(&params));
+    assert_owner_bound(
+        &body,
+        "batch_modify",
+        owner,
+        &agent,
+        TypedTradingAction::BatchModify(&params),
+    );
 }
 
 #[tokio::test]
@@ -606,19 +645,42 @@ async fn modify_as_carries_owner_and_signs_owner_form() {
         new_px: Some(6_900_000_000_000),
         new_size: Some(200),
     };
-    let _: Value = client.exchange().modify_as(&agent, owner, &params).await.unwrap();
+    let _: Value = client
+        .exchange()
+        .modify_as(&agent, owner, &params)
+        .await
+        .unwrap();
     let body = captor.last.lock().await.clone().expect("body captured");
-    assert_owner_bound(&body, "modify", owner, &agent, TypedTradingAction::Modify(&params));
+    assert_owner_bound(
+        &body,
+        "modify",
+        owner,
+        &agent,
+        TypedTradingAction::Modify(&params),
+    );
 }
 
 #[tokio::test]
 async fn cancel_by_cloid_as_carries_owner_and_signs_owner_form() {
     let (client, captor, agent) = capturing_exchange().await;
     let owner = vault_owner();
-    let params = CancelByCloid { asset: MarketId(1), cloid: Cloid([0xAB; 16]) };
-    let _: Value = client.exchange().cancel_by_cloid_as(&agent, owner, &params).await.unwrap();
+    let params = CancelByCloid {
+        asset: MarketId(1),
+        cloid: Cloid([0xAB; 16]),
+    };
+    let _: Value = client
+        .exchange()
+        .cancel_by_cloid_as(&agent, owner, &params)
+        .await
+        .unwrap();
     let body = captor.last.lock().await.clone().expect("body captured");
-    assert_owner_bound(&body, "cancel_by_cloid", owner, &agent, TypedTradingAction::CancelByCloid(&params));
+    assert_owner_bound(
+        &body,
+        "cancel_by_cloid",
+        owner,
+        &agent,
+        TypedTradingAction::CancelByCloid(&params),
+    );
 }
 
 fn decode_sig(hex_str: &str) -> metaflux_client::wallet::Signature {

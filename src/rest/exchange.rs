@@ -341,8 +341,13 @@ impl<'a> Exchange<'a> {
         params: &CancelByCloid,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "cancel_by_cloid", "params": params });
-        self.post_typed_trade_as(wallet, owner, action, TypedTradingAction::CancelByCloid(params))
-            .await
+        self.post_typed_trade_as(
+            wallet,
+            owner,
+            action,
+            TypedTradingAction::CancelByCloid(params),
+        )
+        .await
     }
 
     /// Amend a resting order's price and/or size in place.
@@ -411,8 +416,13 @@ impl<'a> Exchange<'a> {
         params: &BatchModify,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "batch_modify", "params": params });
-        self.post_typed_trade_as(wallet, owner, action, TypedTradingAction::BatchModify(params))
-            .await
+        self.post_typed_trade_as(
+            wallet,
+            owner,
+            action,
+            TypedTradingAction::BatchModify(params),
+        )
+        .await
     }
 
     /// Place N orders under one signature.
@@ -486,8 +496,13 @@ impl<'a> Exchange<'a> {
         batch: &BatchCancel,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "batch_cancel", "params": batch });
-        self.post_typed_trade_as(wallet, owner, action, TypedTradingAction::BatchCancel(batch))
-            .await
+        self.post_typed_trade_as(
+            wallet,
+            owner,
+            action,
+            TypedTradingAction::BatchCancel(batch),
+        )
+        .await
     }
 
     /// Schedule a cancel-all of the sender's open orders at a future block.
