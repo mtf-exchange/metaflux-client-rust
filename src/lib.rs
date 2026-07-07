@@ -27,7 +27,7 @@
 //!
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! let wallet = Wallet::from_hex(&std::env::var("MTF_PRIVATE_KEY")?)?;
-//! let client = Client::new("https://devnet-gateway.mtf.exchange")?;
+//! let client = Client::new("https://api.devnet.mtf.exchange")?;
 //! let markets = client.rest().info().markets().await?;
 //! println!("{} markets available", markets.len());
 //! # let _ = wallet; Ok(())
@@ -67,7 +67,7 @@ pub struct Client {
 impl Client {
     /// Build a client targeting the given base URL.
     ///
-    /// `base_url` should be of the form `https://devnet-gateway.mtf.exchange` (no trailing
+    /// `base_url` should be of the form `https://api.devnet.mtf.exchange` (no trailing
     /// path). The REST client will append `/info`, `/exchange`, etc.; the WS
     /// client derives a `wss://` URL from this base.
     ///
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn client_builds_with_valid_base_url() {
-        let c = Client::new("https://devnet-gateway.mtf.exchange").unwrap();
-        assert_eq!(c.base_url(), "https://devnet-gateway.mtf.exchange");
+        let c = Client::new("https://api.devnet.mtf.exchange").unwrap();
+        assert_eq!(c.base_url(), "https://api.devnet.mtf.exchange");
     }
 }

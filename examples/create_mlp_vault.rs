@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let priv_hex = std::env::var("MTF_PRIVATE_KEY").map_err(|_| "set MTF_PRIVATE_KEY")?;
     let wallet = Wallet::from_hex(&priv_hex)?;
     let endpoint = std::env::var("MTF_ENDPOINT")
-        .unwrap_or_else(|_| "https://devnet-gateway.mtf.exchange".into());
+        .unwrap_or_else(|_| "https://api.devnet.mtf.exchange".into());
     let client = Client::new(&endpoint)?;
     println!("leader/operator = {:?}", wallet.address());
 

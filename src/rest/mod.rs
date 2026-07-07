@@ -37,7 +37,7 @@ pub struct RestClient {
 impl RestClient {
     /// Build a REST client pointing at the given base URL.
     ///
-    /// `base_url` should be of the form `https://devnet-gateway.mtf.exchange` (no trailing
+    /// `base_url` should be of the form `https://api.devnet.mtf.exchange` (no trailing
     /// slash). Endpoints are appended as `/info`, `/exchange`, etc.
     ///
     /// # Errors
@@ -168,14 +168,14 @@ mod tests {
 
     #[test]
     fn rejects_non_http_url() {
-        let err = RestClient::new("ftp://devnet-gateway.mtf.exchange").unwrap_err();
+        let err = RestClient::new("ftp://api.devnet.mtf.exchange").unwrap_err();
         assert!(matches!(err, ClientError::Builder(_)));
     }
 
     #[test]
     fn strips_trailing_slash() {
-        let c = RestClient::new("https://devnet-gateway.mtf.exchange/").unwrap();
-        assert_eq!(c.base_url(), "https://devnet-gateway.mtf.exchange");
+        let c = RestClient::new("https://api.devnet.mtf.exchange/").unwrap();
+        assert_eq!(c.base_url(), "https://api.devnet.mtf.exchange");
     }
 
     #[test]

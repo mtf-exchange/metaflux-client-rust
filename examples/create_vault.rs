@@ -18,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let priv_hex = std::env::var("MTF_PRIVATE_KEY")
         .map_err(|_| "set MTF_PRIVATE_KEY=<64-char hex> to run this example")?;
     let wallet = Wallet::from_hex(&priv_hex)?;
-    let client = Client::new("https://devnet-gateway.mtf.exchange")?;
+    let client = Client::new("https://api.devnet.mtf.exchange")?;
 
     // The signing wallet becomes the vault leader.
     let create = CreateVault {

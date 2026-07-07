@@ -5,7 +5,7 @@
 //! for inbound channel frames.
 //!
 //! Wire contract (MTF-native, snake_case `type`), mirroring the node's WS
-//! `subscribe` parser and verified against `wss://devnet-gateway.mtf.exchange`:
+//! `subscribe` parser and verified against `wss://api.devnet.mtf.exchange`:
 //!
 //! - **Per-market** channels carry `coin` — a **decimal asset-id string**
 //!   (`"1"`). The node resolves it via `str::parse::<u32>`, so it must be a

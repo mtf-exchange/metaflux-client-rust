@@ -19,7 +19,7 @@ use metaflux::{Client, wallet::Wallet};
 
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 let wallet = Wallet::from_hex(&std::env::var("MTF_PRIVATE_KEY")?)?;
-let client = Client::new("https://devnet-gateway.mtf.exchange")?;
+let client = Client::new("https://api.devnet.mtf.exchange")?;
 let markets = client.rest().info().markets().await?;
 println!("{} markets available", markets.len());
 # let _ = wallet; Ok(())

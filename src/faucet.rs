@@ -2,7 +2,7 @@
 //!
 //! The node exposes a faucet at `POST <faucet_base_url>/faucet` that credits an
 //! address with test USDC + MTF. It runs on its OWN origin (devnet node port 8080;
-//! production `https://faucet.devnet.mtf.exchange`), SEPARATE from the trading
+//! production `https://api.devnet.mtf.exchange/faucet`), SEPARATE from the trading
 //! API base URL — so [`request_faucet`] takes a dedicated `faucet_base_url`
 //! rather than reusing a [`crate::Client`]'s trading `base_url`.
 //!
@@ -54,7 +54,7 @@ struct FaucetRequest<'a> {
 /// default grant (capped server-side).
 ///
 /// `faucet_base_url` is the faucet's OWN origin (e.g.
-/// `http://localhost:8080` on devnet, `https://faucet.devnet.mtf.exchange` in
+/// `http://localhost:8080` on devnet, `https://api.devnet.mtf.exchange/faucet` in
 /// production) — NOT the trading API base URL.
 ///
 /// On success the credit is `"queued"` for the next block; the balance updates

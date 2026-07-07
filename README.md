@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("wallet address: 0x{}", hex::encode(wallet.address()));
 
     // 2. Construct the client.
-    let client = Client::new("https://devnet-gateway.mtf.exchange")?;
+    let client = Client::new("https://api.devnet.mtf.exchange")?;
 
     // 3. Build + sign + submit a limit order. The node assigns the oid and
     //    returns it in the response — the submit shape never declares one.
