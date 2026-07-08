@@ -581,20 +581,6 @@ fn every_typed_action_signs_and_recovers() {
             limit_px: 190_000_000,
             nonce: 15,
         },
-        TypedAction::REDACTED {
-            metaflux_chain: chain.clone(),
-            account: addr(0xEE),
-            allowed: true,
-            nonce: 16,
-        },
-        TypedAction::REDACTED {
-            metaflux_chain: chain.clone(),
-            vault_id: 42,
-            operator: addr(0xFA),
-            allowed: true,
-            expires_at_ms: 1_700_000_000_000,
-            nonce: 17,
-        },
         TypedAction::UpdateIsolatedMargin {
             metaflux_chain: chain.clone(),
             asset: 1,

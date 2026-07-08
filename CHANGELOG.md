@@ -109,8 +109,7 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   `convert_to_multi_sig_user` / `user_dex_abstraction` / `user_set_abstraction` /
   `agent_set_abstraction` / `priority_bid`, `token_delegate` / `claim_rewards` /
   `link_staking_user`, `submit_encrypted_order`, `create_vault` /
-  `vault_transfer` / `vault_modify` / `vault_withdraw`, `mb_withdraw`,
-  `REDACTED` / `REDACTED`.
+  `vault_transfer` / `vault_modify` / `vault_withdraw`, `mb_withdraw`.
 
 ### Changed
 

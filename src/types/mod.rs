@@ -20,7 +20,6 @@ pub mod core_evm;
 pub mod cross_chain;
 pub mod encrypted;
 pub mod fba;
-pub mod governance;
 pub mod meta_bridge;
 pub mod order;
 pub mod pm;

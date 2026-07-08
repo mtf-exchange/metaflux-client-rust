@@ -496,65 +496,6 @@ impl<'a> Exchange<'a> {
         .await
     }
 
-    /// Set metaliquidity whitelist membership under the typed scheme.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn REDACTED_typed(
-        &self,
-        wallet: &Wallet,
-        account: crate::wallet::Address,
-        allowed: bool,
-    ) -> Result<Value, ClientError> {
-        self.post_signed_typed(wallet, |chain, nonce| {
-            let action = TypedAction::REDACTED {
-                metaflux_chain: chain,
-                account,
-                allowed,
-                nonce,
-            };
-            let params = json!({ "address": account, "allowed": allowed });
-            (action, "REDACTED", params)
-        })
-        .await
-    }
-
-    /// Register / revoke a metaliquidity operator under the typed scheme.
-    ///
-    /// `expires_at_ms = 0` never expires.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn REDACTED_typed(
-        &self,
-        wallet: &Wallet,
-        vault_id: u64,
-        operator: crate::wallet::Address,
-        allowed: bool,
-        expires_at_ms: u64,
-    ) -> Result<Value, ClientError> {
-        self.post_signed_typed(wallet, |chain, nonce| {
-            let action = TypedAction::REDACTED {
-                metaflux_chain: chain,
-                vault_id,
-                operator,
-                allowed,
-                expires_at_ms,
-                nonce,
-            };
-            let mut params = json!({
-                "vault_id": vault_id,
-                "operator": operator,
-                "allowed": allowed,
-            });
-            if expires_at_ms != 0 {
-                params["expires_at_ms"] = json!(expires_at_ms);
-            }
-            (action, "REDACTED", params)
-        })
-        .await
-    }
-
     /// Add or remove isolated margin on an open position under the typed scheme.
     ///
     /// `delta` is a signed canonical decimal string (`+` adds, `-` withdraws).

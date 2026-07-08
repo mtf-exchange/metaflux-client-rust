@@ -149,10 +149,6 @@ const VAULT_MODIFY_TYPE: &[u8] =
     b"MetaFluxTransaction:VaultModify(string metafluxChain,uint64 vaultId,string newName,uint64 nonce)";
 const SPOT_MARGIN_CLOSE_TYPE: &[u8] =
     b"MetaFluxTransaction:SpotMarginClose(string metafluxChain,uint32 pair,uint64 limitPx,uint64 nonce)";
-const SET_METALIQUIDITY_SET_TYPE: &[u8] =
-    b"MetaFluxTransaction:REDACTED(string metafluxChain,address account,bool allowed,uint64 nonce)";
-const REGISTER_METALIQUIDITY_OPERATOR_TYPE: &[u8] =
-    b"MetaFluxTransaction:REDACTED(string metafluxChain,uint64 vaultId,address operator,bool allowed,uint64 expiresAtMs,uint64 nonce)";
 const UPDATE_ISOLATED_MARGIN_TYPE: &[u8] =
     b"MetaFluxTransaction:UpdateIsolatedMargin(string metafluxChain,uint32 asset,string delta,uint64 nonce)";
 const TOP_UP_ISOLATED_ONLY_MARGIN_TYPE: &[u8] =
@@ -373,32 +369,6 @@ pub enum TypedAction {
         pair: u32,
         /// Limit price on the 1e8 plane.
         limit_px: u64,
-        /// Envelope nonce.
-        nonce: u64,
-    },
-    /// `REDACTED(string metafluxChain,address account,bool allowed,uint64 nonce)`
-    REDACTED {
-        /// Chain tag.
-        metaflux_chain: String,
-        /// Account address.
-        account: Address,
-        /// Whitelist allowed.
-        allowed: bool,
-        /// Envelope nonce.
-        nonce: u64,
-    },
-    /// `REDACTED(string metafluxChain,uint64 vaultId,address operator,bool allowed,uint64 expiresAtMs,uint64 nonce)`
-    REDACTED {
-        /// Chain tag.
-        metaflux_chain: String,
-        /// Vault id.
-        vault_id: u64,
-        /// Operator address.
-        operator: Address,
-        /// Operator allowed.
-        allowed: bool,
-        /// Expiry timestamp in ms (`0` = never expires).
-        expires_at_ms: u64,
         /// Envelope nonce.
         nonce: u64,
     },
@@ -791,10 +761,6 @@ impl TypedAction {
             TypedAction::CreateVault { .. } => CREATE_VAULT_TYPE,
             TypedAction::VaultModify { .. } => VAULT_MODIFY_TYPE,
             TypedAction::SpotMarginClose { .. } => SPOT_MARGIN_CLOSE_TYPE,
-            TypedAction::REDACTED { .. } => SET_METALIQUIDITY_SET_TYPE,
-            TypedAction::REDACTED { .. } => {
-                REGISTER_METALIQUIDITY_OPERATOR_TYPE
-            }
             TypedAction::UpdateIsolatedMargin { .. } => UPDATE_ISOLATED_MARGIN_TYPE,
             TypedAction::TopUpIsolatedOnlyMargin { .. } => TOP_UP_ISOLATED_ONLY_MARGIN_TYPE,
             TypedAction::TokenDelegate { .. } => TOKEN_DELEGATE_TYPE,
@@ -1019,32 +985,6 @@ impl TypedAction {
                 enc_string(metaflux_chain),
                 enc_u32(*pair),
                 enc_u64(*limit_px),
-                enc_u64(*nonce),
-            ],
-            TypedAction::REDACTED {
-                metaflux_chain,
-                account,
-                allowed,
-                nonce,
-            } => vec![
-                enc_string(metaflux_chain),
-                enc_addr(account),
-                enc_bool(*allowed),
-                enc_u64(*nonce),
-            ],
-            TypedAction::REDACTED {
-                metaflux_chain,
-                vault_id,
-                operator,
-                allowed,
-                expires_at_ms,
-                nonce,
-            } => vec![
-                enc_string(metaflux_chain),
-                enc_u64(*vault_id),
-                enc_addr(operator),
-                enc_bool(*allowed),
-                enc_u64(*expires_at_ms),
                 enc_u64(*nonce),
             ],
             TypedAction::UpdateIsolatedMargin {

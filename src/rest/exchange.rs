@@ -44,7 +44,6 @@ use crate::types::{
     cross_chain::CrossChainSend,
     encrypted::{EncryptedOrderSubmit, SubmitEncryptedOrder},
     fba::FbaSubmit,
-    governance::{REDACTED, SetMetaliquidityWhitelist},
     meta_bridge::MbWithdraw,
     order::{
         BatchCancel, BatchModify, BatchOrder, CancelAllOrders, CancelByCloid, CancelOrder, Modify,
@@ -903,35 +902,6 @@ impl<'a> Exchange<'a> {
         params: &MbWithdraw,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "mb_withdraw", "params": params });
-        self.post_signed(wallet, action).await
-    }
-
-    // ---- governance / operator ----
-
-    /// Set a metaliquidity-provider whitelist membership (validator-authorized).
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn REDACTED(
-        &self,
-        wallet: &Wallet,
-        params: &SetMetaliquidityWhitelist,
-    ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "REDACTED", "params": params });
-        self.post_signed(wallet, action).await
-    }
-
-    /// Register or revoke an external strategy operator for a vault
-    /// (vault-leader-authorized).
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn REDACTED(
-        &self,
-        wallet: &Wallet,
-        params: &REDACTED,
-    ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "REDACTED", "params": params });
         self.post_signed(wallet, action).await
     }
 
