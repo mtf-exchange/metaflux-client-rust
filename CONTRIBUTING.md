@@ -15,6 +15,17 @@ cargo fmt --all
 CI enforces `fmt`, `clippy -D warnings`, the test matrix, and
 `cargo doc -D warnings` — run them locally before pushing.
 
+### Git hooks
+
+The repo ships a `pre-commit` hook that mirrors the CI `cargo fmt` gate.
+Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+`core.hooksPath` is local config, so every clone must run this once.
+
 ## Workspace layout
 
 - `metaflux-client` (repo root) — the SDK.
