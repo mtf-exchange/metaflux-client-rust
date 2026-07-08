@@ -66,6 +66,22 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   rested as a resting order.
 - Dropped the vestigial `sig_scheme: "typed"` field from `/exchange` requests.
 
+## [0.7.17]
+
+### Changed
+
+- `FeeSchedule` and `FeeTier` fee fields (`maker_bps`, `taker_bps`, and related)
+  are now transmitted as decimal basis-point strings (e.g., `"5.0"`, `"0.5"`),
+  supporting sub-basis-point precision. The SDK already parses these as strings,
+  so no code changes are needed for existing clients — decimal parsing happens
+  automatically.
+
+### Note
+
+- The server now enforces EVM transaction signature verification (standard
+  Ethereum signed raw-tx format); existing clients using standard EVM tooling
+  are unaffected.
+
 ## [Unreleased]
 
 ### Added
