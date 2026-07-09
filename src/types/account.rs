@@ -101,14 +101,6 @@ pub struct ConvertToMultiSigUser {
     pub threshold: u32,
 }
 
-/// Action — toggle the account's DEX-abstraction opt-in flag.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct UserDexAbstraction {
-    /// `true` = opt in, `false` = opt out.
-    pub enabled: bool,
-}
-
 /// Action — set a self-scoped abstraction config value.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

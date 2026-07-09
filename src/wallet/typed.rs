@@ -154,7 +154,7 @@ const UPDATE_ISOLATED_MARGIN_TYPE: &[u8] =
 const TOP_UP_ISOLATED_ONLY_MARGIN_TYPE: &[u8] =
     b"MetaFluxTransaction:TopUpIsolatedOnlyMargin(string metafluxChain,uint32 asset,string amount,uint64 nonce)";
 const TOKEN_DELEGATE_TYPE: &[u8] =
-    b"MetaFluxTransaction:TokenDelegate(string metafluxChain,address validator,string amount,bool isUndelegate,uint64 nonce)";
+    b"MetaFluxTransaction:TokenDelegate(string metafluxChain,address validator,string amount,bool isUndelegate,uint8 lockMonths,uint64 nonce)";
 const VAULT_TRANSFER_TYPE: &[u8] =
     b"MetaFluxTransaction:VaultTransfer(string metafluxChain,uint64 vaultId,bool deposit,string amount,uint64 nonce)";
 const VAULT_WITHDRAW_TYPE: &[u8] =
@@ -394,7 +394,7 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
-    /// `TokenDelegate(string metafluxChain,address validator,string amount,bool isUndelegate,uint64 nonce)`
+    /// `TokenDelegate(string metafluxChain,address validator,string amount,bool isUndelegate,uint8 lockMonths,uint64 nonce)`
     TokenDelegate {
         /// Chain tag.
         metaflux_chain: String,
@@ -404,6 +404,9 @@ pub enum TypedAction {
         amount: String,
         /// Undelegate (vs delegate).
         is_undelegate: bool,
+        /// Lock tier in months — one of `0` (flexible), `1`, `6`, `24`. Ignored
+        /// on undelegate.
+        lock_months: u8,
         /// Envelope nonce.
         nonce: u64,
     },
@@ -601,15 +604,6 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
-    /// `UserDexAbstraction(string metafluxChain,bool enabled,uint64 nonce)`
-    UserDexAbstraction {
-        /// Chain tag.
-        metaflux_chain: String,
-        /// Opt-in (`true`) / opt-out (`false`).
-        enabled: bool,
-        /// Envelope nonce.
-        nonce: u64,
-    },
     /// `UserSetAbstraction(string metafluxChain,uint8 kind,string value,uint64 nonce)`
     UserSetAbstraction {
         /// Chain tag.
@@ -779,7 +773,6 @@ impl TypedAction {
             TypedAction::SubAccountSpotTransfer { .. } => account::SUB_ACCOUNT_SPOT_TRANSFER_TYPE,
             TypedAction::CDeposit { .. } => account::C_DEPOSIT_TYPE,
             TypedAction::CWithdraw { .. } => account::C_WITHDRAW_TYPE,
-            TypedAction::UserDexAbstraction { .. } => account::USER_DEX_ABSTRACTION_TYPE,
             TypedAction::UserSetAbstraction { .. } => account::USER_SET_ABSTRACTION_TYPE,
             TypedAction::PriorityBid { .. } => account::PRIORITY_BID_TYPE,
             TypedAction::CancelAllOrders { owner, .. } => {
@@ -1014,12 +1007,14 @@ impl TypedAction {
                 validator,
                 amount,
                 is_undelegate,
+                lock_months,
                 nonce,
             } => vec![
                 enc_string(metaflux_chain),
                 enc_addr(validator),
                 enc_string(amount),
                 enc_bool(*is_undelegate),
+                enc_u8(*lock_months),
                 enc_u64(*nonce),
             ],
             TypedAction::VaultTransfer {
@@ -1201,11 +1196,6 @@ impl TypedAction {
                 amount,
                 nonce,
             } => account::staking_move_words(metaflux_chain, amount, *nonce),
-            TypedAction::UserDexAbstraction {
-                metaflux_chain,
-                enabled,
-                nonce,
-            } => account::user_dex_abstraction_words(metaflux_chain, *enabled, *nonce),
             TypedAction::UserSetAbstraction {
                 metaflux_chain,
                 kind,
@@ -1456,9 +1446,10 @@ mod tests {
                     validator: addr(0xD4),
                     amount: "1000".into(),
                     is_undelegate: false,
+                    lock_months: 0,
                     nonce: 11,
                 },
-                "5327737fefc7ee3b38b59743fb4ba311d9142a7c672ec59ca92c5a871173008b",
+                "cc3d9e5ed170fc39028ebe587af079e42968a1c5e324da20bc584ddc28711a98",
             ),
             (
                 TypedAction::VaultTransfer {

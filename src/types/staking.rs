@@ -17,6 +17,11 @@ pub struct TokenDelegate {
     pub amount: String,
     /// `true` = unstake / queue undelegation; `false` = delegate.
     pub is_undelegate: bool,
+    /// Lock tier in months — one of `0` (flexible), `1`, `6`, `24`. Ignored on
+    /// undelegate. Defaults to `0`; omit it and existing flexible-stake callers
+    /// keep working.
+    #[serde(default)]
+    pub lock_months: u8,
 }
 
 /// Action — claim accrued staking rewards.
@@ -66,12 +71,24 @@ mod tests {
             validator: Address::ZERO,
             amount: "100.5".into(),
             is_undelegate: false,
+            lock_months: 0,
         };
         let j = serde_json::to_value(&a).unwrap();
         assert!(j["amount"].is_string());
         assert_eq!(j["is_undelegate"], serde_json::json!(false));
+        assert_eq!(j["lock_months"], serde_json::json!(0));
         let dec: TokenDelegate = serde_json::from_value(j).unwrap();
         assert_eq!(a, dec);
+
+        // `lock_months` is `#[serde(default)]`: a legacy payload without it
+        // decodes as flexible (0).
+        let legacy: TokenDelegate = serde_json::from_value(serde_json::json!({
+            "validator": Address::ZERO,
+            "amount": "100.5",
+            "is_undelegate": false,
+        }))
+        .unwrap();
+        assert_eq!(legacy.lock_months, 0);
     }
 
     #[test]

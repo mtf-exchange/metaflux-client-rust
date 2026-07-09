@@ -142,9 +142,10 @@ fn extended_kat_vectors_match_pinned_digests() {
                 validator: addr(0xD4),
                 amount: "1000".into(),
                 is_undelegate: false,
+                lock_months: 0,
                 nonce: 11,
             },
-            "5327737fefc7ee3b38b59743fb4ba311d9142a7c672ec59ca92c5a871173008b",
+            "cc3d9e5ed170fc39028ebe587af079e42968a1c5e324da20bc584ddc28711a98",
         ),
         (
             TypedAction::VaultTransfer {
@@ -244,7 +245,7 @@ fn extended_kat_vectors_match_pinned_digests() {
     }
 }
 
-/// (1c) The eleven newly-typed actions (`core_evm_transfer` + the account /
+/// (1c) The ten newly-typed actions (`core_evm_transfer` + the account /
 /// sub-account / staking / abstraction / priority / encrypted set) must
 /// reproduce the frozen contract digests (chain id 114514 / `"Testnet"`) — the
 /// SAME byte-for-byte digests the TS SDK and the server pin. Covers the
@@ -315,14 +316,6 @@ fn newly_typed_kat_vectors_match_pinned_digests() {
             "66466daf4a1f531f167ea4d131ee4c41c5e16d75e3a85bd0cc739633b763b4cf",
         ),
         (
-            TypedAction::UserDexAbstraction {
-                metaflux_chain: "Testnet".into(),
-                enabled: true,
-                nonce: 59,
-            },
-            "5fad4db7c576767400c930e5ed312847e17741526db66f6f918ff027a6e7b2d6",
-        ),
-        (
             TypedAction::UserSetAbstraction {
                 metaflux_chain: "Testnet".into(),
                 kind: 3,
@@ -364,7 +357,7 @@ fn newly_typed_kat_vectors_match_pinned_digests() {
             "86657cd5b8920543f8e4ec41790aeb0957af3c4d2440e25d8009cfa9e5fc9675",
         ),
     ];
-    assert_eq!(cases.len(), 11, "all 11 newly-typed actions pinned");
+    assert_eq!(cases.len(), 10, "all 10 newly-typed actions pinned");
     for (action, want) in &cases {
         assert_eq!(
             hex::encode(_typed_digest_for_test(action)),
@@ -598,6 +591,7 @@ fn every_typed_action_signs_and_recovers() {
             validator: addr(0xD4),
             amount: "1000".into(),
             is_undelegate: false,
+            lock_months: 0,
             nonce: 20,
         },
         TypedAction::VaultTransfer {
@@ -701,11 +695,6 @@ fn every_typed_action_signs_and_recovers() {
             amount: "500".into(),
             nonce: 35,
         },
-        TypedAction::UserDexAbstraction {
-            metaflux_chain: chain.clone(),
-            enabled: true,
-            nonce: 36,
-        },
         TypedAction::UserSetAbstraction {
             metaflux_chain: chain.clone(),
             kind: 3,
@@ -764,7 +753,7 @@ fn every_typed_action_signs_and_recovers() {
             nonce: 43,
         },
     ];
-    assert_eq!(actions.len(), 44, "all 44 reachable typed actions covered");
+    assert_eq!(actions.len(), 41, "all 41 reachable typed actions covered");
 
     for action in &actions {
         let digest = _typed_digest_for_test(action);

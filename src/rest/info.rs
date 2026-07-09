@@ -284,12 +284,10 @@ pub struct StakingState {
     pub address: Address,
     /// Total MTF staked across all delegations, canonical decimal string.
     pub total_staked: String,
-    /// Accrued but unclaimed rewards, canonical decimal string.
-    pub pending_rewards: String,
-    /// Active delegations.
+    /// Active delegations (unclaimed rewards live per-delegation).
     pub delegations: Vec<Delegation>,
-    /// Pending unbond entries.
-    pub unbonding: Vec<UnbondingEntry>,
+    /// Queued undelegations awaiting maturity.
+    pub pending_unstakes: Vec<PendingUnstake>,
 }
 
 /// One delegation entry.
@@ -300,20 +298,21 @@ pub struct Delegation {
     pub validator: Address,
     /// Staked MTF, canonical decimal string.
     pub amount: String,
-    /// Delegation timestamp (unix ms).
-    pub since_ms: u64,
+    /// Backing timestamp for this delegation (unix ms) — the last-claim ts.
+    pub since_ts: u64,
+    /// Accrued but unclaimed rewards for this delegation, canonical decimal
+    /// string.
+    pub pending_rewards: String,
 }
 
-/// One unbonding entry.
+/// One pending (queued) undelegation.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct UnbondingEntry {
-    /// Validator address.
-    pub validator: Address,
-    /// Amount being unbonded, canonical decimal string.
+pub struct PendingUnstake {
+    /// Amount being unstaked, canonical decimal string.
     pub amount: String,
-    /// Earliest claim timestamp (unix ms).
-    pub claim_at_ms: u64,
+    /// Timestamp (unix ms) at which the unstake matures / becomes claimable.
+    pub matures_at_ts: u64,
 }
 
 // ── node-native `/info` shapes ──────────────────────────────────────────────
@@ -751,7 +750,10 @@ impl<'a> Info<'a> {
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn user_state(&self, addr: Address) -> Result<UserState, ClientError> {
         self.client
-            .post_json("/info", &json!({ "type": "user_state", "address": addr }))
+            .post_json(
+                "/info",
+                &json!({ "type": "account_state", "address": addr }),
+            )
             .await
     }
 
@@ -934,7 +936,7 @@ impl<'a> Info<'a> {
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn pm_state(&self, addr: Address) -> Result<PmState, ClientError> {
         self.client
-            .post_json("/info", &json!({ "type": "pm_state", "user": addr }))
+            .post_json("/info", &json!({ "type": "pm_summary", "user": addr }))
             .await
     }
 
@@ -944,7 +946,7 @@ impl<'a> Info<'a> {
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn rfq_state(&self, rfq_id: RfqId) -> Result<RfqState, ClientError> {
         self.client
-            .post_json("/info", &json!({ "type": "rfq_state", "rfq_id": rfq_id.0 }))
+            .post_json("/info", &json!({ "type": "rfq_open", "rfq_id": rfq_id.0 }))
             .await
     }
 

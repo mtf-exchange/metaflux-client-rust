@@ -408,9 +408,8 @@ async fn staking_state_decodes_by_address() {
             json!({
                 "address": "0x0000000000000000000000000000000000000003",
                 "total_staked": "0",
-                "pending_rewards": "0",
                 "delegations": [],
-                "unbonding": []
+                "pending_unstakes": []
             }),
         )))
         .mount(&server)

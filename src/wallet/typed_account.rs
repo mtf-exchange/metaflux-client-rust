@@ -44,9 +44,6 @@ pub(crate) const C_DEPOSIT_TYPE: &[u8] =
 /// `MetaFluxTransaction:CWithdraw` // CONSENSUS-FROZEN (free staking pool → spot MTF)
 pub(crate) const C_WITHDRAW_TYPE: &[u8] =
     b"MetaFluxTransaction:CWithdraw(string metafluxChain,string amount,uint64 nonce)";
-/// `MetaFluxTransaction:UserDexAbstraction` // CONSENSUS-FROZEN
-pub(crate) const USER_DEX_ABSTRACTION_TYPE: &[u8] =
-    b"MetaFluxTransaction:UserDexAbstraction(string metafluxChain,bool enabled,uint64 nonce)";
 /// `MetaFluxTransaction:UserSetAbstraction` // CONSENSUS-FROZEN
 pub(crate) const USER_SET_ABSTRACTION_TYPE: &[u8] =
     b"MetaFluxTransaction:UserSetAbstraction(string metafluxChain,uint8 kind,string value,uint64 nonce)";
@@ -164,11 +161,6 @@ pub(crate) fn sub_account_spot_transfer_words(
 /// `CDeposit` / `CWithdraw` words — a single verbatim decimal `amount`.
 pub(crate) fn staking_move_words(chain: &str, amount: &str, nonce: u64) -> Vec<[u8; 32]> {
     vec![enc_string(chain), enc_string(amount), enc_u64(nonce)]
-}
-
-/// `UserDexAbstraction` words.
-pub(crate) fn user_dex_abstraction_words(chain: &str, enabled: bool, nonce: u64) -> Vec<[u8; 32]> {
-    vec![enc_string(chain), enc_bool(enabled), enc_u64(nonce)]
 }
 
 /// `UserSetAbstraction` words. `value` is the verbatim canonical decimal string.

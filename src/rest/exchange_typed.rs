@@ -552,7 +552,9 @@ impl<'a> Exchange<'a> {
     /// Delegate stake to a validator (or queue an undelegation) under the typed
     /// scheme.
     ///
-    /// `amount` is a canonical decimal string.
+    /// `amount` is a canonical decimal string. `lock_months` picks the lock tier
+    /// (`0` = flexible, else `1` / `6` / `24`); it is ignored on undelegate but
+    /// still hashed into the digest, so pass the same value the wire carries.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -562,6 +564,7 @@ impl<'a> Exchange<'a> {
         validator: crate::wallet::Address,
         amount: impl Into<String>,
         is_undelegate: bool,
+        lock_months: u8,
     ) -> Result<Value, ClientError> {
         let amount = amount.into();
         self.post_signed_typed(wallet, |chain, nonce| {
@@ -570,12 +573,14 @@ impl<'a> Exchange<'a> {
                 validator,
                 amount: amount.clone(),
                 is_undelegate,
+                lock_months,
                 nonce,
             };
             let params = json!({
                 "validator": validator,
                 "amount": amount,
                 "is_undelegate": is_undelegate,
+                "lock_months": lock_months,
             });
             (action, "token_delegate", params)
         })
@@ -1040,30 +1045,6 @@ impl<'a> Exchange<'a> {
                 nonce,
             };
             (action, "c_withdraw", json!({ "amount": amount }))
-        })
-        .await
-    }
-
-    /// Toggle the account's DEX-abstraction opt-in flag under the typed scheme.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn user_dex_abstraction_typed(
-        &self,
-        wallet: &Wallet,
-        enabled: bool,
-    ) -> Result<Value, ClientError> {
-        self.post_signed_typed(wallet, |chain, nonce| {
-            let action = TypedAction::UserDexAbstraction {
-                metaflux_chain: chain,
-                enabled,
-                nonce,
-            };
-            (
-                action,
-                "user_dex_abstraction",
-                json!({ "enabled": enabled }),
-            )
         })
         .await
     }

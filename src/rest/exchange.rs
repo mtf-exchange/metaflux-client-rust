@@ -39,9 +39,8 @@ use crate::types::{
     account::{
         AgentSetAbstraction, ApproveAgent, ApproveBuilderFee, ConvertToMultiSigUser, PriorityBid,
         SetDisplayName, SetReferrer, TopUpIsolatedOnlyMargin, UpdateIsolatedMargin, UpdateLeverage,
-        UserDexAbstraction, UserPortfolioMargin, UserSetAbstraction,
+        UserPortfolioMargin, UserSetAbstraction,
     },
-    cross_chain::CrossChainSend,
     encrypted::{EncryptedOrderSubmit, SubmitEncryptedOrder},
     fba::FbaSubmit,
     meta_bridge::MbWithdraw,
@@ -709,19 +708,6 @@ impl<'a> Exchange<'a> {
         self.post_signed(wallet, action).await
     }
 
-    /// Toggle the account's DEX-abstraction opt-in flag.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn user_dex_abstraction(
-        &self,
-        wallet: &Wallet,
-        params: &UserDexAbstraction,
-    ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "user_dex_abstraction", "params": params });
-        self.post_signed(wallet, action).await
-    }
-
     /// Set a self-scoped abstraction config value.
     ///
     /// # Errors
@@ -952,20 +938,6 @@ impl<'a> Exchange<'a> {
         params: &FbaSubmit,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "fba_submit", "submit": params });
-        self.post_signed(wallet, action).await
-    }
-
-    /// Initiate a chain-agnostic cross-chain transfer (`cross_chain_send`).
-    /// Wrapper key is `msg`.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn cross_chain_send(
-        &self,
-        wallet: &Wallet,
-        params: &CrossChainSend,
-    ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "cross_chain_send", "msg": params });
         self.post_signed(wallet, action).await
     }
 
