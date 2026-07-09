@@ -494,7 +494,7 @@ pub enum MarketKind {
 }
 
 /// Per-market funding parameters inside a [`MarketInfo`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Funding {
     /// Current funding rate per hour, fixed-point as a decimal string.
@@ -533,8 +533,12 @@ pub struct MarketInfo {
     /// Load-bearing for size encoding — NOT derivable from `step_size`.
     pub sz_decimals: u8,
     /// Mark price, whole-USDC decimal string (tick-snapped; `"0"` fallback).
+    /// Absent on the STATIC `markets_meta` read (dynamic) → defaults to empty.
+    #[serde(default)]
     pub mark_px: String,
     /// Oracle price, whole-USDC decimal string (tick-snapped; `"0"` fallback).
+    /// Absent on the STATIC `markets_meta` read (dynamic) → defaults to empty.
+    #[serde(default)]
     pub oracle_px: String,
     /// Tick size (smallest price increment), canonical whole-USDC decimal string
     /// (e.g. `"0.01"`). Scale to the order `limit_px` plane via `× 10^8`.
@@ -551,7 +555,8 @@ pub struct MarketInfo {
     pub maint_margin_ratio: String,
     /// Initial margin ratio, fixed-point string.
     pub init_margin_ratio: String,
-    /// Funding parameters.
+    /// Funding parameters. Absent on the STATIC `markets_meta` read → defaults.
+    #[serde(default)]
     pub funding: Funding,
     /// Leverage / maintenance-margin ladder — upper-bound bands by open interest
     /// (the maintenance-margin schedule now rides inline on the market). Empty on
@@ -563,6 +568,8 @@ pub struct MarketInfo {
     /// Whether frequent-batch-auction matching is enabled for this market.
     pub fba_enabled: bool,
     /// Open interest, fixed-point as a decimal string.
+    /// Absent on the STATIC `markets_meta` read (dynamic) → defaults to empty.
+    #[serde(default)]
     pub open_interest: String,
 }
 
@@ -659,6 +666,32 @@ impl<'a> Info<'a> {
         let resp: MarketsResp = self
             .client
             .post_json("/info", &json!({ "type": "markets" }))
+            .await?;
+        Ok(resp.perp)
+    }
+
+    /// List the STATIC per-market metadata (`markets_meta`).
+    ///
+    /// The long-cacheable subset of [`Info::markets`] — precision grids
+    /// (`sz_decimals` / `tick_size` / `step_size`), the leverage + `margin_tiers`
+    /// ladder, `min_order`, trade-control flags, `mark_source`, and the
+    /// deprecated `asset_id` shim. These fields were split OFF the dynamic
+    /// `markets` read (which now carries only live price / funding / OI), so a
+    /// consumer that needs per-market precision must read `markets_meta` and
+    /// merge by `coin`. Same `{ perp, spot }` envelope as `markets`; the returned
+    /// perp records OMIT the dynamic price/funding/OI fields. Static → cache hard.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn markets_meta(&self) -> Result<Vec<MarketInfo>, ClientError> {
+        #[derive(serde::Deserialize)]
+        struct MarketsResp {
+            #[serde(default)]
+            perp: Vec<MarketInfo>,
+        }
+        let resp: MarketsResp = self
+            .client
+            .post_json("/info", &json!({ "type": "markets_meta" }))
             .await?;
         Ok(resp.perp)
     }
