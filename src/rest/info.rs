@@ -83,28 +83,32 @@ pub enum OrderSide {
 ///
 /// `px` / `size` are CANONICAL decimal strings — `px` is tick-snapped whole
 /// USDC (positive for **both** sides), `size` is whole base units. `oid` /
-/// `market_id` / `inserted_at_ms` are bare integers.
+/// `inserted_at_ms` are bare integers; `coin` is the market symbol.
 ///
-/// LIVE GATEWAY GAP: a resting order currently reads back with `oid: 0` and
-/// `inserted_at_ms: 0` even though it is on the book — so an order is NOT
-/// reliably cancellable by the `oid` from this snapshot, and it carries no
-/// `cloid`. Until the gateway populates `oid`, the oid-independent workaround
-/// for reconcile / ghost-sweep is the `cancel_all_orders` exchange action
-/// (by account / asset) rather than per-oid cancels.
+/// The node emits the real resting `oid`, `inserted_at_ms`, and the submit-time
+/// `cloid` (when the order carried one), so a client can bind a resting order to
+/// its own submission by `cloid` — or cancel it by `oid` — instead of a
+/// (px,size) heuristic that collides across strategies on equal legs (the
+/// multi-strategy co-residency case). `cloid` is absent for orders submitted
+/// without one.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct OpenOrder {
-    /// Order id. See the struct note: currently `0` on the gateway.
+    /// Real resting-order id (cancellable per-oid).
     pub oid: u64,
-    /// Market / asset id.
-    pub market_id: u32,
+    /// Market symbol (e.g. `"BTC"`), as the node's `open_orders` emits it.
+    pub coin: String,
     /// Side, lowercase `"bid"` / `"ask"`.
     pub side: OrderSide,
     /// Limit price, canonical whole-USDC decimal string (tick-snapped).
     pub px: String,
     /// Remaining size, canonical whole-base-unit decimal string.
     pub size: String,
-    /// Insertion timestamp (unix ms). See the struct note: currently `0`.
+    /// Submit-time client order id (`0x`-hex), when the order carried one —
+    /// the id-based binding key for reconcile / co-residency. Absent otherwise.
+    #[serde(default)]
+    pub cloid: Option<String>,
+    /// Insertion timestamp (unix ms).
     pub inserted_at_ms: u64,
 }
 
@@ -1324,22 +1328,35 @@ mod tests {
         assert!(f2.maker_bps.is_none() && f2.taker_bps.is_none());
     }
 
-    /// Decode the deployed gateway `open_orders.data` (note the live oid:0 gap).
+    /// Decode the node `open_orders.data`: the wire carries the real `oid`, the
+    /// market `coin`, the submit-time `cloid` (id-binding key), and
+    /// `inserted_at_ms`. cloid is absent for orders submitted without one.
     #[test]
-    fn open_orders_decodes_gateway_fixture() {
+    fn open_orders_decodes_node_wire() {
         let data = serde_json::json!({
             "address": "0x000000000000000000000000000000000000beef",
             "orders": [
-                { "oid": 0, "market_id": 0, "side": "bid", "px": "2500000000000", "size": "60", "inserted_at_ms": 0 }
+                { "oid": 4242, "coin": "BTC", "side": "bid", "px": "2500000000000", "size": "60",
+                  "cloid": "0x0000000000000000000000000000abcd", "inserted_at_ms": 1_700_000_000_000u64 },
+                { "oid": 4243, "coin": "ETH", "side": "ask", "px": "3500000000000", "size": "10",
+                  "inserted_at_ms": 1_700_000_000_001u64 }
             ]
         });
         let o: OpenOrders = serde_json::from_value(data).unwrap();
         assert!(o.account_id.is_none());
-        assert_eq!(o.orders.len(), 1);
+        assert_eq!(o.orders.len(), 2);
+        assert_eq!(o.orders[0].oid, 4242);
+        assert_eq!(o.orders[0].coin, "BTC");
         assert_eq!(o.orders[0].side, OrderSide::Bid);
         assert_eq!(o.orders[0].px, "2500000000000");
         assert_eq!(o.orders[0].size, "60");
-        // side is lowercase on the wire; oid/inserted_at_ms are numbers.
+        // cloid present -> id-binding available; absent on the second -> None.
+        assert_eq!(
+            o.orders[0].cloid.as_deref(),
+            Some("0x0000000000000000000000000000abcd")
+        );
+        assert_eq!(o.orders[1].cloid, None);
+        assert_eq!(o.orders[1].coin, "ETH");
         let j = serde_json::to_value(&o).unwrap();
         assert_eq!(j["orders"][0]["side"], "bid");
         assert!(j["orders"][0]["oid"].is_number());
