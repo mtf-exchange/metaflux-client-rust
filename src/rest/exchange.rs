@@ -84,6 +84,28 @@ pub const MTF_CHAIN_ID: u64 = MTF_TESTNET_CHAIN_ID;
 #[derive(Debug)]
 pub struct Exchange<'a> {
     pub(crate) client: &'a RestClient,
+    /// OPTIONAL top-level action expiry (consensus time in ms) folded into every
+    /// TYPED-scheme signed action this handle produces. `0` (the default) signs
+    /// the pre-`expiresAfter` digest BYTE-FOR-BYTE; a non-zero value binds the
+    /// expiry into the signature. Set via [`Exchange::with_expires_after`].
+    ///
+    /// A non-zero expiry is only admitted once the network activates the field.
+    /// The legacy opaque path ([`Exchange::post_signed`]) ignores this knob.
+    pub(crate) expires_after_ms: u64,
+}
+
+impl<'a> Exchange<'a> {
+    /// Return a copy of this handle that folds `expires_after_ms` (consensus time
+    /// in ms; `0` = never expires) into every TYPED-scheme action it signs.
+    ///
+    /// One knob for all typed actions — no per-action argument. `0` reproduces the
+    /// pre-`expiresAfter` digest byte-for-byte; a non-zero value is only accepted
+    /// once the network activates the field, so leave it `0` until then.
+    #[must_use]
+    pub fn with_expires_after(mut self, expires_after_ms: u64) -> Self {
+        self.expires_after_ms = expires_after_ms;
+        self
+    }
 }
 
 /// Convenience: a signed action ready to POST to `/exchange`.

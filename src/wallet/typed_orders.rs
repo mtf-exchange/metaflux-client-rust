@@ -403,18 +403,42 @@ impl TypedTradingAction<'_> {
         Ok(words)
     }
 
+    /// `typeHash` for the selected (base or `*_WITH_OWNER`) type string, with the
+    /// OPTIONAL top-level `expiresAfter` field folded in when non-zero. Mirrors
+    /// the node's `folded_type_hash`: trailing `...,uint64 nonce)` becomes
+    /// `...,uint64 nonce,uint64 expiresAfter)`. `expires_after == 0` returns the
+    /// frozen type hash byte-for-byte.
+    fn folded_type_hash(&self, owner: Option<&Address>, expires_after: u64) -> [u8; 32] {
+        let base = self.type_string_for(owner);
+        if expires_after == 0 {
+            return keccak(base);
+        }
+        let suffix = b",uint64 expiresAfter)";
+        let mut folded = Vec::with_capacity(base.len() - 1 + suffix.len());
+        folded.extend_from_slice(&base[..base.len() - 1]);
+        folded.extend_from_slice(suffix);
+        keccak(&folded)
+    }
+
     /// `hashStruct(s) = keccak256(typeHash ‖ encodeData(s))`, selecting the
-    /// owner-carrying `typeHash` + words when `owner` is bound.
+    /// owner-carrying `typeHash` + words when `owner` is bound, and folding the
+    /// OPTIONAL top-level `expiresAfter` when non-zero (extra trailing
+    /// `uint256(expires_after)` word AFTER the nonce word). `expires_after == 0`
+    /// is byte-identical to the pre-`expiresAfter` digest.
     fn hash_struct(
         &self,
         chain_tag: &str,
         nonce: u64,
         owner: Option<&Address>,
+        expires_after: u64,
     ) -> Result<[u8; 32], ClientError> {
         let mut k = Keccak::v256();
-        k.update(&keccak(self.type_string_for(owner)));
+        k.update(&self.folded_type_hash(owner, expires_after));
         for w in self.encode_data(chain_tag, nonce, owner)? {
             k.update(&w);
+        }
+        if expires_after != 0 {
+            k.update(&enc_u64(expires_after));
         }
         let mut out = [0u8; 32];
         k.finalize(&mut out);
@@ -433,6 +457,7 @@ pub struct TypedTradingDigest<'a> {
     owner: Option<Address>,
     chain_id: u64,
     nonce: u64,
+    expires_after: u64,
 }
 
 impl<'a> TypedTradingDigest<'a> {
@@ -445,7 +470,18 @@ impl<'a> TypedTradingDigest<'a> {
             owner: None,
             chain_id,
             nonce,
+            expires_after: 0,
         }
+    }
+
+    /// Attach an OPTIONAL top-level `expiresAfter` (consensus time in ms; `0` =
+    /// never expires) to the signed digest. `0` reproduces the pre-`expiresAfter`
+    /// digest BYTE-FOR-BYTE; non-zero folds the expiry in so a relay can neither
+    /// strip nor alter it. Only admitted once the network activates the field.
+    #[must_use]
+    pub const fn with_expires_after(mut self, expires_after: u64) -> Self {
+        self.expires_after = expires_after;
+        self
     }
 
     /// Bind `action` to `chain_id` + `nonce` with an agent-resolved `owner`
@@ -469,6 +505,7 @@ impl<'a> TypedTradingDigest<'a> {
             owner: Some(owner),
             chain_id,
             nonce,
+            expires_after: 0,
         }
     }
 
@@ -481,6 +518,7 @@ impl<'a> TypedTradingDigest<'a> {
             metaflux_chain_tag(self.chain_id),
             self.nonce,
             self.owner.as_ref(),
+            self.expires_after,
         )?;
         let mut h = Keccak::v256();
         h.update(&[0x19, 0x01]);
@@ -503,6 +541,7 @@ impl Eip712 for TypedTradingDigest<'_> {
                 metaflux_chain_tag(self.chain_id),
                 self.nonce,
                 self.owner.as_ref(),
+                self.expires_after,
             )
             .unwrap_or([0u8; 32])
     }

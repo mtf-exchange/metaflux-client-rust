@@ -29,6 +29,12 @@ struct TypedSignedEnvelope<'a> {
     action: &'a Value,
     nonce: u64,
     signature: String,
+    /// OPTIONAL top-level action expiry (consensus time in ms). Omitted from the
+    /// wire when `0`/absent so the bytes are byte-identical to the
+    /// pre-`expiresAfter` envelope; present (and folded into the signed digest)
+    /// only when non-zero.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_after: Option<u64>,
 }
 
 /// Map a [`crate::types::meta_bridge::MbChain`] to the `uint8` the typed `MbWithdraw` digest
@@ -1406,6 +1412,85 @@ impl<'a> Exchange<'a> {
         .await
     }
 
+    /// Submit a multisig-acting bundle under the typed scheme.
+    ///
+    /// This wraps the roster-signed inner action in the outer
+    /// [`TypedAction::MultiSig`] envelope and POSTs it. Collect the inner
+    /// `signatures` first with [`crate::wallet::sign_multisig_inner`] (each roster
+    /// member signs the SAME `inner_action_blob` bytes + `inner_nonce` under the
+    /// acting account `user`).
+    ///
+    /// - `wallet` signs only the OUTER envelope — it may be ANY account (the
+    ///   acting authority is the recovered inner signer set), so a relay / bot can
+    ///   submit on the roster's behalf.
+    /// - `inner_action_blob` is the EXACT canonical `Action` JSON bytes the roster
+    ///   signed; it rides as `0x`-hex and is hashed raw by the node.
+    /// - The envelope `nonce` is PINNED to `inner_nonce` (NOT a fresh nonce): it
+    ///   must equal the nonce the roster signed and advances against `user`'s
+    ///   window.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn multi_sig_typed(
+        &self,
+        wallet: &Wallet,
+        user: crate::wallet::Address,
+        inner_action_blob: Vec<u8>,
+        signatures: Vec<Vec<u8>>,
+        inner_nonce: u64,
+    ) -> Result<Value, ClientError> {
+        let blob_hex = format!("0x{}", hex::encode(&inner_action_blob));
+        let sigs_hex: Vec<String> = signatures
+            .iter()
+            .map(|s| format!("0x{}", hex::encode(s)))
+            .collect();
+        self.post_signed_typed_at_nonce(wallet, inner_nonce, |chain, nonce| {
+            let action = TypedAction::MultiSig {
+                metaflux_chain: chain,
+                user,
+                inner_action_blob: inner_action_blob.clone(),
+                signatures: signatures.clone(),
+                nonce,
+            };
+            let params = json!({
+                "user": user,
+                "inner_action_blob": blob_hex,
+                "signatures": sigs_hex,
+                "nonce": nonce,
+            });
+            (action, json!({ "type": "multi_sig", "params": params }))
+        })
+        .await
+    }
+
+    /// Sign + POST a typed-scheme action at an EXPLICIT `nonce` (rather than a
+    /// fresh monotonic one). Used by [`Self::multi_sig_typed`], whose envelope
+    /// nonce must equal the inner nonce the roster signed.
+    async fn post_signed_typed_at_nonce<F, R>(
+        &self,
+        wallet: &Wallet,
+        nonce: u64,
+        build: F,
+    ) -> Result<R, ClientError>
+    where
+        F: FnOnce(String, u64) -> (TypedAction, Value),
+        R: serde::de::DeserializeOwned,
+    {
+        let chain = metaflux_chain_tag(MTF_CHAIN_ID).to_string();
+        let (typed, action) = build(chain, nonce);
+        let expires_after = self.expires_after_ms;
+        let digest =
+            TypedActionDigest::new_with_expiry(&typed, MTF_CHAIN_ID, expires_after).to_digest();
+        let signature = wallet.sign_digest(&digest)?.to_hex();
+        let envelope = TypedSignedEnvelope {
+            action: &action,
+            nonce,
+            signature,
+            expires_after: expires_after_wire(expires_after),
+        };
+        self.client.post_json("/exchange", &envelope).await
+    }
+
     /// Sign + POST a structured (typed-scheme) action with a CALLER-BUILT wire
     /// `action` JSON.
     ///
@@ -1422,12 +1507,15 @@ impl<'a> Exchange<'a> {
         let nonce = next_nonce();
         let chain = metaflux_chain_tag(MTF_CHAIN_ID).to_string();
         let (typed, action) = build(chain, nonce);
-        let digest = TypedActionDigest::new(&typed, MTF_CHAIN_ID).to_digest();
+        let expires_after = self.expires_after_ms;
+        let digest =
+            TypedActionDigest::new_with_expiry(&typed, MTF_CHAIN_ID, expires_after).to_digest();
         let signature = wallet.sign_digest(&digest)?.to_hex();
         let envelope = TypedSignedEnvelope {
             action: &action,
             nonce,
             signature,
+            expires_after: expires_after_wire(expires_after),
         };
         self.client.post_json("/exchange", &envelope).await
     }
@@ -1444,12 +1532,16 @@ impl<'a> Exchange<'a> {
         typed: TypedTradingAction<'_>,
     ) -> Result<R, ClientError> {
         let nonce = next_nonce();
-        let digest = TypedTradingDigest::new(typed, MTF_CHAIN_ID, nonce).digest()?;
+        let expires_after = self.expires_after_ms;
+        let digest = TypedTradingDigest::new(typed, MTF_CHAIN_ID, nonce)
+            .with_expires_after(expires_after)
+            .digest()?;
         let signature = wallet.sign_digest(&digest)?.to_hex();
         let envelope = TypedSignedEnvelope {
             action: &action,
             nonce,
             signature,
+            expires_after: expires_after_wire(expires_after),
         };
         self.client.post_json("/exchange", &envelope).await
     }
@@ -1473,8 +1565,10 @@ impl<'a> Exchange<'a> {
         typed: TypedTradingAction<'_>,
     ) -> Result<R, ClientError> {
         let nonce = next_nonce();
-        let digest =
-            TypedTradingDigest::new_with_owner(typed, owner, MTF_CHAIN_ID, nonce).digest()?;
+        let expires_after = self.expires_after_ms;
+        let digest = TypedTradingDigest::new_with_owner(typed, owner, MTF_CHAIN_ID, nonce)
+            .with_expires_after(expires_after)
+            .digest()?;
         let signature = wallet.sign_digest(&digest)?.to_hex();
         // The agent-resolved owner rides as a params-level `0x`-hex field; the
         // node reads `Native*.owner` from it (mirrors `cancel_all_orders_as`).
@@ -1483,8 +1577,20 @@ impl<'a> Exchange<'a> {
             action: &action,
             nonce,
             signature,
+            expires_after: expires_after_wire(expires_after),
         };
         self.client.post_json("/exchange", &envelope).await
+    }
+}
+
+/// Map an `expires_after_ms` knob to the wire field: `None` (omit) at `0`, else
+/// `Some(ms)`. Keeps a `0` envelope byte-identical to the pre-`expiresAfter`
+/// form.
+const fn expires_after_wire(expires_after_ms: u64) -> Option<u64> {
+    if expires_after_ms == 0 {
+        None
+    } else {
+        Some(expires_after_ms)
     }
 }
 
@@ -1495,6 +1601,15 @@ impl<'a> Exchange<'a> {
 #[doc(hidden)]
 pub fn _typed_digest_for_test(action: &TypedAction) -> [u8; 32] {
     TypedActionDigest::new(action, MTF_CHAIN_ID).to_digest()
+}
+
+/// Test-only escape hatch: the typed-scheme digest with an OPTIONAL top-level
+/// `expires_after` (ms) folded in, against the default [`MTF_CHAIN_ID`]. `0`
+/// reproduces [`_typed_digest_for_test`] byte-for-byte. Used by the integration
+/// tests under `tests/`. Not part of the stable public API.
+#[doc(hidden)]
+pub fn _typed_digest_for_test_with_expiry(action: &TypedAction, expires_after: u64) -> [u8; 32] {
+    TypedActionDigest::new_with_expiry(action, MTF_CHAIN_ID, expires_after).to_digest()
 }
 
 /// Test-only escape hatch: the typed-scheme EIP-712 digest for a TRADING action

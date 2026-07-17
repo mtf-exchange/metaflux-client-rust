@@ -99,9 +99,23 @@ pub(crate) fn enc_string(s: &str) -> [u8; 32] {
     keccak(s.as_bytes())
 }
 
-/// `bytes` → `keccak256(raw)`. Used for the encrypted-order ciphertext.
+/// `bytes` → `keccak256(raw)`. Used for the encrypted-order ciphertext and the
+/// multisig `innerActionBlob`.
 pub(crate) fn enc_bytes(b: &[u8]) -> [u8; 32] {
     keccak(b)
+}
+
+/// `bytes[]` → `keccak256(concat(keccak256(eᵢ)))` — the EIP-712 dynamic-array
+/// encoding where each element is itself `bytes`. Mirrors the node's
+/// `enc_bytes_array`; used for the multisig `signatures` field.
+fn enc_bytes_array(items: &[Vec<u8>]) -> [u8; 32] {
+    let mut k = Keccak::v256();
+    for b in items {
+        k.update(&enc_bytes(b));
+    }
+    let mut out = [0u8; 32];
+    k.finalize(&mut out);
+    out
 }
 
 /// `address[]` → `keccak256(concat(enc_addr(eᵢ)))`.
@@ -137,6 +151,8 @@ const USER_PORTFOLIO_MARGIN_TYPE: &[u8] =
     b"MetaFluxTransaction:UserPortfolioMargin(string metafluxChain,bool enroll,uint64 nonce)";
 const CONVERT_TO_MULTI_SIG_USER_TYPE: &[u8] =
     b"MetaFluxTransaction:ConvertToMultiSigUser(string metafluxChain,address[] signers,uint32 threshold,uint64 nonce)";
+const MULTI_SIG_TYPE: &[u8] =
+    b"MetaFluxTransaction:MultiSig(string metafluxChain,address user,bytes innerActionBlob,bytes[] signatures,uint64 nonce)";
 const UPDATE_LEVERAGE_TYPE: &[u8] =
     b"MetaFluxTransaction:UpdateLeverage(string metafluxChain,uint32 asset,uint32 leverage,bool isIsolated,uint64 nonce)";
 const CLAIM_REWARDS_TYPE: &[u8] =
@@ -303,6 +319,30 @@ pub enum TypedAction {
         /// Required signatures.
         threshold: u32,
         /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `MultiSig(string metafluxChain,address user,bytes innerActionBlob,bytes[] signatures,uint64 nonce)`
+    ///
+    /// The outer envelope of a multisig-acting bundle. It carries no authority of
+    /// its own — the acting authority is the roster signer set recovered from the
+    /// inner blob (see [`crate::wallet::multisig`]), so this envelope may be POSTed
+    /// by any account. `inner_action_blob` is the exact canonical `Action` JSON
+    /// bytes the roster signed (hashed as EIP-712 `bytes`); each element of
+    /// `signatures` is a 65-byte `r‖s‖v` roster signature (hashed as `bytes`). The
+    /// envelope `nonce` MUST equal the inner nonce the roster signed — it advances
+    /// against `user`'s window, not the POSTing account's.
+    MultiSig {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// The acting multisig account (`MultiSigParams::user`) — the account the
+        /// bundle acts as, NOT a roster member.
+        user: Address,
+        /// Exact canonical `Action` JSON bytes the roster signed (hashed as
+        /// `bytes`; never re-serialized).
+        inner_action_blob: Vec<u8>,
+        /// Roster signatures, each a 65-byte `r‖s‖v` blob (hashed as `bytes`).
+        signatures: Vec<Vec<u8>>,
+        /// Envelope nonce — equals the inner nonce the roster signed.
         nonce: u64,
     },
     /// `UpdateLeverage(string metafluxChain,uint32 asset,uint32 leverage,bool isIsolated,uint64 nonce)`
@@ -749,6 +789,7 @@ impl TypedAction {
             TypedAction::SetPositionMode { .. } => SET_POSITION_MODE_TYPE,
             TypedAction::UserPortfolioMargin { .. } => USER_PORTFOLIO_MARGIN_TYPE,
             TypedAction::ConvertToMultiSigUser { .. } => CONVERT_TO_MULTI_SIG_USER_TYPE,
+            TypedAction::MultiSig { .. } => MULTI_SIG_TYPE,
             TypedAction::UpdateLeverage { .. } => UPDATE_LEVERAGE_TYPE,
             TypedAction::ClaimRewards { .. } => CLAIM_REWARDS_TYPE,
             TypedAction::LinkStakingUser { .. } => LINK_STAKING_USER_TYPE,
@@ -912,6 +953,19 @@ impl TypedAction {
                 enc_string(metaflux_chain),
                 enc_addr_array(signers),
                 enc_u32(*threshold),
+                enc_u64(*nonce),
+            ],
+            TypedAction::MultiSig {
+                metaflux_chain,
+                user,
+                inner_action_blob,
+                signatures,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_addr(user),
+                enc_bytes(inner_action_blob),
+                enc_bytes_array(signatures),
                 enc_u64(*nonce),
             ],
             TypedAction::UpdateLeverage {
@@ -1295,13 +1349,49 @@ impl TypedAction {
         }
     }
 
+    /// `typeHash` with the OPTIONAL top-level `expiresAfter` field folded in.
+    ///
+    /// `expires_after == 0` (the never-expires case) returns EXACTLY
+    /// [`type_hash`](Self::type_hash) — byte-identical to every frozen signature.
+    /// When non-zero, the shared envelope-suffix fold turns the frozen type
+    /// string's trailing `...,uint64 nonce)` into
+    /// `...,uint64 nonce,uint64 expiresAfter)` before hashing. Mirrors the node's
+    /// `folded_type_hash` (applies uniformly to every variant, `*_WITH_OWNER`
+    /// included).
+    fn folded_type_hash(&self, expires_after: u64) -> [u8; 32] {
+        if expires_after == 0 {
+            return self.type_hash();
+        }
+        let base = self.type_string();
+        debug_assert_eq!(base.last(), Some(&b')'), "type string must end in ')'");
+        let suffix = b",uint64 expiresAfter)";
+        let mut folded = Vec::with_capacity(base.len() - 1 + suffix.len());
+        folded.extend_from_slice(&base[..base.len() - 1]);
+        folded.extend_from_slice(suffix);
+        keccak(&folded)
+    }
+
     /// `hashStruct(s) = keccak256(typeHash ‖ encodeData(s))`.
     #[must_use]
     pub fn hash_struct(&self) -> [u8; 32] {
+        self.hash_struct_with_expiry(0)
+    }
+
+    /// `hashStruct(s)` with the OPTIONAL top-level `expiresAfter` folded in.
+    ///
+    /// `expires_after == 0` reproduces [`hash_struct`](Self::hash_struct)
+    /// BYTE-FOR-BYTE (frozen type hash + the exact `encode_data` words, no extra
+    /// word). When non-zero it uses the folded type hash and appends ONE trailing
+    /// `uint256(expires_after)` word AFTER the existing nonce word.
+    #[must_use]
+    pub fn hash_struct_with_expiry(&self, expires_after: u64) -> [u8; 32] {
         let mut k = Keccak::v256();
-        k.update(&self.type_hash());
+        k.update(&self.folded_type_hash(expires_after));
         for word in self.encode_data() {
             k.update(&word);
+        }
+        if expires_after != 0 {
+            k.update(&enc_u64(expires_after));
         }
         let mut out = [0u8; 32];
         k.finalize(&mut out);
@@ -1319,13 +1409,35 @@ impl TypedAction {
 pub struct TypedActionDigest<'a> {
     action: &'a TypedAction,
     chain_id: u64,
+    expires_after: u64,
 }
 
 impl<'a> TypedActionDigest<'a> {
-    /// Bind `action` to `chain_id` for signing.
+    /// Bind `action` to `chain_id` for signing (no expiry — the digest is
+    /// byte-identical to every pre-`expiresAfter` signature).
     #[must_use]
     pub fn new(action: &'a TypedAction, chain_id: u64) -> Self {
-        Self { action, chain_id }
+        Self {
+            action,
+            chain_id,
+            expires_after: 0,
+        }
+    }
+
+    /// Bind `action` to `chain_id` with an OPTIONAL top-level `expiresAfter`
+    /// (consensus time in ms; `0` = never expires). `expires_after == 0`
+    /// reproduces [`new`](Self::new) BYTE-FOR-BYTE; non-zero folds the expiry
+    /// into the signed digest so a relay can neither strip nor alter it.
+    ///
+    /// A non-zero expiry is only admitted once the network activates the field —
+    /// until then, sign with `0` / [`new`](Self::new).
+    #[must_use]
+    pub fn new_with_expiry(action: &'a TypedAction, chain_id: u64, expires_after: u64) -> Self {
+        Self {
+            action,
+            chain_id,
+            expires_after,
+        }
     }
 }
 
@@ -1335,7 +1447,7 @@ impl Eip712 for TypedActionDigest<'_> {
     }
 
     fn struct_hash(&self) -> [u8; 32] {
-        self.action.hash_struct()
+        self.action.hash_struct_with_expiry(self.expires_after)
     }
 }
 

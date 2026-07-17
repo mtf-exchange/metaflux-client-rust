@@ -75,7 +75,10 @@ impl RestClient {
     /// Access the exchange (signed write) namespace.
     #[must_use]
     pub fn exchange(&self) -> exchange::Exchange<'_> {
-        exchange::Exchange { client: self }
+        exchange::Exchange {
+            client: self,
+            expires_after_ms: 0,
+        }
     }
 
     /// Access the explorer (block / tx lookup) namespace.

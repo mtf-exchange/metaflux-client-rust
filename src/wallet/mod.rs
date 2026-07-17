@@ -20,12 +20,16 @@
 //! [RFC-6979]: https://datatracker.ietf.org/doc/html/rfc6979
 
 mod key;
+pub mod multisig;
 mod sign;
 mod typed;
 mod typed_account;
 mod typed_orders;
 
 pub use key::{Address, Wallet};
+pub use multisig::{
+    MultisigInnerScheme, multi_sig_inner_digest, multi_sig_inner_digest_legacy, sign_multisig_inner,
+};
 pub use sign::{Eip712, Signature};
 pub use typed::{TypedAction, TypedActionDigest, metaflux_chain_tag, metaflux_domain_separator};
 pub use typed_orders::{TypedTradingAction, TypedTradingDigest};
