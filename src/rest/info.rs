@@ -57,15 +57,48 @@ pub struct L2Level {
 
 /// L2 book snapshot.
 ///
-/// Per the `/info` contract (`l2_book`) the `data` payload is exactly
-/// `{ "bids": [...], "asks": [...] }`.
+/// Per the `/info` contract (`l2_book`) the `data` payload is
+/// `{ "bids": [...], "asks": [...] }` (some builds also echo `coin`). A spot
+/// pair coin (name `"BTC/USDC"` or pair id) now renders real spot depth here.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct L2Book {
+    /// Echo of the requested coin (market symbol or spot pair name/id). Absent
+    /// on some node builds → empty.
+    #[serde(default)]
+    pub coin: String,
     /// Bid side (descending by price).
     pub bids: Vec<L2Level>,
     /// Ask side (ascending by price).
     pub asks: Vec<L2Level>,
+}
+
+/// Optional aggregation params for the `l2_book` read (REST + WS).
+///
+/// The gateway groups the raw book DETERMINISTICALLY away from the spread and
+/// sums sizes into coarser price buckets, then caps the returned depth. All
+/// three are optional; omit for the ungrouped full book.
+///
+/// - `n_sig_figs`: significant-figure grouping, `2..=5`. Coarser (fewer figs) =
+///   wider buckets.
+/// - `mantissa`: `1 | 2 | 5`, VALID ONLY with `n_sig_figs == 5` — sub-divides
+///   the finest sig-fig grid.
+/// - `n_levels`: max levels returned per side (`≥ 1`).
+///
+/// On the WS ack the server echoes `n_sig_figs` and `n_levels`, and `mantissa`
+/// ONLY when it is not 1 — do not ack-match on exact param equality.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct L2BookParams {
+    /// Significant-figure grouping (`2..=5`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n_sig_figs: Option<u32>,
+    /// Mantissa sub-division (`1 | 2 | 5`); valid only with `n_sig_figs == 5`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mantissa: Option<u32>,
+    /// Max levels returned per side (`≥ 1`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n_levels: Option<u32>,
 }
 
 /// Order side as it appears on the REST `open_orders` read: lowercase
@@ -487,6 +520,47 @@ pub struct AccountState {
     pub balances: Balances,
 }
 
+/// EVM-side contract binding for a registered token.
+///
+/// Present on a [`SpotToken`] / [`PerpUnderlyingToken`] when the token has a
+/// deployed EVM contract; the node emits it as an OBJECT (not a bare address
+/// string). `evm_extra_wei_decimals` is the SIGNED decimal offset between the
+/// token's native `wei_decimals` and its EVM ERC-20 decimals (can be negative).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct TokenEvmContract {
+    /// EVM contract address (`0x`-hex, 20 bytes).
+    pub address: String,
+    /// Signed decimal offset (native `wei_decimals` → EVM ERC-20 decimals).
+    pub evm_extra_wei_decimals: i32,
+}
+
+/// The registered underlying-token block on a perp [`MarketInfo`].
+///
+/// OMITTED entirely (the `token` field is `None`) when the perp has no
+/// registered underlying token — the node ABSENTS the key rather than emitting
+/// `null`. Mirrors the spot [`SpotToken`] registry entry but carries
+/// `circulating_supply` (NOT `total_supply`, which is the spot token-row key).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PerpUnderlyingToken {
+    /// Token asset id.
+    pub id: u32,
+    /// Native (ERC-20-style) token decimals.
+    pub wei_decimals: u8,
+    /// 32-byte token id (`0x`-hex).
+    pub token_id: String,
+    /// 20-byte system address (`0x`-hex).
+    pub system_address: String,
+    /// EVM contract binding, when the token has a deployed contract.
+    #[serde(default)]
+    pub evm_contract: Option<TokenEvmContract>,
+    /// Whether this is the canonical registration for the token.
+    pub is_canonical: bool,
+    /// Circulating supply, decimal string.
+    pub circulating_supply: String,
+}
+
 /// Market kind. The gateway emits lowercase `"perp"` / `"spot"`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -575,6 +649,12 @@ pub struct MarketInfo {
     /// Absent on the STATIC `markets_meta` read (dynamic) → defaults to empty.
     #[serde(default)]
     pub open_interest: String,
+    /// Registered underlying-token block for this perp. Present on the
+    /// `markets_meta` / `market_info` reads when the perp has a registered
+    /// underlying token; OMITTED (→ `None`) otherwise. Carries the token's
+    /// EVM binding + `circulating_supply`.
+    #[serde(default)]
+    pub token: Option<PerpUnderlyingToken>,
 }
 
 /// One spot pair inside a [`SpotMeta`].
@@ -594,12 +674,28 @@ pub struct SpotPair {
     pub base: u32,
     /// Quote asset id.
     pub quote: u32,
-    /// Taker fee in bps; `0` if unset.
-    pub taker_fee_bps: u16,
+    /// Taker fee in bps, decimal STRING (e.g. `"5"`). The node emits this as a
+    /// string (dbps/10 `.to_string()`); it is NOT a JSON number.
+    pub taker_fee_bps: String,
     /// Minimum order notional (USDC cents) as a decimal string; `"0"` if unset.
     pub min_notional: String,
     /// Whether the pair is active for trading.
     pub active: bool,
+    /// Mark price, whole-USDC decimal string. Absent on some reads → empty.
+    #[serde(default)]
+    pub mark_px: String,
+    /// Mid price, whole-USDC decimal string; `None` when no two-sided book.
+    #[serde(default)]
+    pub mid_px: Option<String>,
+    /// Previous-day price, whole-USDC decimal string; `None` when unavailable.
+    #[serde(default)]
+    pub prev_day_px: Option<String>,
+    /// 24h notional volume, decimal string; `"0"` if unset.
+    #[serde(default)]
+    pub day_ntl_vlm: String,
+    /// Circulating supply of the base token, decimal string; `"0"` if unset.
+    #[serde(default)]
+    pub circulating_supply: String,
 }
 
 /// One token registry entry inside a [`SpotMeta`].
@@ -614,10 +710,29 @@ pub struct SpotToken {
     pub sz_decimals: u8,
     /// Native (ERC-20-style) token decimals (e.g. USDC = 6, BTC = 8).
     pub wei_decimals: u8,
+    /// 32-byte token id (`0x`-hex). Absent on older reads → empty.
+    #[serde(default)]
+    pub token_id: String,
+    /// 20-byte system address (`0x`-hex). Absent on older reads → empty.
+    #[serde(default)]
+    pub system_address: String,
+    /// EVM contract binding, when the token has a deployed contract. The node
+    /// emits this as an OBJECT (`{address, evm_extra_wei_decimals}`), not a
+    /// bare address string.
+    #[serde(default)]
+    pub evm_contract: Option<TokenEvmContract>,
+    /// Whether this is the canonical registration for the token.
+    #[serde(default)]
+    pub is_canonical: bool,
+    /// Total supply of the token, decimal string; `"0"` if unset. (The perp
+    /// underlying-token block carries `circulating_supply` instead — different
+    /// key, do not unify.)
+    #[serde(default)]
+    pub total_supply: String,
 }
 
 /// `spot_meta` response — spot pair universe + token registry.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SpotMeta {
     /// Registered spot pairs (token-registration sentinels excluded).
@@ -685,6 +800,11 @@ impl<'a> Info<'a> {
     /// merge by `coin`. Same `{ perp, spot }` envelope as `markets`; the returned
     /// perp records OMIT the dynamic price/funding/OI fields. Static → cache hard.
     ///
+    /// A perp row now carries an optional [`MarketInfo::token`] block (the
+    /// registered underlying token — EVM binding + `circulating_supply`),
+    /// omitted when no underlying token is registered. Spot token rows carry
+    /// `total_supply`; use [`Info::spot_meta`] for the `spot` sub-object.
+    ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn markets_meta(&self) -> Result<Vec<MarketInfo>, ClientError> {
@@ -700,21 +820,39 @@ impl<'a> Info<'a> {
         Ok(resp.perp)
     }
 
-    /// Fetch the L2 book snapshot for a market.
+    /// Fetch the L2 book snapshot for a market or spot pair.
     ///
-    /// Per the `/info` contract (`l2_book`): keyed by `coin` (the market symbol,
-    /// e.g. `"BTC"`), `depth` levels per side. The `data` payload is
-    /// `{ bids, asks }`.
+    /// Per the `/info` contract (`l2_book`): keyed by `coin` — a perp market
+    /// symbol (`"BTC"`) OR a spot pair (name `"BTC/USDC"` or the numeric pair
+    /// id). The `data` payload is `{ bids, asks }` (spot pairs now render real
+    /// depth).
+    ///
+    /// `params` optionally requests deterministic away-from-spread aggregation
+    /// (`n_sig_figs` / `mantissa` / `n_levels` — see [`L2BookParams`]); the
+    /// gateway validates the params strictly and returns the grouped book. Pass
+    /// `None` for the ungrouped full book.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn l2_book(&self, coin: &str, depth: u32) -> Result<L2Book, ClientError> {
-        self.client
-            .post_json(
-                "/info",
-                &json!({ "type": "l2_book", "coin": coin, "depth": depth }),
-            )
-            .await
+    pub async fn l2_book(
+        &self,
+        coin: &str,
+        params: Option<&L2BookParams>,
+    ) -> Result<L2Book, ClientError> {
+        let mut body = json!({ "type": "l2_book", "coin": coin });
+        if let Some(p) = params {
+            let obj = body.as_object_mut().expect("json! produced an object");
+            if let Some(n) = p.n_sig_figs {
+                obj.insert("n_sig_figs".into(), json!(n));
+            }
+            if let Some(m) = p.mantissa {
+                obj.insert("mantissa".into(), json!(m));
+            }
+            if let Some(l) = p.n_levels {
+                obj.insert("n_levels".into(), json!(l));
+            }
+        }
+        self.client.post_json("/info", &body).await
     }
 
     /// Fetch the most recent public trade prints for a market (bounded window).
@@ -851,6 +989,10 @@ impl<'a> Info<'a> {
 
     /// `open_orders` — resting orders for an account, keyed by `address`.
     ///
+    /// SPOT: spot resting orders now appear alongside perp orders; a spot row's
+    /// `coin` is the pair NAME (`"BTC/USDC"`) and its `px` / `size` are in that
+    /// pair's planes.
+    ///
     /// LIVE GATEWAY GAP: each [`OpenOrder`] currently reads back with `oid: 0`
     /// and `inserted_at_ms: 0`, so the orders are not cancellable by the `oid`
     /// from this snapshot and carry no `cloid`. The oid-independent workaround
@@ -927,7 +1069,13 @@ impl<'a> Info<'a> {
             .await
     }
 
-    /// `spot_meta` — spot pair universe + token registry. No parameters.
+    /// Spot pair universe + token registry — convenience wrapper.
+    ///
+    /// The standalone `spot_meta` `/info` type was REMOVED server-side (it now
+    /// returns 400 `unknown info type`); the SAME spot data is the `spot`
+    /// sub-object of `markets_meta`. This wrapper posts
+    /// `{"type":"markets_meta","kind":"spot"}` and unwraps the retained `spot`
+    /// key, returning the identical [`SpotMeta`] shape.
     ///
     /// Each [`SpotPair`]'s `name` is derived as `{base}/{quote}` from the
     /// token registry; the numeric `id` is the compact `coin` label spot
@@ -936,9 +1084,16 @@ impl<'a> Info<'a> {
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn spot_meta(&self) -> Result<SpotMeta, ClientError> {
-        self.client
-            .post_json("/info", &json!({ "type": "spot_meta" }))
-            .await
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            #[serde(default)]
+            spot: SpotMeta,
+        }
+        let resp: Resp = self
+            .client
+            .post_json("/info", &json!({ "type": "markets_meta", "kind": "spot" }))
+            .await?;
+        Ok(resp.spot)
     }
 
     /// `spot_clearinghouse_state` — per-account spot token balances keyed by
@@ -1198,14 +1353,39 @@ mod tests {
                 ],
                 "open_interest": "0", "funding": {
                     "rate_per_hr": "0", "cap_per_hr": "400", "interval_ms": 3600000,
-                    "next_payment_ts": 0 }
+                    "next_payment_ts": 0 },
+                "token": {
+                    "id": 0, "wei_decimals": 8,
+                    "token_id": "0x00000000000000000000000000000000000000000000000000000000000000aa",
+                    "system_address": "0x0000000000000000000000000000000000000200",
+                    "evm_contract": { "address": "0x0000000000000000000000000000000000012345",
+                                      "evm_extra_wei_decimals": 0 },
+                    "is_canonical": true, "circulating_supply": "21000000"
+                }
+            }, {
+                // A perp with NO registered underlying token omits `token` -> None.
+                "coin": "ETH", "asset_id": 1, "kind": "perp", "sz_decimals": 4,
+                "mark_source": "oracle_median", "fba_enabled": false,
+                "tick_size": "100000", "step_size": "1", "min_order": "1",
+                "max_leverage": 25, "init_margin_ratio": "400", "maint_margin_ratio": "500"
             }],
             "spot": { "pairs": [], "tokens": [] }
         });
         let resp: MarketsResp = serde_json::from_value(data).unwrap();
-        assert_eq!(resp.perp.len(), 1);
+        assert_eq!(resp.perp.len(), 2);
         assert_eq!(resp.perp[0].coin, "BTC");
         assert_eq!(resp.perp[0].margin_tiers.len(), 2);
+        // Perp underlying-token block: EVM binding + circulating_supply.
+        let tok = resp.perp[0].token.as_ref().unwrap();
+        assert_eq!(tok.id, 0);
+        assert_eq!(tok.circulating_supply, "21000000");
+        assert_eq!(
+            tok.evm_contract.as_ref().unwrap().address,
+            "0x0000000000000000000000000000000000012345"
+        );
+        assert!(tok.is_canonical);
+        // The second perp omits `token` entirely -> None.
+        assert!(resp.perp[1].token.is_none());
     }
 
     /// Decode the exact `l2_book.data` payload from the `/info` contract.
@@ -1228,9 +1408,11 @@ mod tests {
         assert!(j["bids"][0]["n_orders"].is_number());
     }
 
-    /// Decode the exact `spot_meta.data` payload the node serves: pair `name`
-    /// derived as `{base}/{quote}`, numeric `id` (the WS spot `coin` label),
-    /// `min_notional` as a string, plus the token registry.
+    /// Decode the live `spot_meta` payload (node 0.7.26): pair `name` derived as
+    /// `{base}/{quote}`, numeric `id` (the WS spot `coin` label), `taker_fee_bps`
+    /// as a STRING, the pair price/vol/supply context, plus the enriched token
+    /// registry (object `evm_contract`, `token_id`, `system_address`,
+    /// `is_canonical`, `total_supply`).
     #[test]
     fn spot_meta_decodes_node_fixture() {
         let data = serde_json::json!({
@@ -1239,13 +1421,26 @@ mod tests {
                 "name": "BTC/USDC",
                 "base": 0,
                 "quote": 100,
-                "taker_fee_bps": 5,
+                "taker_fee_bps": "5",
                 "min_notional": "1000",
-                "active": true
+                "active": true,
+                "mark_px": "61550.2",
+                "mid_px": "61551",
+                "prev_day_px": "61200",
+                "day_ntl_vlm": "0",
+                "circulating_supply": "21000000"
             }],
             "tokens": [
-                { "id": 0, "name": "BTC", "sz_decimals": 5, "wei_decimals": 8 },
-                { "id": 100, "name": "USDC", "sz_decimals": 2, "wei_decimals": 6 }
+                { "id": 0, "name": "BTC", "sz_decimals": 5, "wei_decimals": 8,
+                  "token_id": "0x00000000000000000000000000000000000000000000000000000000000000aa",
+                  "system_address": "0x0000000000000000000000000000000000000200",
+                  "evm_contract": { "address": "0x0000000000000000000000000000000000012345",
+                                    "evm_extra_wei_decimals": -2 },
+                  "is_canonical": true, "total_supply": "21000000" },
+                { "id": 100, "name": "USDC", "sz_decimals": 2, "wei_decimals": 6,
+                  "token_id": "0x0000000000000000000000000000000000000000000000000000000000000064",
+                  "system_address": "0x0000000000000000000000000000000000000201",
+                  "evm_contract": null, "is_canonical": true, "total_supply": "0" }
             ]
         });
         let m: SpotMeta = serde_json::from_value(data).unwrap();
@@ -1254,21 +1449,99 @@ mod tests {
         assert_eq!(m.pairs[0].name, "BTC/USDC");
         assert_eq!(m.pairs[0].base, 0);
         assert_eq!(m.pairs[0].quote, 100);
-        assert_eq!(m.pairs[0].taker_fee_bps, 5);
+        assert_eq!(m.pairs[0].taker_fee_bps, "5");
         assert_eq!(m.pairs[0].min_notional, "1000");
         assert!(m.pairs[0].active);
+        assert_eq!(m.pairs[0].mark_px, "61550.2");
+        assert_eq!(m.pairs[0].mid_px.as_deref(), Some("61551"));
+        assert_eq!(m.pairs[0].prev_day_px.as_deref(), Some("61200"));
+        assert_eq!(m.pairs[0].circulating_supply, "21000000");
         assert_eq!(m.tokens.len(), 2);
         assert_eq!(m.tokens[0].name, "BTC");
         assert_eq!(m.tokens[0].wei_decimals, 8);
+        // evm_contract is an OBJECT (not a bare address string).
+        let evm = m.tokens[0].evm_contract.as_ref().unwrap();
+        assert_eq!(evm.address, "0x0000000000000000000000000000000000012345");
+        assert_eq!(evm.evm_extra_wei_decimals, -2);
+        assert!(m.tokens[0].is_canonical);
+        assert_eq!(m.tokens[0].total_supply, "21000000");
         assert_eq!(m.tokens[1].id, 100);
         assert_eq!(m.tokens[1].sz_decimals, 2);
-        // `min_notional` stays a string on the wire; ids stay numbers.
+        assert!(m.tokens[1].evm_contract.is_none());
+        // `taker_fee_bps` / `min_notional` stay strings; ids stay numbers.
         let j = serde_json::to_value(&m).unwrap();
+        assert!(j["pairs"][0]["taker_fee_bps"].is_string());
         assert!(j["pairs"][0]["min_notional"].is_string());
         assert!(j["pairs"][0]["id"].is_number());
+        assert!(j["tokens"][0]["evm_contract"]["address"].is_string());
         // Round-trips.
         let dec: SpotMeta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
         assert_eq!(m, dec);
+    }
+
+    /// The `spot_meta()` wrapper decodes the `markets_meta` kind=spot envelope:
+    /// the `spot` sub-object is RETAINED even when kind-filtered.
+    #[test]
+    fn markets_meta_kind_spot_wrapper_decodes() {
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            #[serde(default)]
+            spot: SpotMeta,
+        }
+        let data = serde_json::json!({
+            "spot": {
+                "pairs": [{
+                    "id": 101, "name": "BTC/USDC", "base": 0, "quote": 100,
+                    "taker_fee_bps": "5", "min_notional": "1000", "active": true
+                }],
+                "tokens": [
+                    { "id": 0, "name": "BTC", "sz_decimals": 5, "wei_decimals": 8 }
+                ]
+            }
+        });
+        let resp: Resp = serde_json::from_value(data).unwrap();
+        assert_eq!(resp.spot.pairs.len(), 1);
+        assert_eq!(resp.spot.pairs[0].name, "BTC/USDC");
+        assert_eq!(resp.spot.pairs[0].taker_fee_bps, "5");
+        // Older/minimal token rows (no evm block) still decode via defaults.
+        assert_eq!(resp.spot.tokens[0].name, "BTC");
+        assert!(resp.spot.tokens[0].evm_contract.is_none());
+        assert_eq!(resp.spot.tokens[0].total_supply, "");
+    }
+
+    /// `L2BookParams` serializes with snake_case keys and OMITS `None` fields,
+    /// so a params-less request carries no aggregation keys.
+    #[test]
+    fn l2_book_params_serialize_omits_none() {
+        let empty = L2BookParams::default();
+        let j = serde_json::to_value(empty).unwrap();
+        assert!(j.get("n_sig_figs").is_none());
+        assert!(j.get("mantissa").is_none());
+        assert!(j.get("n_levels").is_none());
+
+        let p = L2BookParams {
+            n_sig_figs: Some(5),
+            mantissa: Some(2),
+            n_levels: Some(20),
+        };
+        let j = serde_json::to_value(p).unwrap();
+        assert_eq!(j["n_sig_figs"], 5);
+        assert_eq!(j["mantissa"], 2);
+        assert_eq!(j["n_levels"], 20);
+    }
+
+    /// A spot pair l2_book renders real depth and may echo `coin`.
+    #[test]
+    fn l2_book_decodes_spot_pair_with_coin_echo() {
+        let data = serde_json::json!({
+            "coin": "BTC/USDC",
+            "bids": [{ "px": "61550", "size": "1.5", "n_orders": 2 }],
+            "asks": [{ "px": "61551", "size": "0.8", "n_orders": 1 }]
+        });
+        let b: L2Book = serde_json::from_value(data).unwrap();
+        assert_eq!(b.coin, "BTC/USDC");
+        assert_eq!(b.bids.len(), 1);
+        assert_eq!(b.asks[0].px, "61551");
     }
 
     /// Decode the exact `spot_clearinghouse_state.data` payload the node serves.

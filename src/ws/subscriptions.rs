@@ -33,10 +33,30 @@ use crate::wallet::Address;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Subscription {
-    /// L2 order-book updates for one market.
+    /// L2 order-book updates for one market or spot pair.
+    ///
+    /// `coin` is a perp market asset-id string (`"1"`) or a spot pair (name
+    /// `"BTC/USDC"` or the pair-id string). The three optional aggregation
+    /// params request deterministic away-from-spread grouping (snake_case on the
+    /// native `/ws` dialect); they are OMITTED from the frame when `None`.
+    ///
+    /// The server holds ONE l2_book view per coin per connection: re-subscribing
+    /// the same coin with different params REPLACES the view; unsubscribe is
+    /// keyed by coin WITHOUT params. The `#[serde(default)]` lets a plain ack /
+    /// echo that omits the params still decode back into this variant. The ack
+    /// echoes `n_sig_figs` and `n_levels`, and `mantissa` only when it is not 1.
     L2Book {
-        /// Market asset-id as a decimal string (e.g. `"1"`).
+        /// Market asset-id string (`"1"`) or spot pair (`"BTC/USDC"` / pair id).
         coin: String,
+        /// Significant-figure grouping (`2..=5`). Omitted from the frame when `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        n_sig_figs: Option<u32>,
+        /// Mantissa sub-division (`1 | 2 | 5`); valid only with `n_sig_figs == 5`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mantissa: Option<u32>,
+        /// Max levels per side (`≥ 1`). Omitted from the frame when `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        n_levels: Option<u32>,
     },
     /// Public trade prints for one market. On subscribe the server sends a
     /// NON-EMPTY snapshot of the bounded recent tape (snapshot rows carry
@@ -209,13 +229,57 @@ mod tests {
 
     #[test]
     fn subscription_l2_book_uses_coin_string() {
-        let s = Subscription::L2Book { coin: "1".into() };
+        let s = Subscription::L2Book {
+            coin: "1".into(),
+            n_sig_figs: None,
+            mantissa: None,
+            n_levels: None,
+        };
         let j = serde_json::to_value(&s).unwrap();
         assert_eq!(j["type"], "l2_book");
         // The node reads `coin` with `Value::as_str` — a bare number is dropped.
         assert_eq!(j["coin"], "1");
         assert!(j["coin"].is_string());
         assert!(j.get("market_id").is_none());
+        // No params set -> the aggregation keys are OMITTED from the frame.
+        assert!(j.get("n_sig_figs").is_none());
+        assert!(j.get("mantissa").is_none());
+        assert!(j.get("n_levels").is_none());
+    }
+
+    #[test]
+    fn subscription_l2_book_emits_snake_case_agg_params() {
+        // The native /ws dialect reads snake_case params; mantissa valid only
+        // with n_sig_figs == 5.
+        let s = Subscription::L2Book {
+            coin: "BTC/USDC".into(),
+            n_sig_figs: Some(5),
+            mantissa: Some(2),
+            n_levels: Some(20),
+        };
+        let j = serde_json::to_value(&s).unwrap();
+        assert_eq!(j["type"], "l2_book");
+        assert_eq!(j["coin"], "BTC/USDC");
+        assert_eq!(j["n_sig_figs"], 5);
+        assert_eq!(j["mantissa"], 2);
+        assert_eq!(j["n_levels"], 20);
+    }
+
+    #[test]
+    fn subscription_l2_book_ack_without_params_decodes() {
+        // The subscribe ack echoes a bare `{type, coin}` (no params) — the
+        // `#[serde(default)]` on the param fields must let it decode back.
+        let raw = serde_json::json!({ "type": "l2_book", "coin": "1" });
+        let s: Subscription = serde_json::from_value(raw).unwrap();
+        assert!(matches!(
+            s,
+            Subscription::L2Book {
+                n_sig_figs: None,
+                mantissa: None,
+                n_levels: None,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -173,6 +173,7 @@ mod tests {
             mark_source: "oracle_median".into(),
             fba_enabled: false,
             open_interest: "0".into(),
+            token: None,
         }
     }
 

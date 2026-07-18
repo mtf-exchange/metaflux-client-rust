@@ -157,7 +157,15 @@ impl WsClient {
     pub async fn subscribe(&self, sub: Subscription) -> Result<(), ClientError> {
         {
             let mut g = self.active.lock().await;
-            if !g.contains(&sub) {
+            if let Subscription::L2Book { coin, .. } = &sub {
+                // The server holds ONE l2_book view per coin and REPLACES it when
+                // the coin is re-subscribed with different aggregation params.
+                // Drop any prior l2_book entry for this coin so reconnect-replay
+                // can't resurrect stale params and clobber the new view.
+                let coin = coin.clone();
+                g.retain(|s| !l2_book_is_coin(s, &coin));
+                g.push(sub.clone());
+            } else if !g.contains(&sub) {
                 g.push(sub.clone());
             }
         }
@@ -174,7 +182,14 @@ impl WsClient {
     pub async fn unsubscribe(&self, sub: Subscription) -> Result<(), ClientError> {
         {
             let mut g = self.active.lock().await;
-            g.retain(|s| s != &sub);
+            if let Subscription::L2Book { coin, .. } = &sub {
+                // Server unsubscribe is keyed by coin WITHOUT params — drop the
+                // active l2_book entry for this coin regardless of its params.
+                let coin = coin.clone();
+                g.retain(|s| !l2_book_is_coin(s, &coin));
+            } else {
+                g.retain(|s| s != &sub);
+            }
         }
         self.cmd_tx
             .send(Command::Unsubscribe(sub))
@@ -182,7 +197,9 @@ impl WsClient {
         Ok(())
     }
 
-    /// Subscribe to L2 book updates for a market. Convenience wrapper.
+    /// Subscribe to L2 book updates for a market. Convenience wrapper (full,
+    /// ungrouped book). For a spot pair or aggregated depth use
+    /// [`WsClient::subscribe_l2_book_coin`].
     ///
     /// # Errors
     /// See [`WsClient::subscribe`].
@@ -192,6 +209,35 @@ impl WsClient {
     ) -> Result<(), ClientError> {
         self.subscribe(Subscription::L2Book {
             coin: market.0.to_string(),
+            n_sig_figs: None,
+            mantissa: None,
+            n_levels: None,
+        })
+        .await
+    }
+
+    /// Subscribe to L2 book updates by raw `coin` (a perp asset-id string or a
+    /// spot pair — name `"BTC/USDC"` or the pair-id string), with optional
+    /// deterministic away-from-spread aggregation ([`L2BookParams`]).
+    ///
+    /// Re-subscribing the same coin with different params REPLACES the view
+    /// (the server holds one l2_book view per coin per connection); the active
+    /// set keeps at most one l2_book entry per coin so reconnect-replay stays
+    /// honest.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_l2_book_coin(
+        &self,
+        coin: impl Into<String>,
+        params: Option<crate::rest::info::L2BookParams>,
+    ) -> Result<(), ClientError> {
+        let p = params.unwrap_or_default();
+        self.subscribe(Subscription::L2Book {
+            coin: coin.into(),
+            n_sig_figs: p.n_sig_figs,
+            mantissa: p.mantissa,
+            n_levels: p.n_levels,
         })
         .await
     }
@@ -535,6 +581,13 @@ impl WsClient {
     }
 }
 
+/// True when `sub` is an `L2Book` subscription for `coin`, IGNORING its
+/// aggregation params. Used to enforce the server's one-view-per-coin l2_book
+/// semantics in the active set (replace on re-subscribe, param-blind unsubscribe).
+fn l2_book_is_coin(sub: &Subscription, coin: &str) -> bool {
+    matches!(sub, Subscription::L2Book { coin: c, .. } if c.as_str() == coin)
+}
+
 /// Internal task state.
 struct TaskState {
     url: String,
@@ -693,5 +746,55 @@ mod tests {
         assert_eq!(c.initial_backoff, Duration::from_millis(250));
         assert_eq!(c.max_backoff, Duration::from_secs(30));
         assert_eq!(c.channel_capacity, 1024);
+    }
+
+    #[test]
+    fn l2_book_is_coin_ignores_params() {
+        let full = Subscription::L2Book {
+            coin: "1".into(),
+            n_sig_figs: None,
+            mantissa: None,
+            n_levels: None,
+        };
+        let grouped = Subscription::L2Book {
+            coin: "1".into(),
+            n_sig_figs: Some(5),
+            mantissa: Some(2),
+            n_levels: Some(20),
+        };
+        // Same coin matches regardless of params; a different coin / channel doesn't.
+        assert!(l2_book_is_coin(&full, "1"));
+        assert!(l2_book_is_coin(&grouped, "1"));
+        assert!(!l2_book_is_coin(&grouped, "2"));
+        assert!(!l2_book_is_coin(
+            &Subscription::Trades { coin: "1".into() },
+            "1"
+        ));
+    }
+
+    #[test]
+    fn l2_book_resubscribe_replaces_prior_view_for_coin() {
+        // Mirror the `subscribe()` active-set logic: a second l2_book on the same
+        // coin (different params) REPLACES the first, so at most one entry per
+        // coin survives into reconnect replay.
+        let mut active: Vec<Subscription> = Vec::new();
+        let first = Subscription::L2Book {
+            coin: "1".into(),
+            n_sig_figs: None,
+            mantissa: None,
+            n_levels: None,
+        };
+        active.retain(|s| !l2_book_is_coin(s, "1"));
+        active.push(first);
+        let second = Subscription::L2Book {
+            coin: "1".into(),
+            n_sig_figs: Some(5),
+            mantissa: None,
+            n_levels: Some(20),
+        };
+        active.retain(|s| !l2_book_is_coin(s, "1"));
+        active.push(second.clone());
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0], second);
     }
 }

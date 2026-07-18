@@ -5,6 +5,45 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
+## [0.14.0]
+
+### Changed
+
+- `Info::spot_meta()` is now a convenience wrapper over `markets_meta`
+  (`kind=spot`): the standalone `spot_meta` `/info` type was removed server-side
+  (it returns 400 `unknown info type`). The method posts
+  `{"type":"markets_meta","kind":"spot"}` and unwraps the retained `spot` key,
+  returning the identical `SpotMeta` shape — no caller change required.
+- **BREAKING** `SpotPair::taker_fee_bps` is now a `String` (was `u16`): the live
+  wire emits it as a decimal string (`"5"`). A `u16` field hard-fails decode
+  against node 0.7.26.
+- **BREAKING** `Info::l2_book` signature is now
+  `l2_book(coin, params: Option<&L2BookParams>)` (was `l2_book(coin, depth: u32)`).
+  `depth` is dropped in favour of the aggregation params; pass `None` for the
+  full ungrouped book.
+
+### Added
+
+- `l2_book` (REST + WS) deterministic away-from-spread aggregation via the new
+  `L2BookParams { n_sig_figs, mantissa, n_levels }`. The WS `Subscription::L2Book`
+  carries the same three optional snake_case params (omitted when unset); the
+  `WsClient` enforces the server's one-view-per-coin l2_book semantics (a
+  re-subscribe on the same coin replaces the view; unsubscribe is param-blind).
+  New `WsClient::subscribe_l2_book_coin(coin, params)` for spot-pair / aggregated
+  subscribes by raw coin.
+- Spot L2 depth: `l2_book` now renders real bids/asks for a spot pair coin
+  (name `"BTC/USDC"` or pair id); `L2Book` gained a `coin` echo field.
+- `SpotPair` price/volume context: `mark_px`, `mid_px`, `prev_day_px`,
+  `day_ntl_vlm`, `circulating_supply`.
+- `SpotToken` registry enrichment: `token_id`, `system_address`,
+  `evm_contract` (now an OBJECT `{address, evm_extra_wei_decimals}`, via the new
+  `TokenEvmContract`), `is_canonical`, `total_supply`.
+- `MarketInfo::token`: an optional `PerpUnderlyingToken` block (EVM binding +
+  `circulating_supply`), present on `markets_meta` / `market_info` perp rows when
+  the perp has a registered underlying token, omitted otherwise.
+- `open_orders` now includes spot resting orders (a spot row's `coin` is the
+  pair name `"BTC/USDC"`).
+
 ## [0.6.0]
 
 ### Added

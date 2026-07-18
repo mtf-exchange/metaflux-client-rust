@@ -177,21 +177,33 @@ async fn spot_meta_decodes_pairs_and_tokens() {
     Mock::given(method("POST"))
         .and(path("/info"))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "spot_meta",
+            // `spot_meta()` now posts `markets_meta` kind=spot; the node wraps
+            // the spot universe under the retained `spot` key.
+            "markets_meta",
             json!({
-                "pairs": [{
-                    "id": 101,
-                    "name": "BTC/USDC",
-                    "base": 0,
-                    "quote": 100,
-                    "taker_fee_bps": 5,
-                    "min_notional": "1000",
-                    "active": true
-                }],
-                "tokens": [
-                    { "id": 0, "name": "BTC", "sz_decimals": 5, "wei_decimals": 8 },
-                    { "id": 100, "name": "USDC", "sz_decimals": 2, "wei_decimals": 6 }
-                ]
+                "spot": {
+                    "pairs": [{
+                        "id": 101,
+                        "name": "BTC/USDC",
+                        "base": 0,
+                        "quote": 100,
+                        "taker_fee_bps": "5",
+                        "min_notional": "1000",
+                        "active": true,
+                        "mark_px": "61550.2",
+                        "mid_px": "61551",
+                        "circulating_supply": "21000000"
+                    }],
+                    "tokens": [
+                        { "id": 0, "name": "BTC", "sz_decimals": 5, "wei_decimals": 8,
+                          "token_id": "0x00000000000000000000000000000000000000000000000000000000000000aa",
+                          "system_address": "0x0000000000000000000000000000000000000200",
+                          "evm_contract": { "address": "0x0000000000000000000000000000000000012345",
+                                            "evm_extra_wei_decimals": -2 },
+                          "is_canonical": true, "total_supply": "21000000" },
+                        { "id": 100, "name": "USDC", "sz_decimals": 2, "wei_decimals": 6 }
+                    ]
+                }
             }),
         )))
         .mount(&server)
@@ -206,14 +218,28 @@ async fn spot_meta_decodes_pairs_and_tokens() {
     assert_eq!(m.pairs[0].name, "BTC/USDC");
     assert_eq!(m.pairs[0].base, 0);
     assert_eq!(m.pairs[0].quote, 100);
-    assert_eq!(m.pairs[0].taker_fee_bps, 5);
+    // `taker_fee_bps` is a STRING on the live wire.
+    assert_eq!(m.pairs[0].taker_fee_bps, "5");
     assert_eq!(m.pairs[0].min_notional, "1000");
     assert!(m.pairs[0].active);
+    assert_eq!(m.pairs[0].mark_px, "61550.2");
     assert_eq!(m.tokens.len(), 2);
     assert_eq!(m.tokens[0].name, "BTC");
     assert_eq!(m.tokens[0].sz_decimals, 5);
+    // Enriched token row: object `evm_contract` + `total_supply`.
+    assert_eq!(
+        m.tokens[0]
+            .evm_contract
+            .as_ref()
+            .unwrap()
+            .evm_extra_wei_decimals,
+        -2
+    );
+    assert_eq!(m.tokens[0].total_supply, "21000000");
     assert_eq!(m.tokens[1].name, "USDC");
     assert_eq!(m.tokens[1].wei_decimals, 6);
+    // Minimal token row (no evm block) still decodes via defaults.
+    assert!(m.tokens[1].evm_contract.is_none());
 }
 
 #[tokio::test]
@@ -438,10 +464,43 @@ async fn l2_book_decodes_levels() {
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let book = client.rest().info().l2_book("BTC", 20).await.unwrap();
+    let book = client.rest().info().l2_book("BTC", None).await.unwrap();
     assert_eq!(book.bids.len(), 1);
     assert_eq!(book.bids[0].size, "1000");
     assert_eq!(book.asks[0].n_orders, 2);
+}
+
+#[tokio::test]
+async fn l2_book_spot_pair_with_aggregation_params() {
+    use metaflux_client::rest::info::L2BookParams;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "l2_book",
+            json!({
+                "coin": "BTC/USDC",
+                "bids": [{ "px": "61550", "size": "1.5", "n_orders": 2 }],
+                "asks": [{ "px": "61600", "size": "0.8", "n_orders": 1 }]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let params = L2BookParams {
+        n_sig_figs: Some(5),
+        mantissa: Some(2),
+        n_levels: Some(20),
+    };
+    let book = client
+        .rest()
+        .info()
+        .l2_book("BTC/USDC", Some(&params))
+        .await
+        .unwrap();
+    assert_eq!(book.coin, "BTC/USDC");
+    assert_eq!(book.bids[0].size, "1.5");
 }
 
 #[tokio::test]
