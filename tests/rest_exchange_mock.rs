@@ -14,9 +14,10 @@ use metaflux_client::{
     types::{
         Cloid, MarketId, OrderId,
         account::UpdateLeverage,
+        chase::{CancelChaseParams, ChaseParams},
         order::{
             BatchCancel, BatchModify, BatchOrder, CancelByCloid, CancelOrder, Modify, Order,
-            OrderKind, OrderStatus, Side, StpMode, TimeInForce,
+            OrderKind, OrderStatus, PositionSide, Side, StpMode, TimeInForce,
         },
         spot::{EarnWithdraw, SpotMarginOpen},
         vault::{CreateVault, VaultKind},
@@ -680,6 +681,160 @@ async fn cancel_by_cloid_as_carries_owner_and_signs_owner_form() {
         owner,
         &agent,
         TypedTradingAction::CancelByCloid(&params),
+    );
+}
+
+/// Canonical [`ChaseParams`] for the mock tests (self-owned, one-way, cloid set).
+fn chase_params() -> ChaseParams {
+    ChaseParams {
+        market: MarketId(3),
+        side: Side::Bid,
+        size: 4_000_000_000,
+        cloid: Some(Cloid([0xCD; 16])),
+        stp_mode: StpMode::CancelOldest,
+        position_side: None,
+        interval_blocks: 4,
+        ttl_ms: 3_600_000,
+        max_reprices: 500,
+        owner: None,
+    }
+}
+
+/// `chase_order` (self-owned) posts the compact `{type,params}` wire shape and
+/// the signature recovers to the wallet over the OWNER-LESS ChaseOrder digest.
+#[tokio::test]
+async fn chase_order_envelope_signs_and_recovers() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let params = chase_params();
+    let _: Value = client
+        .exchange()
+        .chase_order(&wallet, &params)
+        .await
+        .unwrap();
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("chase_order"));
+    // Compact snake_case params ride the wire; sizes / ids are plain integers.
+    assert_eq!(action["params"]["market"], json!(3));
+    assert_eq!(action["params"]["side"], json!("bid"));
+    assert_eq!(action["params"]["size"], json!(4_000_000_000u64));
+    assert_eq!(action["params"]["stp_mode"], json!("cancel_oldest"));
+    assert_eq!(action["params"]["interval_blocks"], json!(4));
+    assert_eq!(action["params"]["ttl_ms"], json!(3_600_000u64));
+    assert_eq!(action["params"]["max_reprices"], json!(500));
+    assert_eq!(
+        action["params"]["cloid"],
+        json!("0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")
+    );
+    // one-way + self-owned: the optional fields are omitted from the wire.
+    assert!(action["params"].get("position_side").is_none());
+    assert!(action["params"].get("owner").is_none());
+
+    // The signature is over the OWNER-LESS ChaseOrder typed digest, recovering
+    // the wallet.
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _typed_trade_digest_for_test(TypedTradingAction::ChaseOrder(&params), nonce);
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(_recover_for_test(&digest, &sig).unwrap(), wallet.address());
+    assert!(
+        body.get("sig_scheme").is_none(),
+        "sig_scheme must not be sent"
+    );
+}
+
+/// A hedge-account chase carries `position_side` on the wire and still recovers.
+#[tokio::test]
+async fn chase_order_hedge_carries_position_side() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let params = ChaseParams {
+        position_side: Some(PositionSide::Short),
+        ..chase_params()
+    };
+    let _: Value = client
+        .exchange()
+        .chase_order(&wallet, &params)
+        .await
+        .unwrap();
+    let body = captor.last.lock().await.clone().expect("body captured");
+    assert_eq!(body["action"]["params"]["position_side"], json!("short"));
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _typed_trade_digest_for_test(TypedTradingAction::ChaseOrder(&params), nonce);
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(_recover_for_test(&digest, &sig).unwrap(), wallet.address());
+}
+
+/// `cancel_chase` (self-owned) posts `{market, chase_oid}` and recovers.
+#[tokio::test]
+async fn cancel_chase_envelope_signs_and_recovers() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let params = CancelChaseParams {
+        market: MarketId(3),
+        chase_oid: 12345,
+        owner: None,
+    };
+    let _: Value = client
+        .exchange()
+        .cancel_chase(&wallet, &params)
+        .await
+        .unwrap();
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("cancel_chase"));
+    assert_eq!(action["params"]["market"], json!(3));
+    assert_eq!(action["params"]["chase_oid"], json!(12345));
+    assert!(action["params"].get("owner").is_none());
+
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _typed_trade_digest_for_test(TypedTradingAction::CancelChase(&params), nonce);
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(_recover_for_test(&digest, &sig).unwrap(), wallet.address());
+}
+
+/// `chase_order_as` carries a params-level `0x`-hex owner and signs the
+/// OWNER-FORM digest, recovering to the AGENT.
+#[tokio::test]
+async fn chase_order_as_carries_owner_and_signs_owner_form() {
+    let (client, captor, agent) = capturing_exchange().await;
+    let owner = vault_owner();
+    let params = chase_params();
+    let _: Value = client
+        .exchange()
+        .chase_order_as(&agent, owner, &params)
+        .await
+        .unwrap();
+    let body = captor.last.lock().await.clone().expect("body captured");
+    assert_owner_bound(
+        &body,
+        "chase_order",
+        owner,
+        &agent,
+        TypedTradingAction::ChaseOrder(&params),
+    );
+}
+
+/// `cancel_chase_as` carries a params-level owner and signs the OWNER-FORM digest.
+#[tokio::test]
+async fn cancel_chase_as_carries_owner_and_signs_owner_form() {
+    let (client, captor, agent) = capturing_exchange().await;
+    let owner = vault_owner();
+    let params = CancelChaseParams {
+        market: MarketId(3),
+        chase_oid: 12345,
+        owner: None,
+    };
+    let _: Value = client
+        .exchange()
+        .cancel_chase_as(&agent, owner, &params)
+        .await
+        .unwrap();
+    let body = captor.last.lock().await.clone().expect("body captured");
+    assert_owner_bound(
+        &body,
+        "cancel_chase",
+        owner,
+        &agent,
+        TypedTradingAction::CancelChase(&params),
     );
 }
 

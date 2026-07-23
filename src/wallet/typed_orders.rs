@@ -24,6 +24,7 @@
 use tiny_keccak::{Hasher, Keccak};
 
 use crate::error::ClientError;
+use crate::types::chase::{CancelChaseParams, ChaseParams};
 use crate::types::order::{
     BatchCancel, BatchModify, BatchOrder, CancelByCloid, CancelOrder, Modify, Order, OrderGrouping,
     OrderKind, PositionSide, ScheduleCancel, Side, StpMode, TimeInForce, TpSl,
@@ -219,6 +220,18 @@ const TY_CANCEL_SCALE: &[u8] =
     b"MetaFluxTransaction:CancelScale(string metafluxChain,uint32 market,string cloid,uint64 nonce)";
 const TY_CANCEL_SCALE_WITH_OWNER: &[u8] = b"MetaFluxTransaction:CancelScale(string metafluxChain,address owner,uint32 market,string cloid,uint64 nonce)";
 
+// ===== ChaseOrder / CancelChase encodeType strings (node-native CHASE re-pricer)
+// — CONSENSUS-FROZEN, byte-identical to the node's `CHASE_ORDER_TYPE` /
+// `CANCEL_CHASE_TYPE` (+ `_WITH_OWNER`). The optional `cloid` / `positionSide`
+// sign the empty-string sentinel when absent; the `owner` word, when present,
+// sits right after `metafluxChain`, exactly like scale.
+
+const TY_CHASE_ORDER: &[u8] = b"MetaFluxTransaction:ChaseOrder(string metafluxChain,uint32 market,string side,uint64 size,string cloid,string stpMode,string positionSide,uint32 intervalBlocks,uint64 ttlMs,uint32 maxReprices,uint64 nonce)";
+const TY_CHASE_ORDER_WITH_OWNER: &[u8] = b"MetaFluxTransaction:ChaseOrder(string metafluxChain,address owner,uint32 market,string side,uint64 size,string cloid,string stpMode,string positionSide,uint32 intervalBlocks,uint64 ttlMs,uint32 maxReprices,uint64 nonce)";
+const TY_CANCEL_CHASE: &[u8] =
+    b"MetaFluxTransaction:CancelChase(string metafluxChain,uint32 market,uint64 chaseOid,uint64 nonce)";
+const TY_CANCEL_CHASE_WITH_OWNER: &[u8] = b"MetaFluxTransaction:CancelChase(string metafluxChain,address owner,uint32 market,uint64 chaseOid,uint64 nonce)";
+
 // ===== Per-item word layouts =====
 
 /// Flatten one perp order into its 15 signed struct-hash words. `owner` is NOT
@@ -316,6 +329,10 @@ pub enum TypedTradingAction<'a> {
     ScaleOrder(&'a ScaleParams),
     /// `cancel_scale` — cancel-all-by-cloid for a SCALE ladder.
     CancelScale(&'a CancelScaleParams),
+    /// `chase_order` — node-native CHASE re-pricer.
+    ChaseOrder(&'a ChaseParams),
+    /// `cancel_chase` — cancel a CHASE by its registry handle.
+    CancelChase(&'a CancelChaseParams),
 }
 
 impl TypedTradingAction<'_> {
@@ -337,6 +354,8 @@ impl TypedTradingAction<'_> {
             Self::BatchCancel(_) => TY_BATCH_CANCEL,
             Self::ScaleOrder(_) => TY_SCALE_ORDER,
             Self::CancelScale(_) => TY_CANCEL_SCALE,
+            Self::ChaseOrder(_) => TY_CHASE_ORDER,
+            Self::CancelChase(_) => TY_CANCEL_CHASE,
         }
     }
 
@@ -357,6 +376,8 @@ impl TypedTradingAction<'_> {
                 | Self::BatchCancel(_)
                 | Self::ScaleOrder(_)
                 | Self::CancelScale(_)
+                | Self::ChaseOrder(_)
+                | Self::CancelChase(_)
         )
     }
 
@@ -375,6 +396,8 @@ impl TypedTradingAction<'_> {
             (Some(_), Self::BatchCancel(_)) => TY_BATCH_CANCEL_WITH_OWNER,
             (Some(_), Self::ScaleOrder(_)) => TY_SCALE_ORDER_WITH_OWNER,
             (Some(_), Self::CancelScale(_)) => TY_CANCEL_SCALE_WITH_OWNER,
+            (Some(_), Self::ChaseOrder(_)) => TY_CHASE_ORDER_WITH_OWNER,
+            (Some(_), Self::CancelChase(_)) => TY_CANCEL_CHASE_WITH_OWNER,
             _ => self.type_string(),
         }
     }
@@ -467,6 +490,27 @@ impl TypedTradingAction<'_> {
             Self::CancelScale(p) => {
                 words.push(enc_u32(p.market.0));
                 words.push(enc_string(&cloid_str(Some(p.cloid))));
+            }
+            Self::ChaseOrder(p) => {
+                // Frozen word order (post `metafluxChain` / optional `owner`):
+                // market, side, size, cloid, stpMode, positionSide,
+                // intervalBlocks, ttlMs, maxReprices — then `nonce`.
+                words.push(enc_u32(p.market.0));
+                words.push(enc_string(side_str(p.side)));
+                words.push(enc_u64(p.size));
+                // cloid: the verbatim `0x`-hex string, `""` when absent (hash the
+                // STRING, not the 16 raw bytes).
+                words.push(enc_string(&cloid_str(p.cloid)));
+                words.push(enc_string(stp_str(p.stp_mode)));
+                // positionSide: empty string when one-way (None), else long/short.
+                words.push(enc_string(p.position_side.map_or("", position_side_str)));
+                words.push(enc_u32(p.interval_blocks));
+                words.push(enc_u64(p.ttl_ms));
+                words.push(enc_u32(p.max_reprices));
+            }
+            Self::CancelChase(p) => {
+                words.push(enc_u32(p.market.0));
+                words.push(enc_u64(p.chase_oid));
             }
         }
         words.push(nonce_word);
@@ -1150,6 +1194,147 @@ mod tests {
         assert_eq!(
             TypedTradingAction::CancelScale(&c).type_string_for(Some(&owner())),
             b"MetaFluxTransaction:CancelScale(string metafluxChain,address owner,uint32 market,string cloid,uint64 nonce)" as &[u8]
+        );
+    }
+
+    // ── ChaseOrder / CancelChase digest KAT ──
+    //
+    // Authored vectors (chain 114514, `metafluxChain = "Testnet"`, nonce
+    // 1_000_000, expiresAfter 0). No server-shipped chase KAT exists, so these
+    // are pinned from the SDK's own encode — SAME authoring pattern as scale. The
+    // CORRECTNESS GATE is the `type_string` byte-equality assertions below: those
+    // literals are copied VERBATIM from the node's consensus-frozen
+    // `CHASE_ORDER_TYPE` / `CANCEL_CHASE_TYPE` (+ `_WITH_OWNER`) contract, so a
+    // drift in any field name / order / type breaks the assertion. The pinned
+    // digests then guard against silent regressions in the word encoding.
+    //
+    // The `_WITH_OWNER` vectors bind owner = 0x1111…1111 (the `owner()` fixture).
+
+    const CHASE_NONCE: u64 = 1_000_000;
+
+    /// The shared 16-byte cloid the cloid-bearing vectors sign
+    /// (`0x0123456789abcdef` twice); hashed VERBATIM as the wire string.
+    fn chase_cloid() -> Cloid {
+        Cloid([
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+            0xcd, 0xef,
+        ])
+    }
+
+    /// Canonical [`ChaseParams`] shared by the golden vectors; only `cloid` +
+    /// `position_side` vary per case.
+    fn chase_params(cloid: Option<Cloid>, position_side: Option<PositionSide>) -> ChaseParams {
+        ChaseParams {
+            market: MarketId(3),
+            side: Side::Bid,
+            size: 4_000_000_000,
+            cloid,
+            stp_mode: StpMode::CancelOldest,
+            position_side,
+            interval_blocks: 4,
+            ttl_ms: 3_600_000,
+            max_reprices: 500,
+            owner: None,
+        }
+    }
+
+    /// Owner-less digest hex at [`CHASE_NONCE`].
+    fn hexd_chase(action: TypedTradingAction) -> String {
+        hex::encode(
+            TypedTradingDigest::new(action, CHAIN, CHASE_NONCE)
+                .digest()
+                .unwrap(),
+        )
+    }
+
+    /// `_WITH_OWNER` digest hex (owner = 0x1111…1111) at [`CHASE_NONCE`].
+    fn hexd_chase_owner(action: TypedTradingAction) -> String {
+        hex::encode(
+            TypedTradingDigest::new_with_owner(action, owner(), CHAIN, CHASE_NONCE)
+                .digest()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn chase_order_digest_parity_golden() {
+        // (a) owner-less, no cloid, one-way (both optionals sign the "" sentinel).
+        let plain = chase_params(None, None);
+        assert_eq!(
+            hexd_chase(TypedTradingAction::ChaseOrder(&plain)),
+            "08f9729d5d111788dc42c63e78a2bb9e18a5d573b31618039fa2c1e038bd6f88"
+        );
+        // (b) `_WITH_OWNER` (owner = 0x1111…1111), same params.
+        assert_eq!(
+            hexd_chase_owner(TypedTradingAction::ChaseOrder(&plain)),
+            "744a740477c731f8892ef50dec7bbe2eedf90ae5be8b8b7b9ead18a72b0cf4ff"
+        );
+        // (c) owner-less, WITH cloid (the verbatim `0x`-hex string is hashed).
+        let with_cloid = chase_params(Some(chase_cloid()), None);
+        assert_eq!(
+            hexd_chase(TypedTradingAction::ChaseOrder(&with_cloid)),
+            "e5c2ef5a6025de0febc15b381c06fbddff94772b10f6083b4cbc770a714a6dbb"
+        );
+        // (d) owner-less, hedge (position_side = short).
+        let hedge = chase_params(None, Some(PositionSide::Short));
+        assert_eq!(
+            hexd_chase(TypedTradingAction::ChaseOrder(&hedge)),
+            "d2c9dcffff3dc45ecc76e30f4d1f90b28d26c2854b8cfaf02451c704622f757b"
+        );
+
+        // The optional fields are truly signed: cloid / position_side presence
+        // each changes the digest vs the plain (both-absent) vector.
+        assert_ne!(
+            hexd_chase(TypedTradingAction::ChaseOrder(&with_cloid)),
+            hexd_chase(TypedTradingAction::ChaseOrder(&plain))
+        );
+        assert_ne!(
+            hexd_chase(TypedTradingAction::ChaseOrder(&hedge)),
+            hexd_chase(TypedTradingAction::ChaseOrder(&plain))
+        );
+        // Owner bind is cryptographic: owner-present differs from owner-less.
+        assert_ne!(
+            hexd_chase_owner(TypedTradingAction::ChaseOrder(&plain)),
+            hexd_chase(TypedTradingAction::ChaseOrder(&plain))
+        );
+        // CORRECTNESS GATE: selected encodeType bytes == the node's frozen
+        // contract literals (base + `_WITH_OWNER`).
+        assert_eq!(
+            TypedTradingAction::ChaseOrder(&plain).type_string(),
+            b"MetaFluxTransaction:ChaseOrder(string metafluxChain,uint32 market,string side,uint64 size,string cloid,string stpMode,string positionSide,uint32 intervalBlocks,uint64 ttlMs,uint32 maxReprices,uint64 nonce)" as &[u8]
+        );
+        assert_eq!(
+            TypedTradingAction::ChaseOrder(&plain).type_string_for(Some(&owner())),
+            b"MetaFluxTransaction:ChaseOrder(string metafluxChain,address owner,uint32 market,string side,uint64 size,string cloid,string stpMode,string positionSide,uint32 intervalBlocks,uint64 ttlMs,uint32 maxReprices,uint64 nonce)" as &[u8]
+        );
+    }
+
+    #[test]
+    fn cancel_chase_digest_parity_golden() {
+        let c = CancelChaseParams {
+            market: MarketId(3),
+            chase_oid: 12345,
+            owner: None,
+        };
+        assert_eq!(
+            hexd_chase(TypedTradingAction::CancelChase(&c)),
+            "bf40fda3e3c4c44413c430654f62c118ac577eb4666b98bd9cf0abaf4ef2c49b"
+        );
+        assert_eq!(
+            hexd_chase_owner(TypedTradingAction::CancelChase(&c)),
+            "997fde389ac9ca5c32e28338211d678a40fcb24ac0f699252a59360539b4d82d"
+        );
+        assert_ne!(
+            hexd_chase_owner(TypedTradingAction::CancelChase(&c)),
+            hexd_chase(TypedTradingAction::CancelChase(&c))
+        );
+        assert_eq!(
+            TypedTradingAction::CancelChase(&c).type_string(),
+            b"MetaFluxTransaction:CancelChase(string metafluxChain,uint32 market,uint64 chaseOid,uint64 nonce)" as &[u8]
+        );
+        assert_eq!(
+            TypedTradingAction::CancelChase(&c).type_string_for(Some(&owner())),
+            b"MetaFluxTransaction:CancelChase(string metafluxChain,address owner,uint32 market,uint64 chaseOid,uint64 nonce)" as &[u8]
         );
     }
 }

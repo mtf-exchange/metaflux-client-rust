@@ -5,6 +5,22 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
+## [0.15.0]
+
+### Added
+
+- Chase order support: the `chase_order` / `cancel_chase` `Exchange` methods
+  (plus the operator / vault `chase_order_as` / `cancel_chase_as`), the
+  `ChaseParams` / `CancelChaseParams` request types, and the `ChaseOrder` /
+  `CancelChase` typed EIP-712 actions. A chase places one post-only leg that the
+  node re-prices to the top of book until it fills, reaches `ttl_ms`, or hits
+  `max_reprices`. Every re-price shares the same re-stamped `cloid`; correlate
+  legs and fills by `cloid` on the existing `order_updates` / `open_orders` /
+  `fills` feeds. Perp markets only.
+- Digest known-answer vectors and mock-server wire / sign-recover tests that pin
+  the consensus-frozen `ChaseOrder` / `CancelChase` type strings, the field word
+  order, and the `*_WITH_OWNER` owner binding.
+
 ## [0.14.0]
 
 ### Changed

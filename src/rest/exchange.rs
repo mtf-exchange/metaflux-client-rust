@@ -41,6 +41,7 @@ use crate::types::{
         SetDisplayName, SetReferrer, TopUpIsolatedOnlyMargin, UpdateIsolatedMargin, UpdateLeverage,
         UserPortfolioMargin, UserSetAbstraction,
     },
+    chase::{CancelChaseParams, ChaseParams},
     encrypted::{EncryptedOrderSubmit, SubmitEncryptedOrder},
     fba::FbaSubmit,
     meta_bridge::MbWithdraw,
@@ -651,6 +652,96 @@ impl<'a> Exchange<'a> {
             owner,
             action,
             TypedTradingAction::CancelScale(params),
+        )
+        .await
+    }
+
+    // ---- CHASE re-pricer (node-native `chase_order` feature) ----
+
+    /// Place a CHASE order: one signed intent the node keeps re-pricing to the
+    /// top of book until it fills, expires (`ttl_ms`), or reaches `max_reprices`.
+    ///
+    /// Chase places a single post-only leg. Each reprice cancels the old leg and
+    /// places a new leg under the SAME re-stamped `cloid` (only the leg oid
+    /// changes). Correlate leg placements and fills by `cloid` on the existing
+    /// `order_updates` / `open_orders` / `fills` feeds — there is no chase WS
+    /// channel. The synchronous ack carries the `chase_oid` handle for
+    /// [`Self::cancel_chase`].
+    ///
+    /// Self-trading: the signing wallet owns the chase (leave `params.owner`
+    /// `None`). For operator / vault trading use [`Self::chase_order_as`]. Chase
+    /// is perp markets only in v1.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn chase_order(
+        &self,
+        wallet: &Wallet,
+        params: &ChaseParams,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "chase_order", "params": params });
+        self.post_typed_trade(wallet, action, TypedTradingAction::ChaseOrder(params))
+            .await
+    }
+
+    /// As an approved agent, place a CHASE order OWNED by `owner` — the operator
+    /// / vault counterpart of [`Self::chase_order`].
+    ///
+    /// The signing `wallet` is a registered agent of `owner`; the signed digest
+    /// binds `owner` right after `metafluxChain` (selecting the `ChaseOrder`
+    /// `*_WITH_OWNER` type string), and the POST carries a params-level `owner`
+    /// (`0x`-hex) so the node's `NativeChaseOrder.owner` is set.
+    ///
+    /// # Errors
+    /// See [`Self::chase_order`].
+    pub async fn chase_order_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        params: &ChaseParams,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "chase_order", "params": params });
+        self.post_typed_trade_as(
+            wallet,
+            owner,
+            action,
+            TypedTradingAction::ChaseOrder(params),
+        )
+        .await
+    }
+
+    /// Cancel a running CHASE by its registry handle (`params.chase_oid`, the
+    /// handle from the placement ack — NOT the leg oid).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn cancel_chase(
+        &self,
+        wallet: &Wallet,
+        params: &CancelChaseParams,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "cancel_chase", "params": params });
+        self.post_typed_trade(wallet, action, TypedTradingAction::CancelChase(params))
+            .await
+    }
+
+    /// As an approved agent, cancel `owner`'s CHASE by its handle — the operator
+    /// / vault counterpart of [`Self::cancel_chase`].
+    ///
+    /// # Errors
+    /// See [`Self::cancel_chase`].
+    pub async fn cancel_chase_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        params: &CancelChaseParams,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "cancel_chase", "params": params });
+        self.post_typed_trade_as(
+            wallet,
+            owner,
+            action,
+            TypedTradingAction::CancelChase(params),
         )
         .await
     }

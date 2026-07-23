@@ -16,6 +16,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod account;
+pub mod chase;
 pub mod core_evm;
 pub mod cross_chain;
 pub mod encrypted;
