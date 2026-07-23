@@ -46,9 +46,10 @@ use crate::types::{
     meta_bridge::MbWithdraw,
     order::{
         BatchCancel, BatchModify, BatchOrder, CancelAllOrders, CancelByCloid, CancelOrder, Modify,
-        Order, OrderResponse, ScheduleCancel,
+        Order, OrderResponse, ScheduleCancel, TimeInForce,
     },
     rfq::{RfqAccept, RfqRequest},
+    scale::{CancelScaleParams, ScaleDist, ScaleParams},
     spot::{
         EarnDeposit, EarnWithdraw, SpotCancel, SpotMarginClose, SpotMarginDeposit, SpotMarginOpen,
         SpotMarginWithdraw, SpotOrder,
@@ -138,6 +139,11 @@ impl<'a> Exchange<'a> {
                 wallet.address()
             )));
         }
+        // A TP/SL-LIMIT trigger leg (`is_market = false`) fires a reduce-only GTC
+        // at the order's `limit_px`; reject a zero price / non-GTC tif loud, not
+        // as a silent market stop. No wire/digest change — both fields were always
+        // signed.
+        check_trigger_limit(order)?;
         // Coerce a Market order's tif to IOC before building the action JSON +
         // typed digest: the node lowers a Market kind to a limit, and a
         // Market+Gtc/Alo would silently REST on the book. See
@@ -224,8 +230,12 @@ impl<'a> Exchange<'a> {
             .await
     }
 
-    /// Post quote collateral into a spot-margin account (spot margin / Earn,
-    /// devnet preview).
+    /// Post quote collateral into an isolated spot-margin account.
+    ///
+    /// Legacy path: spot margin now CROSSES the one unified USDC pool
+    /// (`spot_margin_cross`), and the node retired the isolated deposit / withdraw.
+    /// Prefer the cross-margin flow ([`Self::spot_margin_open`] /
+    /// [`Self::spot_margin_close`]), which draws directly against unified USDC.
     ///
     /// Sender-authorized: the recovered signer is the actor (no owner field).
     /// Margin must be enabled for the pair, else the node rejects. Returns the
@@ -292,7 +302,7 @@ impl<'a> Exchange<'a> {
         self.post_signed(wallet, action).await
     }
 
-    /// Supply quote into an Earn lending pool for pool shares (devnet preview).
+    /// Supply quote into an Earn lending pool for pool shares.
     ///
     /// Sender-authorized. 1:1 on a fresh pool, else priced off pool NAV; the
     /// pool auto-creates on the first deposit. Returns the `202 Accepted`
@@ -462,6 +472,11 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         batch: &BatchOrder,
     ) -> Result<Value, ClientError> {
+        // Reject any TP/SL-LIMIT leg with a zero price / non-GTC tif before signing
+        // (same guard as `submit_order`).
+        for o in &batch.orders {
+            check_trigger_limit(o)?;
+        }
         // Coerce every Market leg's tif to IOC before signing (a Market+Gtc/Alo
         // would rest on the book); see `BatchOrder::market_tifs_coerced`.
         let batch = batch.market_tifs_coerced();
@@ -550,6 +565,94 @@ impl<'a> Exchange<'a> {
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "cancel_all_orders", "params": params });
         self.post_signed(wallet, action).await
+    }
+
+    // ---- SCALE ladder (node-native; fork-gated `scale_order` feature) ----
+
+    /// Place a SCALE ladder: one signed compact ladder the node expands
+    /// DETERMINISTICALLY into `n` resting limit legs between `px_low` and
+    /// `px_high` that all share the one `cloid`.
+    ///
+    /// Self-trading: the signing wallet owns the ladder (leave `params.owner`
+    /// `None`). For operator / vault trading use [`Self::scale_order_as`].
+    ///
+    /// The wire `weights` array is emitted ONLY for `dist = custom` (empty for
+    /// every derived distribution — the node rejects a non-empty one). A custom
+    /// ladder MUST carry `weights.len() == n`.
+    ///
+    /// # Errors
+    /// - [`ClientError::Validation`] if a custom ladder's `weights.len() != n`.
+    /// - HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn scale_order(
+        &self,
+        wallet: &Wallet,
+        params: &ScaleParams,
+    ) -> Result<Value, ClientError> {
+        let action = scale_order_action(params)?;
+        self.post_typed_trade(wallet, action, TypedTradingAction::ScaleOrder(params))
+            .await
+    }
+
+    /// As an approved agent, place a SCALE ladder OWNED by `owner` — the operator
+    /// / vault counterpart of [`Self::scale_order`].
+    ///
+    /// The signing `wallet` is a registered agent of `owner`; the signed digest
+    /// binds `owner` right after `metafluxChain` (selecting the `ScaleOrder`
+    /// `*_WITH_OWNER` type string), and the POST carries a params-level `owner`
+    /// (`0x`-hex) so the node's `NativeScaleOrder.owner` is set.
+    ///
+    /// # Errors
+    /// See [`Self::scale_order`].
+    pub async fn scale_order_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        params: &ScaleParams,
+    ) -> Result<Value, ClientError> {
+        let action = scale_order_action(params)?;
+        self.post_typed_trade_as(
+            wallet,
+            owner,
+            action,
+            TypedTradingAction::ScaleOrder(params),
+        )
+        .await
+    }
+
+    /// Cancel every resting leg on `params.market` owned by the sender that
+    /// carries `params.cloid` (cancel-all-by-cloid — the SCALE group cancel).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn cancel_scale(
+        &self,
+        wallet: &Wallet,
+        params: &CancelScaleParams,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "cancel_scale", "params": params });
+        self.post_typed_trade(wallet, action, TypedTradingAction::CancelScale(params))
+            .await
+    }
+
+    /// As an approved agent, cancel `owner`'s SCALE ladder by cloid — the
+    /// operator / vault counterpart of [`Self::cancel_scale`].
+    ///
+    /// # Errors
+    /// See [`Self::cancel_scale`].
+    pub async fn cancel_scale_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        params: &CancelScaleParams,
+    ) -> Result<Value, ClientError> {
+        let action = json!({ "type": "cancel_scale", "params": params });
+        self.post_typed_trade_as(
+            wallet,
+            owner,
+            action,
+            TypedTradingAction::CancelScale(params),
+        )
+        .await
     }
 
     // ---- TWAP ----
@@ -1094,6 +1197,51 @@ fn keccak(input: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
     h.finalize(&mut out);
     out
+}
+
+/// TP/SL-LIMIT client guard: a trigger leg with `is_market = false` fires a
+/// reduce-only GTC limit at the order's own `limit_px`. Reject a zero price or a
+/// non-GTC tif LOUD — a zero price would refire-reject forever, and a non-GTC tif
+/// (e.g. `alo`) would dead-loop at fire. A market trigger (`is_market = true`) or
+/// a plain order (no trigger) passes unchanged. No wire / digest change — both
+/// `is_market` and `limit_px` were always in the signed order.
+fn check_trigger_limit(o: &Order) -> Result<(), ClientError> {
+    if let Some(t) = o.trigger {
+        if !t.is_market {
+            if o.limit_px == 0 {
+                return Err(ClientError::Validation(
+                    "TP/SL-LIMIT trigger needs limit_px > 0 (the fired resting price)".into(),
+                ));
+            }
+            if o.tif != TimeInForce::Gtc {
+                return Err(ClientError::Validation(
+                    "TP/SL-LIMIT trigger needs tif = gtc".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Build the `scale_order` wire action JSON, enforcing the custom-weights rule
+/// and emitting the `weights` array ONLY for `dist = custom`. Every derived
+/// distribution carries an EMPTY array — the node's F1 shared-lowering guard
+/// rejects a non-custom order that carries non-empty weights.
+fn scale_order_action(params: &ScaleParams) -> Result<Value, ClientError> {
+    let mut v = serde_json::to_value(params)
+        .map_err(|e| ClientError::Validation(format!("scale params serialize: {e}")))?;
+    if matches!(params.dist, ScaleDist::Custom) {
+        if params.weights.len() as u64 != u64::from(params.n) {
+            return Err(ClientError::Validation(format!(
+                "custom scale ladder needs weights.len() == n (got {} weights, n = {})",
+                params.weights.len(),
+                params.n
+            )));
+        }
+    } else {
+        v["weights"] = json!([]);
+    }
+    Ok(json!({ "type": "scale_order", "params": v }))
 }
 
 /// Current unix-time in milliseconds.

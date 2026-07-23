@@ -182,10 +182,62 @@ pub enum TpSl {
 pub struct Trigger {
     /// Activation price on the 1e8 fixed-point price plane (u64).
     pub trigger_px: u64,
-    /// `true` → fire as a market order when triggered; `false` → stop-limit.
+    /// `true` → fire as a reduce-only market IOC when triggered; `false` → fire a
+    /// reduce-only GTC limit at the order's own [`Order::limit_px`] (the
+    /// TP/SL-LIMIT variant).
     pub is_market: bool,
     /// Take-profit vs stop-loss.
     pub tpsl: TpSl,
+}
+
+impl Trigger {
+    /// Build a MARKET stop-loss trigger: fires a reduce-only market IOC when
+    /// `trigger_px` is crossed. The order's `limit_px` is ignored on the fire.
+    #[must_use]
+    pub const fn stop_market(trigger_px: u64) -> Self {
+        Self {
+            trigger_px,
+            is_market: true,
+            tpsl: TpSl::Sl,
+        }
+    }
+
+    /// Build a MARKET take-profit trigger: fires a reduce-only market IOC when
+    /// `trigger_px` is crossed. The order's `limit_px` is ignored on the fire.
+    #[must_use]
+    pub const fn take_profit_market(trigger_px: u64) -> Self {
+        Self {
+            trigger_px,
+            is_market: true,
+            tpsl: TpSl::Tp,
+        }
+    }
+
+    /// Build a LIMIT stop-loss trigger (`is_market = false`): fires a reduce-only
+    /// GTC limit at the order's own [`Order::limit_px`] when `trigger_px` is
+    /// crossed. The order MUST carry `limit_px > 0` and `tif = gtc` — the
+    /// `submit_order` / `batch_order` client guard rejects otherwise.
+    #[must_use]
+    pub const fn stop_limit(trigger_px: u64) -> Self {
+        Self {
+            trigger_px,
+            is_market: false,
+            tpsl: TpSl::Sl,
+        }
+    }
+
+    /// Build a LIMIT take-profit trigger (`is_market = false`): fires a reduce-only
+    /// GTC limit at the order's own [`Order::limit_px`] when `trigger_px` is
+    /// crossed. Same `limit_px > 0` + `tif = gtc` requirement as
+    /// [`Trigger::stop_limit`].
+    #[must_use]
+    pub const fn take_profit_limit(trigger_px: u64) -> Self {
+        Self {
+            trigger_px,
+            is_market: false,
+            tpsl: TpSl::Tp,
+        }
+    }
 }
 
 /// Builder-code fee attribution riding inside a signed order.

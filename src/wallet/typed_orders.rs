@@ -28,6 +28,7 @@ use crate::types::order::{
     BatchCancel, BatchModify, BatchOrder, CancelByCloid, CancelOrder, Modify, Order, OrderGrouping,
     OrderKind, PositionSide, ScheduleCancel, Side, StpMode, TimeInForce, TpSl,
 };
+use crate::types::scale::{CancelScaleParams, ScaleDist, ScaleParams};
 use crate::types::spot::{SpotCancel, SpotOrder};
 use crate::types::twap::{TwapCancel, TwapOrder};
 use crate::wallet::key::Address;
@@ -139,6 +140,27 @@ fn grouping_str(g: OrderGrouping) -> &'static str {
         OrderGrouping::PositionTpsl => "positionTpsl",
     }
 }
+fn dist_str(d: ScaleDist) -> &'static str {
+    match d {
+        ScaleDist::Flat => "flat",
+        ScaleDist::LinAsc => "lin_asc",
+        ScaleDist::LinDesc => "lin_desc",
+        ScaleDist::Custom => "custom",
+    }
+}
+
+/// The `bytes32 weights` field of a `ScaleOrder`. Only `dist == Custom` binds a
+/// weight vector — `keccak256(concat(per-weight 32-byte-big-endian words))`;
+/// every other distribution binds the 32-byte ZERO hash (the node derives its
+/// weights from `dist` + `n`, so there is nothing to sign). Mirrors the node's
+/// `hash_scale_weights`; item order is significant.
+fn scale_weights_hash(dist: ScaleDist, weights: &[u32]) -> [u8; 32] {
+    if !matches!(dist, ScaleDist::Custom) {
+        return [0u8; 32];
+    }
+    let words: Vec<[u8; 32]> = weights.iter().map(|&w| enc_u32(w)).collect();
+    hash_items(&words)
+}
 
 /// `0x`-hex string for a cloid (matching the wire / TS form), `""` when absent.
 fn cloid_str(c: Option<crate::types::Cloid>) -> String {
@@ -183,6 +205,19 @@ const TY_TWAP_CANCEL_WITH_OWNER: &[u8] =
     b"MetaFluxTransaction:TwapCancel(string metafluxChain,address owner,uint64 twapId,uint64 nonce)";
 const TY_BATCH_CANCEL_WITH_OWNER: &[u8] =
     b"MetaFluxTransaction:BatchCancel(string metafluxChain,address owner,bytes32 cancels,uint64 nonce)";
+
+// ===== ScaleOrder / CancelScale encodeType strings (node-native SCALE ladder) —
+// CONSENSUS-FROZEN, byte-identical to the node's `SCALE_ORDER_TYPE` /
+// `CANCEL_SCALE_TYPE` (+ `_WITH_OWNER`). `weights` is a `bytes32` the client
+// PRE-HASHES `T[]`-style (`keccak256(concat(per-weight uint256 words))` for
+// `custom`, the zero hash otherwise); the wire payload still carries the full
+// `weights` array so the node's commit bind reconstructs it.
+
+const TY_SCALE_ORDER: &[u8] = b"MetaFluxTransaction:ScaleOrder(string metafluxChain,uint32 market,string side,uint32 n,uint64 pxLow,uint64 pxHigh,uint64 totalSize,string dist,bytes32 weights,string tif,bool reduceOnly,string stpMode,string positionSide,string cloid,uint64 nonce)";
+const TY_SCALE_ORDER_WITH_OWNER: &[u8] = b"MetaFluxTransaction:ScaleOrder(string metafluxChain,address owner,uint32 market,string side,uint32 n,uint64 pxLow,uint64 pxHigh,uint64 totalSize,string dist,bytes32 weights,string tif,bool reduceOnly,string stpMode,string positionSide,string cloid,uint64 nonce)";
+const TY_CANCEL_SCALE: &[u8] =
+    b"MetaFluxTransaction:CancelScale(string metafluxChain,uint32 market,string cloid,uint64 nonce)";
+const TY_CANCEL_SCALE_WITH_OWNER: &[u8] = b"MetaFluxTransaction:CancelScale(string metafluxChain,address owner,uint32 market,string cloid,uint64 nonce)";
 
 // ===== Per-item word layouts =====
 
@@ -277,6 +312,10 @@ pub enum TypedTradingAction<'a> {
     BatchOrder(&'a BatchOrder),
     /// `batch_cancel`.
     BatchCancel(&'a BatchCancel),
+    /// `scale_order` — node-native SCALE ladder.
+    ScaleOrder(&'a ScaleParams),
+    /// `cancel_scale` — cancel-all-by-cloid for a SCALE ladder.
+    CancelScale(&'a CancelScaleParams),
 }
 
 impl TypedTradingAction<'_> {
@@ -296,6 +335,8 @@ impl TypedTradingAction<'_> {
             Self::TwapCancel(_) => TY_TWAP_CANCEL,
             Self::BatchOrder(_) => TY_BATCH_ORDER,
             Self::BatchCancel(_) => TY_BATCH_CANCEL,
+            Self::ScaleOrder(_) => TY_SCALE_ORDER,
+            Self::CancelScale(_) => TY_CANCEL_SCALE,
         }
     }
 
@@ -314,6 +355,8 @@ impl TypedTradingAction<'_> {
                 | Self::BatchModify(_)
                 | Self::TwapCancel(_)
                 | Self::BatchCancel(_)
+                | Self::ScaleOrder(_)
+                | Self::CancelScale(_)
         )
     }
 
@@ -330,6 +373,8 @@ impl TypedTradingAction<'_> {
             (Some(_), Self::BatchModify(_)) => TY_BATCH_MODIFY_WITH_OWNER,
             (Some(_), Self::TwapCancel(_)) => TY_TWAP_CANCEL_WITH_OWNER,
             (Some(_), Self::BatchCancel(_)) => TY_BATCH_CANCEL_WITH_OWNER,
+            (Some(_), Self::ScaleOrder(_)) => TY_SCALE_ORDER_WITH_OWNER,
+            (Some(_), Self::CancelScale(_)) => TY_CANCEL_SCALE_WITH_OWNER,
             _ => self.type_string(),
         }
     }
@@ -397,6 +442,31 @@ impl TypedTradingAction<'_> {
                     items.extend(cancel_words(c)?);
                 }
                 words.push(hash_items(&items));
+            }
+            Self::ScaleOrder(p) => {
+                // Frozen word order (post `metafluxChain` / optional `owner`):
+                // market, side, n, pxLow, pxHigh, totalSize, dist, weights(bytes32),
+                // tif, reduceOnly, stpMode, positionSide, cloid — then `nonce`.
+                words.push(enc_u32(p.market.0));
+                words.push(enc_string(side_str(p.side)));
+                words.push(enc_u32(p.n));
+                words.push(enc_u64(p.px_low));
+                words.push(enc_u64(p.px_high));
+                words.push(enc_u64(p.total_size));
+                words.push(enc_string(dist_str(p.dist)));
+                // `weights` bytes32: keccak of the per-weight uint256 words for
+                // `custom`, the 32-byte ZERO hash for any other distribution.
+                words.push(scale_weights_hash(p.dist, &p.weights));
+                words.push(enc_string(tif_str(p.tif)));
+                words.push(enc_bool(p.reduce_only));
+                words.push(enc_string(stp_str(p.stp_mode)));
+                // positionSide: empty string when one-way (None), else long/short.
+                words.push(enc_string(p.position_side.map_or("", position_side_str)));
+                words.push(enc_string(&cloid_str(Some(p.cloid))));
+            }
+            Self::CancelScale(p) => {
+                words.push(enc_u32(p.market.0));
+                words.push(enc_string(&cloid_str(Some(p.cloid))));
             }
         }
         words.push(nonce_word);
@@ -957,5 +1027,129 @@ mod tests {
         let a = TypedTradingAction::SubmitOrder(&order);
         assert_eq!(a.type_string_for(Some(&owner_bind())), a.type_string());
         assert_eq!(hexd_owner(a), hexd(a));
+    }
+
+    // ── ScaleOrder / CancelScale digest parity (golden from the node) ──
+    //
+    // The node produced these EIP-712 digests for the SAME canonical params on
+    // chain 114514 (`metafluxChain = "Testnet"`), nonce 1_000_000, expiresAfter
+    // 0 (the never-expires path, byte-identical to `digest()`). A byte-for-byte
+    // match proves the SDK's SCALE type strings + frozen word order equal the
+    // server's — the CORRECTNESS GATE (a mismatch = every SCALE signature fails).
+    //
+    // The `_WITH_OWNER` vectors bind owner = 0x1111…1111 (the `owner()` fixture).
+
+    const SCALE_NONCE: u64 = 1_000_000;
+
+    /// The shared 16-byte cloid every golden vector signs (`0x0123456789abcdef`
+    /// twice); hashed VERBATIM as the wire string.
+    fn scale_cloid() -> Cloid {
+        Cloid([
+            0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+            0xcd, 0xef,
+        ])
+    }
+
+    /// Canonical [`ScaleParams`] shared by every golden vector; only `dist` +
+    /// `weights` vary per case. Rungs 3000/3100/3200/3300 on the 1e8 plane.
+    fn scale_params(dist: ScaleDist, weights: Vec<u32>) -> ScaleParams {
+        ScaleParams {
+            market: MarketId(3),
+            side: Side::Bid,
+            n: 4,
+            px_low: 300_000_000_000,
+            px_high: 330_000_000_000,
+            total_size: 4_000_000_000,
+            dist,
+            weights,
+            tif: TimeInForce::Alo,
+            reduce_only: false,
+            stp_mode: StpMode::CancelOldest,
+            position_side: None,
+            cloid: scale_cloid(),
+            owner: None,
+        }
+    }
+
+    /// Owner-less digest hex at [`SCALE_NONCE`].
+    fn hexd_scale(action: TypedTradingAction) -> String {
+        hex::encode(
+            TypedTradingDigest::new(action, CHAIN, SCALE_NONCE)
+                .digest()
+                .unwrap(),
+        )
+    }
+
+    /// `_WITH_OWNER` digest hex (owner = 0x1111…1111) at [`SCALE_NONCE`].
+    fn hexd_scale_owner(action: TypedTradingAction) -> String {
+        hex::encode(
+            TypedTradingDigest::new_with_owner(action, owner(), CHAIN, SCALE_NONCE)
+                .digest()
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn scale_order_digest_parity_golden() {
+        // (a) owner-less, non-custom (lin_desc, empty weights -> zero weights hash).
+        let non_custom = scale_params(ScaleDist::LinDesc, vec![]);
+        assert_eq!(
+            hexd_scale(TypedTradingAction::ScaleOrder(&non_custom)),
+            "e9aee770dc5e781823b5bdf4d33390ce8b08a1838e01eee3fa3481e3710549ab"
+        );
+        // (b) `_WITH_OWNER` (owner = 0x1111…1111), non-custom.
+        assert_eq!(
+            hexd_scale_owner(TypedTradingAction::ScaleOrder(&non_custom)),
+            "7d52e8d5ddd55cdb59765dbaec525a68aa4b28eb60b71746fe13fcc0708aa5eb"
+        );
+        // (c) owner-less, custom weights [1,2,3,4] (len == n).
+        let custom = scale_params(ScaleDist::Custom, vec![1, 2, 3, 4]);
+        assert_eq!(
+            hexd_scale(TypedTradingAction::ScaleOrder(&custom)),
+            "7a6646b5f774b5aff1cb23c636c0351a92ee3feee1144823840a63a705b9bfd3"
+        );
+        // Owner bind is cryptographic: owner-present differs from owner-less.
+        assert_ne!(
+            hexd_scale_owner(TypedTradingAction::ScaleOrder(&non_custom)),
+            hexd_scale(TypedTradingAction::ScaleOrder(&non_custom))
+        );
+        // Selected encodeType bytes == the node's frozen contract literals.
+        assert_eq!(
+            TypedTradingAction::ScaleOrder(&non_custom).type_string(),
+            b"MetaFluxTransaction:ScaleOrder(string metafluxChain,uint32 market,string side,uint32 n,uint64 pxLow,uint64 pxHigh,uint64 totalSize,string dist,bytes32 weights,string tif,bool reduceOnly,string stpMode,string positionSide,string cloid,uint64 nonce)" as &[u8]
+        );
+        assert_eq!(
+            TypedTradingAction::ScaleOrder(&non_custom).type_string_for(Some(&owner())),
+            b"MetaFluxTransaction:ScaleOrder(string metafluxChain,address owner,uint32 market,string side,uint32 n,uint64 pxLow,uint64 pxHigh,uint64 totalSize,string dist,bytes32 weights,string tif,bool reduceOnly,string stpMode,string positionSide,string cloid,uint64 nonce)" as &[u8]
+        );
+    }
+
+    #[test]
+    fn cancel_scale_digest_parity_golden() {
+        let c = CancelScaleParams {
+            market: MarketId(3),
+            cloid: scale_cloid(),
+            owner: None,
+        };
+        assert_eq!(
+            hexd_scale(TypedTradingAction::CancelScale(&c)),
+            "c98bde278b2b83d4b822ee9c8245de6550d031440dd8641cd6e43b00d65e9d6d"
+        );
+        assert_eq!(
+            hexd_scale_owner(TypedTradingAction::CancelScale(&c)),
+            "e5f38a51f8c3b4b899af7b0d7bdabc0256fba80cd09d211881fc8a3bbdb9d5d0"
+        );
+        assert_ne!(
+            hexd_scale_owner(TypedTradingAction::CancelScale(&c)),
+            hexd_scale(TypedTradingAction::CancelScale(&c))
+        );
+        assert_eq!(
+            TypedTradingAction::CancelScale(&c).type_string(),
+            b"MetaFluxTransaction:CancelScale(string metafluxChain,uint32 market,string cloid,uint64 nonce)" as &[u8]
+        );
+        assert_eq!(
+            TypedTradingAction::CancelScale(&c).type_string_for(Some(&owner())),
+            b"MetaFluxTransaction:CancelScale(string metafluxChain,address owner,uint32 market,string cloid,uint64 nonce)" as &[u8]
+        );
     }
 }

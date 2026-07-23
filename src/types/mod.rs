@@ -25,6 +25,7 @@ pub mod order;
 pub mod pm;
 pub mod position;
 pub mod rfq;
+pub mod scale;
 pub mod spot;
 pub mod staking;
 pub mod sub_account;
