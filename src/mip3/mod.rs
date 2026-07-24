@@ -7,7 +7,7 @@
 //!
 //! ## DEPRECATED — operator-injected lane
 //!
-//! The deploy-submit path ([`auction::Client::submit_gas_auction_bid`] and
+//! The deploy-submit path ([`crate::Client::submit_gas_auction_bid`] and
 //! [`crate::rest::exchange::Exchange::submit_deploy_action`]) is DEPRECATED. The
 //! node rejects the opaque deploy digest at serde (400) — MIP-3 deploy actions
 //! are operator-injected today, NOT client-signed. The typed builders / presets
