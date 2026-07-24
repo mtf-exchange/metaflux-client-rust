@@ -89,6 +89,9 @@ impl Client {
     /// # Errors
     /// - [`ClientError::Http`] / [`ClientError::ProtocolError`] on transport.
     /// - [`ClientError::Signature`] on signing failure.
+    #[deprecated(
+        note = "operator-injected lane; the node rejects this opaque digest at serde (400). Kept for reference only."
+    )]
     pub async fn submit_gas_auction_bid(
         &self,
         wallet: &Wallet,
@@ -100,6 +103,7 @@ impl Client {
             "kind": bid.kind,
             "bid_amount_usdc_cents": bid.bid_amount_usdc_cents,
         });
+        #[allow(deprecated)]
         self.rest()
             .exchange()
             .submit_deploy_action(wallet, action)

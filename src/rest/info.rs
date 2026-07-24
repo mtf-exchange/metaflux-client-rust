@@ -13,9 +13,12 @@
 //!   [`Info::candle_snapshot`], [`Info::predicted_fundings`].
 //! - **Account reads** — [`Info::account_state`], [`Info::open_orders`],
 //!   [`Info::user_state`], [`Info::spot_clearinghouse_state`],
-//!   [`Info::staking_state`], [`Info::pm_state`].
+//!   [`Info::staking_state`], [`Info::pm_summary`], [`Info::order_status_by_oid`],
+//!   [`Info::historical_orders`], [`Info::user_funding`],
+//!   [`Info::spot_margin_state`], [`Info::earn_state`].
 //! - **Static / misc** — [`Info::node_info`], [`Info::spot_meta`],
-//!   [`Info::fee_schedule`], [`Info::vault_state`], [`Info::rfq_state`].
+//!   [`Info::fee_schedule`], [`Info::vault_state`], [`Info::rfq_state`],
+//!   [`Info::encode_action`].
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -24,7 +27,6 @@ use crate::error::ClientError;
 use crate::rest::RestClient;
 use crate::types::{
     VaultId,
-    pm::PmState,
     position::UserState,
     rfq::{RfqId, RfqState},
     vault::VaultState,
@@ -763,6 +765,460 @@ pub struct SpotClearinghouseState {
     pub balances: Vec<SpotBalance>,
 }
 
+/// One canonical fill record.
+///
+/// The node fill serializer (`user_fills` / `order_status` filled branch) emits
+/// this shape: `coin` is the market SYMBOL (a spot pair uses the pair name), `px`
+/// is the 8-dp tape price string, and `sz` / `start_position` are size-plane
+/// decimal strings. `side` is the aggressor code (`"B"` buy / `"A"` sell). All
+/// money / size magnitudes ride the wire as strings so precision survives past
+/// 2^53.
+///
+/// `block` is present on a node-ring fill (the committed height) and ABSENT on an
+/// archive-normalized fill — hence `Option`. A SPOT fill renders `sz` on the RAW
+/// integer plane today (the node-tape `szd=0` pin); this changes only under an
+/// owner-ruled spot-plane flip.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Fill {
+    /// Market symbol (`"MTF"`) or spot pair name (`"MTF/USDC"`).
+    pub coin: String,
+    /// Aggressor taker side: `"B"` (buy) or `"A"` (sell).
+    pub side: String,
+    /// Fill price, 8-dp tape decimal string (trailing zeros kept).
+    pub px: String,
+    /// Fill size, size-plane decimal string.
+    pub sz: String,
+    /// Consensus fill timestamp (unix ms).
+    pub time: u64,
+    /// Resting-order id the fill matched.
+    pub oid: u64,
+    /// Unique trade id.
+    pub tid: u64,
+    /// Fee charged, whole-USDC decimal string.
+    pub fee: String,
+    /// Realized PnL of the closed portion, signed decimal string.
+    pub closed_pnl: String,
+    /// Human direction label (`"Open Long"` / `"Close Short"` / `"Buy"` …).
+    pub dir: String,
+    /// Signed position size BEFORE the fill, size-plane decimal string.
+    pub start_position: String,
+    /// Committed block height. Present on a node-ring fill; absent on an
+    /// archive-normalized fill.
+    #[serde(default)]
+    pub block: Option<u64>,
+    /// Trace hash of the action that produced the fill; empty for a systemic /
+    /// maker-leg fill with no signed taker action.
+    #[serde(default)]
+    pub hash: String,
+}
+
+/// One resting order inside an [`OrderStatus::Resting`] result.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RestingOrderStatus {
+    /// Resting-order id (cancellable per-oid).
+    pub oid: u64,
+    /// Market symbol (perp) or spot pair name.
+    pub coin: String,
+    /// Side, lowercase `"bid"` / `"ask"`.
+    pub side: OrderSide,
+    /// Limit price, tick-snapped decimal string.
+    pub px: String,
+    /// Remaining size, size-plane decimal string.
+    pub size: String,
+    /// Insertion timestamp (unix ms).
+    pub inserted_at_ms: u64,
+    /// Submit-time client order id (`0x`-hex), when the order carried one;
+    /// `null` otherwise.
+    #[serde(default)]
+    pub cloid: Option<String>,
+}
+
+/// One parked trigger inside an [`OrderStatus::Triggered`] result.
+///
+/// A TP / SL / stop entry awaiting its mark cross. `is_market` is `true` for a
+/// market trigger (`limit_px` `null`) and `false` for a limit trigger
+/// (`limit_px` a decimal string).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct TriggerOrderStatus {
+    /// Trigger-order id.
+    pub oid: u64,
+    /// Market symbol (perp) or spot pair name.
+    pub coin: String,
+    /// Side, lowercase `"bid"` / `"ask"`.
+    pub side: OrderSide,
+    /// Trigger price, tick-snapped decimal string.
+    pub trigger_px: String,
+    /// `true` = fire when mark rises to `trigger_px`; `false` = when it falls.
+    pub trigger_above: bool,
+    /// Order size, size-plane decimal string.
+    pub size: String,
+    /// Registration timestamp (unix ms).
+    pub registered_at_ms: u64,
+    /// Whether the trigger has already fired.
+    pub fired: bool,
+    /// `true` = market trigger; `false` = limit trigger.
+    pub is_market: bool,
+    /// Limit price for a limit trigger, decimal string; `null` for a market
+    /// trigger.
+    #[serde(default)]
+    pub limit_px: Option<String>,
+}
+
+/// `order_status` response — single-order lifecycle lookup by `oid` or `cloid`.
+///
+/// The node resolves the FIRST hit: a live resting order, then a parked trigger,
+/// then the most recent matching fill, else unknown. Tagged by the wire `status`
+/// field. A cloid-only query resolves resting / triggered hits only — the fill
+/// ring is oid-keyed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum OrderStatus {
+    /// A live resting order.
+    Resting {
+        /// The resting order.
+        order: RestingOrderStatus,
+    },
+    /// A parked trigger awaiting its mark cross.
+    Triggered {
+        /// The parked trigger.
+        trigger: TriggerOrderStatus,
+    },
+    /// A terminal fill (the most recent matching leg in the ring).
+    Filled {
+        /// The matching fill.
+        fill: Fill,
+    },
+    /// Never seen, or evicted from the ring.
+    Unknown,
+}
+
+/// One record inside a [`HistoricalOrders`] response.
+///
+/// The node fold emits the 8 Always fields per executed order; a gateway-archive
+/// row adds the optional converted superset (`limit_px` / `avg_px` / `sz` /
+/// `orig_sz` / `total_sz` / `tif` / `reduce_only` / `cloid` / `cancel_reason` /
+/// `error`) and `block`. `status` is `"filled"` only today (the committed ring
+/// carries executed legs). `side` is the aggressor code (`"B"` / `"A"`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HistoricalOrder {
+    /// Order id.
+    pub oid: u64,
+    /// Market symbol (perp) or spot pair name.
+    pub coin: String,
+    /// Aggressor side code (`"B"` / `"A"`).
+    pub side: String,
+    /// Lifecycle status (`"filled"` today).
+    pub status: String,
+    /// Fill price, 8-dp tape decimal string.
+    pub px: String,
+    /// Total filled size, normalized decimal string.
+    pub filled_sz: String,
+    /// Timestamp of the most recent fill (unix ms).
+    pub time: u64,
+    /// Trace hash of the most recent fill; empty for a systemic fill.
+    #[serde(default)]
+    pub hash: String,
+    /// Committed block height. Present on a node fold row; absent on an archive
+    /// row.
+    #[serde(default)]
+    pub block: Option<u64>,
+    /// Limit price (archive superset), decimal string.
+    #[serde(default)]
+    pub limit_px: Option<String>,
+    /// Average fill price (archive superset), decimal string.
+    #[serde(default)]
+    pub avg_px: Option<String>,
+    /// Filled size (archive superset), normalized decimal string.
+    #[serde(default)]
+    pub sz: Option<String>,
+    /// Original order size (archive superset), normalized decimal string.
+    #[serde(default)]
+    pub orig_sz: Option<String>,
+    /// Total order size (archive superset), normalized decimal string.
+    #[serde(default)]
+    pub total_sz: Option<String>,
+    /// Time-in-force (archive superset).
+    #[serde(default)]
+    pub tif: Option<String>,
+    /// Reduce-only flag (archive superset).
+    #[serde(default)]
+    pub reduce_only: Option<bool>,
+    /// Client order id (archive superset), `0x`-hex.
+    #[serde(default)]
+    pub cloid: Option<String>,
+    /// Cancel reason (archive superset).
+    #[serde(default)]
+    pub cancel_reason: Option<String>,
+    /// Error string (archive superset).
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// `historical_orders` response — an account's past (executed) orders.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HistoricalOrders {
+    /// Echo of the resolved account address. `None` on a no-archive gateway's
+    /// typed-empty fallback (it omits `address`); the real archive path carries it.
+    #[serde(default)]
+    pub address: Option<Address>,
+    /// Past orders, newest first.
+    #[serde(default)]
+    pub orders: Vec<HistoricalOrder>,
+}
+
+/// One realized funding payment inside a [`UserFunding`] response.
+///
+/// `usdc` is the signed payment as a verbatim string — it may carry up to ~28
+/// significant digits, so a client MUST keep it as a string and never re-parse
+/// it through a fixed-precision decimal. The `#[serde(alias = "payment")]` hedges
+/// the node's doc-locked future rename (the standing wire gate still pins
+/// `usdc`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct FundingRecord {
+    /// Market symbol.
+    pub coin: String,
+    /// Payment timestamp (unix ms).
+    pub time: u64,
+    /// Signed funding payment, verbatim whole-USDC string. Never re-parse.
+    #[serde(alias = "payment")]
+    pub usdc: String,
+    /// Signed position size at settlement, decimal string.
+    pub szi: String,
+    /// Funding rate applied, decimal string.
+    pub funding_rate: String,
+}
+
+/// `user_funding` response — realized funding-payment history.
+///
+/// The node returns `[]` today (funding rows drain to the WS sink); the gateway
+/// archive leg returns real normalized rows. `start_time` / `end_time` echo the
+/// request window (`null` when absent).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct UserFunding {
+    /// Echo of the resolved account address. `None` on a no-archive gateway's
+    /// typed-empty fallback (it omits `address`); the real archive path carries it.
+    #[serde(default)]
+    pub address: Option<Address>,
+    /// Echo of the request `start_time` (unix ms); `null` when absent.
+    #[serde(default)]
+    pub start_time: Option<u64>,
+    /// Echo of the request `end_time` (unix ms); `null` when absent.
+    #[serde(default)]
+    pub end_time: Option<u64>,
+    /// Realized funding payments.
+    #[serde(default)]
+    pub fundings: Vec<FundingRecord>,
+}
+
+/// `user_ledger_updates` response envelope (the NODE kind).
+///
+/// The node returns `[]` today; its future per-record shape is doc-locked ONLY
+/// and diverges from the gateway union (`amount` / `amount_units` vs `delta`), so
+/// this types the ENVELOPE and leaves each record as raw JSON. Use
+/// [`Info::user_non_funding_ledger_updates`] for the gateway-served NORMALIZED
+/// union.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct UserLedgerUpdates {
+    /// Echo of the resolved account address.
+    pub address: Address,
+    /// Echo of the request `start_time` (unix ms); `null` when absent.
+    #[serde(default)]
+    pub start_time: Option<u64>,
+    /// Echo of the request `end_time` (unix ms); `null` when absent.
+    #[serde(default)]
+    pub end_time: Option<u64>,
+    /// Raw ledger-update records (record shape not yet locked — decode per your
+    /// own schema).
+    #[serde(default)]
+    pub updates: Vec<Value>,
+}
+
+/// One record inside a [`UserNonFundingLedgerUpdates`] union.
+///
+/// Two row shapes (a trade row and a money-movement row) share `coin` + `time`;
+/// every other field is optional and varies per row. `coin` renders the market
+/// SYMBOL (a trade row) or the token SYMBOL (a money-movement row).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct LedgerUpdate {
+    /// Market or token symbol.
+    pub coin: String,
+    /// Record timestamp (unix ms).
+    pub time: u64,
+    /// Movement kind (`"deposit"` / `"spot_transfer"` / `"trade"` …).
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Signed balance delta, decimal string.
+    #[serde(default)]
+    pub delta: Option<String>,
+    /// Counterparty address (`0x`-hex) for a transfer.
+    #[serde(default)]
+    pub counterparty: Option<String>,
+    /// Trade id for a trade row.
+    #[serde(default)]
+    pub tid: Option<u64>,
+    /// Realized PnL for a trade row, signed decimal string.
+    #[serde(default)]
+    pub realized_pnl: Option<String>,
+    /// Fee charged for a trade row, decimal string.
+    #[serde(default)]
+    pub fee: Option<String>,
+    /// Fee token symbol for a trade row.
+    #[serde(default)]
+    pub fee_token: Option<String>,
+}
+
+/// `user_non_funding_ledger_updates` response (the GATEWAY-served normalized
+/// union). The collection wire key is camelCase `ledgerUpdates`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct UserNonFundingLedgerUpdates {
+    /// Ledger-update records. Wire key is camelCase `ledgerUpdates`.
+    #[serde(rename = "ledgerUpdates", default)]
+    pub ledger_updates: Vec<LedgerUpdate>,
+}
+
+/// Per-pair spot-margin risk parameters inside a [`SpotMarginAccount`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotMarginParams {
+    /// Initial-margin requirement, bps decimal string.
+    pub init_bps: String,
+    /// Maintenance-margin requirement, bps decimal string.
+    pub maint_bps: String,
+}
+
+/// One spot-margin position inside a [`SpotMarginState`] response.
+///
+/// All magnitudes are full-precision normalized decimal strings (these planes
+/// carry fractional borrow indices / sub-unit base sizes). `params` is `null`
+/// when margin is disabled / uncalibrated for the pair.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotMarginAccount {
+    /// Spot pair id.
+    pub pair: u32,
+    /// Posted collateral, decimal string.
+    pub collateral: String,
+    /// Borrowed principal, decimal string.
+    pub borrowed: String,
+    /// Borrow-index snapshot at the position's last accrual, decimal string.
+    pub borrow_index_snapshot: String,
+    /// Base asset held, decimal string.
+    pub base_held: String,
+    /// Accrued debt (`borrowed × index / snapshot`), decimal string.
+    pub current_debt: String,
+    /// Per-pair margin parameters; `null` when margin is disabled.
+    #[serde(default)]
+    pub params: Option<SpotMarginParams>,
+}
+
+/// `spot_margin_state` response — every spot-margin position of one user.
+///
+/// The request key is `user` (0x hex) — NOT `address`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotMarginState {
+    /// Echo of the resolved user address.
+    pub user: Address,
+    /// Spot-margin positions, in pair-id order.
+    #[serde(default)]
+    pub accounts: Vec<SpotMarginAccount>,
+}
+
+/// One Earn lending pool inside an [`EarnState`] response.
+///
+/// `user_shares` / `user_value` are present ONLY when the request carried a
+/// `user`. All magnitudes are full-precision normalized decimal strings; the
+/// bps-rate parameters are decimal strings too.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EarnPool {
+    /// Pool asset id.
+    pub asset: u32,
+    /// Total supplied principal, decimal string.
+    pub total_supplied: String,
+    /// Total borrowed principal, decimal string.
+    pub total_borrowed: String,
+    /// Idle liquidity (`total_supplied − total_borrowed`), decimal string.
+    pub idle: String,
+    /// Total outstanding shares, decimal string.
+    pub shares_total: String,
+    /// Net asset value per share, decimal string.
+    pub share_value: String,
+    /// Borrow index, decimal string.
+    pub borrow_index: String,
+    /// Reserve factor, bps decimal string.
+    pub reserve_factor_bps: String,
+    /// Annualized borrow rate, bps decimal string.
+    pub borrow_rate_bps_annual: String,
+    /// Reserve accrued, decimal string.
+    pub reserve_accrued: String,
+    /// The requesting user's shares, decimal string. Present only when `user`
+    /// was sent.
+    #[serde(default)]
+    pub user_shares: Option<String>,
+    /// The requesting user's value (`user_shares × share_value`), decimal
+    /// string. Present only when `user` was sent.
+    #[serde(default)]
+    pub user_value: Option<String>,
+}
+
+/// `earn_state` response — every Earn lending pool, plus one user's stake when
+/// the request carried a `user`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EarnState {
+    /// Lending pools, in committed asset-id order.
+    #[serde(default)]
+    pub pools: Vec<EarnPool>,
+}
+
+/// `pm_summary` response — portfolio-margin enrollment + last-computed figures.
+///
+/// The request key is `address` (0x hex; an internal account id is rejected). The
+/// cents fields are USD-CENTS-plane integer strings, NOT whole USDC. An unknown
+/// address answers 200 with `enrolled:false` and zeroed figures.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PmSummary {
+    /// Echo of the resolved account address.
+    pub address: Address,
+    /// Whether the account is enrolled in portfolio margin.
+    pub enrolled: bool,
+    /// Enrollment timestamp (unix ms; `0` when not enrolled).
+    pub enrolled_at_ms: u64,
+    /// Block height of the last PM computation.
+    pub last_computed_block: u64,
+    /// Maintenance-margin requirement, USD-CENTS integer string.
+    pub pm_maint_margin_cents: String,
+    /// Net account value, USD-CENTS integer string.
+    pub net_value_cents: String,
+    /// Concentration penalty, USD-CENTS integer string.
+    pub concentration_penalty_cents: String,
+}
+
+/// Insert `start_time` / `end_time` into a request body only when present — the
+/// node echoes an absent bound as `null`, so omitting the key is the honest
+/// "open bound" request.
+fn insert_time_window(body: &mut Value, start_time: Option<u64>, end_time: Option<u64>) {
+    let obj = body.as_object_mut().expect("json! produced an object");
+    if let Some(s) = start_time {
+        obj.insert("start_time".into(), json!(s));
+    }
+    if let Some(e) = end_time {
+        obj.insert("end_time".into(), json!(e));
+    }
+}
+
 impl<'a> Info<'a> {
     /// List all markets and their rich metadata.
     ///
@@ -1122,14 +1578,173 @@ impl<'a> Info<'a> {
         Ok(self.staking_state(addr).await?.delegations)
     }
 
-    /// Fetch the portfolio-margin state for an address.
+    /// `pm_summary` — portfolio-margin enrollment + last-computed figures for an
+    /// account, keyed by `address` (0x hex).
+    ///
+    /// The cents fields are USD-CENTS-plane integer strings. An unknown address
+    /// answers with `enrolled:false` and zeroed figures.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn pm_state(&self, addr: Address) -> Result<PmState, ClientError> {
+    pub async fn pm_summary(&self, addr: Address) -> Result<PmSummary, ClientError> {
         self.client
-            .post_json("/info", &json!({ "type": "pm_summary", "user": addr }))
+            .post_json("/info", &json!({ "type": "pm_summary", "address": addr }))
             .await
+    }
+
+    /// `order_status` — single-order lifecycle lookup by `oid`.
+    ///
+    /// Resolves the first hit: a live resting order, then a parked trigger, then
+    /// the most recent matching fill, else [`OrderStatus::Unknown`].
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn order_status_by_oid(&self, oid: u64) -> Result<OrderStatus, ClientError> {
+        self.client
+            .post_json("/info", &json!({ "type": "order_status", "oid": oid }))
+            .await
+    }
+
+    /// `order_status` — single-order lifecycle lookup by `cloid` (`0x` + 32 hex).
+    ///
+    /// A cloid-only query resolves resting / triggered hits only — the fill ring
+    /// is oid-keyed, so a filled order that has left the book returns
+    /// [`OrderStatus::Unknown`] by cloid.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn order_status_by_cloid(&self, cloid: &str) -> Result<OrderStatus, ClientError> {
+        self.client
+            .post_json("/info", &json!({ "type": "order_status", "cloid": cloid }))
+            .await
+    }
+
+    /// `historical_orders` — an account's past (executed) orders, keyed by
+    /// `address`. Optional `limit` caps the most-recent records.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn historical_orders(
+        &self,
+        addr: Address,
+        limit: Option<u32>,
+    ) -> Result<HistoricalOrders, ClientError> {
+        let mut body = json!({ "type": "historical_orders", "address": addr });
+        if let Some(l) = limit {
+            let obj = body.as_object_mut().expect("json! produced an object");
+            obj.insert("limit".into(), json!(l));
+        }
+        self.client.post_json("/info", &body).await
+    }
+
+    /// `user_funding` — realized funding-payment history, keyed by `address`.
+    ///
+    /// `start_time` / `end_time` bound a window (unix ms); each is inserted only
+    /// when `Some`. The node returns `[]` today; the gateway archive leg returns
+    /// real rows. A `usdc` payment may carry ~28 significant digits — keep it as a
+    /// string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn user_funding(
+        &self,
+        addr: Address,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> Result<UserFunding, ClientError> {
+        let mut body = json!({ "type": "user_funding", "address": addr });
+        insert_time_window(&mut body, start_time, end_time);
+        self.client.post_json("/info", &body).await
+    }
+
+    /// `user_ledger_updates` — the NODE ledger kind, keyed by `address`.
+    ///
+    /// The node returns `[]` today and its record shape is not yet locked, so the
+    /// records stay raw JSON. For the gateway-served NORMALIZED union use
+    /// [`Info::user_non_funding_ledger_updates`].
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn user_ledger_updates(
+        &self,
+        addr: Address,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> Result<UserLedgerUpdates, ClientError> {
+        let mut body = json!({ "type": "user_ledger_updates", "address": addr });
+        insert_time_window(&mut body, start_time, end_time);
+        self.client.post_json("/info", &body).await
+    }
+
+    /// `user_non_funding_ledger_updates` — the gateway-served normalized ledger
+    /// union (deposits / withdrawals / transfers / trade rows), keyed by
+    /// `address`. The collection wire key is camelCase `ledgerUpdates`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn user_non_funding_ledger_updates(
+        &self,
+        addr: Address,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> Result<UserNonFundingLedgerUpdates, ClientError> {
+        let mut body = json!({ "type": "user_non_funding_ledger_updates", "address": addr });
+        insert_time_window(&mut body, start_time, end_time);
+        self.client.post_json("/info", &body).await
+    }
+
+    /// `spot_margin_state` — every spot-margin position of one user.
+    ///
+    /// The request key is `user` (0x hex), NOT `address`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_margin_state(&self, user: Address) -> Result<SpotMarginState, ClientError> {
+        self.client
+            .post_json(
+                "/info",
+                &json!({ "type": "spot_margin_state", "user": user }),
+            )
+            .await
+    }
+
+    /// `earn_state` — every Earn lending pool. Pass `user` to also carry that
+    /// user's `user_shares` / `user_value` per pool.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn earn_state(&self, user: Option<Address>) -> Result<EarnState, ClientError> {
+        let mut body = json!({ "type": "earn_state" });
+        if let Some(u) = user {
+            let obj = body.as_object_mut().expect("json! produced an object");
+            obj.insert("user".into(), json!(u));
+        }
+        self.client.post_json("/info", &body).await
+    }
+
+    /// `encode_action` — lower a wire action to its canonical core `Action` JSON.
+    ///
+    /// The returned STRING's exact bytes are the `inner_action_blob` every
+    /// `multi_sig` member signs. The node lowers via the SAME `into_action` path
+    /// admission uses, so the bytes a member signs match the bytes the `multi_sig`
+    /// handler verifies. Pass `action` in the familiar `{type, params}` wire form.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`]; the node
+    /// returns 400 on an unknown / missing action.
+    pub async fn encode_action(&self, action: &Value) -> Result<String, ClientError> {
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            action_json: String,
+        }
+        let resp: Resp = self
+            .client
+            .post_json(
+                "/info",
+                &json!({ "type": "encode_action", "action": action }),
+            )
+            .await?;
+        Ok(resp.action_json)
     }
 
     /// Fetch the state of one RFQ session.
@@ -1711,5 +2326,333 @@ mod tests {
         assert_eq!(p.coin, "ETH");
         assert_eq!(p.next_funding_time, 1_783_011_600_000);
         assert!(p.predicted_rate.starts_with("0.008"));
+    }
+
+    // ── P2 wave-1: typed /info read decodes (fixtures pinned to the node
+    // serializer shapes) ──
+
+    /// `order_status` filled branch = the canonical fill record (values from
+    /// `perp_fill_canonical`): symbol coin, 8-dp tape `px`, size-plane `sz`,
+    /// `time`, no `block` on the archive-normalized twin.
+    #[test]
+    fn order_status_filled_decodes_canonical_fill() {
+        let data = serde_json::json!({
+            "status": "filled",
+            "fill": {
+                "coin": "MTF", "side": "B", "px": "0.12126000", "sz": "112.22",
+                "time": 1_784_820_001_998u64, "oid": 42u64, "tid": 7u64,
+                "fee": "0.000952", "closed_pnl": "0", "dir": "Open Long",
+                "start_position": "-357795.12", "hash": ""
+            }
+        });
+        let st: OrderStatus = serde_json::from_value(data).unwrap();
+        let OrderStatus::Filled { fill } = &st else {
+            panic!("expected Filled, got {st:?}");
+        };
+        assert_eq!(fill.coin, "MTF");
+        assert_eq!(fill.px, "0.12126000");
+        assert_eq!(fill.sz, "112.22");
+        assert_eq!(fill.start_position, "-357795.12");
+        assert_eq!(fill.block, None); // archive-normalized fill carries no block
+        assert!(fill.hash.is_empty());
+        // A node-ring fill DOES carry `block` (Option::Some).
+        let ring = serde_json::json!({
+            "status": "filled",
+            "fill": {
+                "coin": "MTF", "side": "B", "px": "0.12126000", "sz": "112.22",
+                "time": 1_784_820_001_998u64, "oid": 42u64, "tid": 7u64,
+                "fee": "0.000952", "closed_pnl": "0", "dir": "Open Long",
+                "start_position": "-357795.12", "block": 8_416_000u64, "hash": ""
+            }
+        });
+        let OrderStatus::Filled { fill } = serde_json::from_value(ring).unwrap() else {
+            panic!("expected Filled");
+        };
+        assert_eq!(fill.block, Some(8_416_000));
+    }
+
+    /// `order_status` resting branch: tick-snapped `px`, lowercase side, cloid.
+    #[test]
+    fn order_status_resting_decodes() {
+        let data = serde_json::json!({
+            "status": "resting",
+            "order": {
+                "oid": 7u64, "coin": "BTC", "side": "ask", "px": "62500.12",
+                "size": "1.5", "inserted_at_ms": 1u64,
+                "cloid": "0x0000000000000000000000000000abcd"
+            }
+        });
+        let OrderStatus::Resting { order } = serde_json::from_value(data).unwrap() else {
+            panic!("expected Resting");
+        };
+        assert_eq!(order.oid, 7);
+        assert_eq!(order.side, OrderSide::Ask);
+        assert_eq!(order.px, "62500.12");
+        assert_eq!(
+            order.cloid.as_deref(),
+            Some("0x0000000000000000000000000000abcd")
+        );
+        // cloid absent -> None.
+        let no_cloid = serde_json::json!({
+            "status": "resting",
+            "order": { "oid": 8u64, "coin": "BTC", "side": "bid", "px": "1",
+                       "size": "1", "inserted_at_ms": 2u64, "cloid": null }
+        });
+        let OrderStatus::Resting { order } = serde_json::from_value(no_cloid).unwrap() else {
+            panic!("expected Resting");
+        };
+        assert_eq!(order.side, OrderSide::Bid);
+        assert_eq!(order.cloid, None);
+    }
+
+    /// `order_status` triggered branch: market vs limit trigger (`is_market` +
+    /// `limit_px`).
+    #[test]
+    fn order_status_triggered_decodes() {
+        let data = serde_json::json!({
+            "status": "triggered",
+            "trigger": {
+                "oid": 9u64, "coin": "BTC", "side": "ask", "trigger_px": "60000",
+                "trigger_above": false, "size": "1", "registered_at_ms": 3u64,
+                "fired": false, "is_market": false, "limit_px": "59900"
+            }
+        });
+        let OrderStatus::Triggered { trigger } = serde_json::from_value(data).unwrap() else {
+            panic!("expected Triggered");
+        };
+        assert!(!trigger.is_market);
+        assert_eq!(trigger.limit_px.as_deref(), Some("59900"));
+        assert!(!trigger.fired);
+        // Market trigger: is_market true, limit_px null.
+        let mkt = serde_json::json!({
+            "status": "triggered",
+            "trigger": { "oid": 9u64, "coin": "BTC", "side": "bid",
+                         "trigger_px": "60000", "trigger_above": true, "size": "1",
+                         "registered_at_ms": 3u64, "fired": true,
+                         "is_market": true, "limit_px": null }
+        });
+        let OrderStatus::Triggered { trigger } = serde_json::from_value(mkt).unwrap() else {
+            panic!("expected Triggered");
+        };
+        assert!(trigger.is_market);
+        assert_eq!(trigger.limit_px, None);
+    }
+
+    /// `order_status` unknown branch.
+    #[test]
+    fn order_status_unknown_decodes() {
+        let st: OrderStatus =
+            serde_json::from_value(serde_json::json!({ "status": "unknown" })).unwrap();
+        assert!(matches!(st, OrderStatus::Unknown));
+    }
+
+    /// `historical_orders`: an archive superset row (from `order_canonical`) and a
+    /// node-fold-only row (Always fields + `block`, no superset).
+    #[test]
+    fn historical_orders_decodes_superset_and_fold_rows() {
+        let data = serde_json::json!({
+            "address": "0x4242424242424242424242424242424242424242",
+            "orders": [
+                {
+                    "oid": 9u64, "coin": "MTF", "side": "A", "status": "filled",
+                    "time": 1_784_820_001_000u64, "px": "194.78000000",
+                    "filled_sz": "112.2", "hash": "", "limit_px": "194.78000000",
+                    "avg_px": "194.78000000", "sz": "112.2", "orig_sz": "112.2",
+                    "total_sz": "112.2", "tif": "Gtc", "reduce_only": false
+                },
+                {
+                    "oid": 8u64, "coin": "MTF", "side": "B", "status": "filled",
+                    "px": "101", "filled_sz": "1.2", "time": 20u64,
+                    "block": 2u64, "hash": ""
+                }
+            ]
+        });
+        let h: HistoricalOrders = serde_json::from_value(data).unwrap();
+        assert_eq!(h.orders.len(), 2);
+        // Archive superset row.
+        let a = &h.orders[0];
+        assert_eq!(a.oid, 9);
+        assert_eq!(a.px, "194.78000000");
+        assert_eq!(a.filled_sz, "112.2");
+        assert_eq!(a.avg_px.as_deref(), Some("194.78000000"));
+        assert_eq!(a.tif.as_deref(), Some("Gtc"));
+        assert_eq!(a.reduce_only, Some(false));
+        assert_eq!(a.block, None);
+        // Node-fold-only row: superset fields absent -> None; block present.
+        let b = &h.orders[1];
+        assert_eq!(b.filled_sz, "1.2");
+        assert_eq!(b.block, Some(2));
+        assert_eq!(b.avg_px, None);
+        assert_eq!(b.tif, None);
+        assert_eq!(b.reduce_only, None);
+    }
+
+    /// `user_funding`: the 28-significant-digit `usdc` survives verbatim as a
+    /// String (values from `funding_canonical`); the `payment` alias also decodes.
+    #[test]
+    fn user_funding_28_digit_usdc_survives_and_payment_aliases() {
+        let data = serde_json::json!({
+            "address": "0x4242424242424242424242424242424242424242",
+            "start_time": null,
+            "end_time": null,
+            "fundings": [
+                { "coin": "MTF", "time": 1_784_800_000_000u64,
+                  "usdc": "0.0189543210987654321098765432",
+                  "szi": "17415", "funding_rate": "-0.0005" }
+            ]
+        });
+        let f: UserFunding = serde_json::from_value(data).unwrap();
+        assert_eq!(f.start_time, None);
+        assert_eq!(f.end_time, None);
+        assert_eq!(f.fundings.len(), 1);
+        // 28-digit value survives byte-for-byte.
+        assert_eq!(f.fundings[0].usdc, "0.0189543210987654321098765432");
+        assert_eq!(f.fundings[0].coin, "MTF");
+        // The future `payment` field name decodes via the alias.
+        let aliased = serde_json::json!({
+            "coin": "MTF", "time": 1u64, "payment": "1.25",
+            "szi": "1", "funding_rate": "0"
+        });
+        let rec: FundingRecord = serde_json::from_value(aliased).unwrap();
+        assert_eq!(rec.usdc, "1.25");
+    }
+
+    /// `user_funding` unknown-address empty shape (node account-history contract).
+    #[test]
+    fn user_funding_empty_shape_decodes() {
+        let data = serde_json::json!({
+            "address": "0x4242424242424242424242424242424242424242",
+            "start_time": null, "end_time": null, "fundings": []
+        });
+        let f: UserFunding = serde_json::from_value(data).unwrap();
+        assert!(f.fundings.is_empty());
+        assert_eq!(f.start_time, None);
+    }
+
+    /// `user_non_funding_ledger_updates`: the 3-row union under the camelCase
+    /// `ledgerUpdates` key (values from `ledger_canonical`).
+    #[test]
+    fn user_non_funding_ledger_union_decodes_camel_key() {
+        let data = serde_json::json!({
+            "ledgerUpdates": [
+                { "coin": "USDC", "time": 1_784_800_000_001u64, "kind": "deposit",
+                  "delta": "100", "counterparty": "0xabc" },
+                { "coin": "PURR", "time": 1_784_800_000_002u64,
+                  "kind": "spot_transfer", "delta": "5" },
+                { "coin": "MTF", "time": 1_784_800_000_003u64, "kind": "trade",
+                  "tid": 77u64, "realized_pnl": "1.5", "fee": "0.02",
+                  "fee_token": "USDC" }
+            ]
+        });
+        let l: UserNonFundingLedgerUpdates = serde_json::from_value(data).unwrap();
+        assert_eq!(l.ledger_updates.len(), 3);
+        // Money-movement row.
+        assert_eq!(l.ledger_updates[0].coin, "USDC");
+        assert_eq!(l.ledger_updates[0].kind.as_deref(), Some("deposit"));
+        assert_eq!(l.ledger_updates[0].counterparty.as_deref(), Some("0xabc"));
+        assert_eq!(l.ledger_updates[0].tid, None);
+        // Trade row.
+        assert_eq!(l.ledger_updates[2].tid, Some(77));
+        assert_eq!(l.ledger_updates[2].realized_pnl.as_deref(), Some("1.5"));
+        assert_eq!(l.ledger_updates[2].fee_token.as_deref(), Some("USDC"));
+        // Round-trips back to camelCase.
+        let j = serde_json::to_value(&l).unwrap();
+        assert!(j.get("ledgerUpdates").is_some());
+    }
+
+    /// `user_ledger_updates` (node kind): envelope decodes, records stay raw JSON.
+    #[test]
+    fn user_ledger_updates_envelope_decodes_raw_records() {
+        let data = serde_json::json!({
+            "address": "0x4242424242424242424242424242424242424242",
+            "start_time": 5u64, "end_time": 9u64, "updates": []
+        });
+        let u: UserLedgerUpdates = serde_json::from_value(data).unwrap();
+        assert_eq!(u.start_time, Some(5));
+        assert_eq!(u.end_time, Some(9));
+        assert!(u.updates.is_empty());
+    }
+
+    /// `spot_margin_state`: pair-keyed accounts, `params` present and null.
+    #[test]
+    fn spot_margin_state_decodes() {
+        let data = serde_json::json!({
+            "user": "0x4242424242424242424242424242424242424242",
+            "accounts": [
+                { "pair": 200u32, "collateral": "1000", "borrowed": "250.5",
+                  "borrow_index_snapshot": "1.02", "base_held": "3.14",
+                  "current_debt": "255.51",
+                  "params": { "init_bps": "1000", "maint_bps": "500" } },
+                { "pair": 201u32, "collateral": "0", "borrowed": "0",
+                  "borrow_index_snapshot": "1", "base_held": "0",
+                  "current_debt": "0", "params": null }
+            ]
+        });
+        let s: SpotMarginState = serde_json::from_value(data).unwrap();
+        assert_eq!(s.accounts.len(), 2);
+        assert_eq!(s.accounts[0].pair, 200);
+        assert_eq!(s.accounts[0].current_debt, "255.51");
+        let p = s.accounts[0].params.as_ref().unwrap();
+        assert_eq!(p.init_bps, "1000");
+        assert_eq!(p.maint_bps, "500");
+        // Margin-disabled pair: params null.
+        assert!(s.accounts[1].params.is_none());
+    }
+
+    /// `earn_state`: pools with and without the per-user stake fields.
+    #[test]
+    fn earn_state_decodes_with_and_without_user() {
+        let data = serde_json::json!({
+            "pools": [
+                { "asset": 0u32, "total_supplied": "10000", "total_borrowed": "4000",
+                  "idle": "6000", "shares_total": "9500", "share_value": "1.0526",
+                  "borrow_index": "1.03", "reserve_factor_bps": "1000",
+                  "borrow_rate_bps_annual": "550", "reserve_accrued": "12.5",
+                  "user_shares": "100", "user_value": "105.26" }
+            ]
+        });
+        let e: EarnState = serde_json::from_value(data).unwrap();
+        assert_eq!(e.pools.len(), 1);
+        assert_eq!(e.pools[0].idle, "6000");
+        assert_eq!(e.pools[0].user_shares.as_deref(), Some("100"));
+        assert_eq!(e.pools[0].user_value.as_deref(), Some("105.26"));
+        // No user: the per-user fields are absent -> None.
+        let no_user = serde_json::json!({
+            "pools": [
+                { "asset": 0u32, "total_supplied": "1", "total_borrowed": "0",
+                  "idle": "1", "shares_total": "1", "share_value": "1",
+                  "borrow_index": "1", "reserve_factor_bps": "0",
+                  "borrow_rate_bps_annual": "0", "reserve_accrued": "0" }
+            ]
+        });
+        let e2: EarnState = serde_json::from_value(no_user).unwrap();
+        assert_eq!(e2.pools[0].user_shares, None);
+        assert_eq!(e2.pools[0].user_value, None);
+    }
+
+    /// `pm_summary`: an enrolled account and the zeroed unknown-address shape.
+    #[test]
+    fn pm_summary_decodes_enrolled_and_zeroed() {
+        let enrolled = serde_json::json!({
+            "address": "0x4242424242424242424242424242424242424242",
+            "enrolled": true, "enrolled_at_ms": 1_700_000_000_000u64,
+            "last_computed_block": 8_416_000u64,
+            "pm_maint_margin_cents": "123456", "net_value_cents": "10000000",
+            "concentration_penalty_cents": "250"
+        });
+        let p: PmSummary = serde_json::from_value(enrolled).unwrap();
+        assert!(p.enrolled);
+        assert_eq!(p.pm_maint_margin_cents, "123456");
+        assert_eq!(p.net_value_cents, "10000000");
+        // Zeroed unknown address.
+        let zeroed = serde_json::json!({
+            "address": "0x0000000000000000000000000000000000000000",
+            "enrolled": false, "enrolled_at_ms": 0u64, "last_computed_block": 0u64,
+            "pm_maint_margin_cents": "0", "net_value_cents": "0",
+            "concentration_penalty_cents": "0"
+        });
+        let z: PmSummary = serde_json::from_value(zeroed).unwrap();
+        assert!(!z.enrolled);
+        assert_eq!(z.pm_maint_margin_cents, "0");
     }
 }

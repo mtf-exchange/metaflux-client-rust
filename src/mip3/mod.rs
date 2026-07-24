@@ -5,9 +5,19 @@
 //! to ship a new perp or spot market on MetaFlux. This module is the
 //! flagship client-side surface for that workflow.
 //!
+//! ## DEPRECATED — operator-injected lane
+//!
+//! The deploy-submit path ([`auction::Client::submit_gas_auction_bid`] and
+//! [`crate::rest::exchange::Exchange::submit_deploy_action`]) is DEPRECATED. The
+//! node rejects the opaque deploy digest at serde (400) — MIP-3 deploy actions
+//! are operator-injected today, NOT client-signed. The typed builders / presets
+//! stay useful to shape a deploy sequence, but the submit call does not clear.
+//! The module is retained for reference; it is not removed this wave.
+//!
 //! ## Typical flow
 //!
 //! ```no_run
+//! # #![allow(deprecated)]
 //! # use std::time::Duration;
 //! # use metaflux_client::{Client, wallet::Wallet};
 //! # use metaflux_client::mip3::{

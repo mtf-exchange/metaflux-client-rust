@@ -1220,46 +1220,6 @@ impl<'a> Exchange<'a> {
         .await
     }
 
-    /// Submit a threshold-encrypted order via the `encrypted_order_submit` tag
-    /// under the typed scheme.
-    ///
-    /// An ALIAS of [`Self::submit_encrypted_order_typed`]: it signs the IDENTICAL
-    /// `SubmitEncryptedOrder` digest (same 5-field params) and differs ONLY in the
-    /// wire `type` tag. The node lowers both onto the same encrypted-order handler.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn encrypted_order_submit_typed(
-        &self,
-        wallet: &Wallet,
-        ciphertext: Vec<u8>,
-        commitment: [u8; 32],
-        threshold: u8,
-        target_block: u64,
-        reveal_deadline_ms: u64,
-    ) -> Result<Value, ClientError> {
-        self.post_signed_typed(wallet, |chain, nonce| {
-            let action = TypedAction::SubmitEncryptedOrder {
-                metaflux_chain: chain,
-                ciphertext: ciphertext.clone(),
-                commitment,
-                threshold,
-                target_block,
-                reveal_deadline_ms,
-                nonce,
-            };
-            let params = json!({
-                "ciphertext": ciphertext,
-                "commitment": commitment.to_vec(),
-                "threshold": threshold,
-                "target_block": target_block,
-                "reveal_deadline_ms": reveal_deadline_ms,
-            });
-            (action, "encrypted_order_submit", params)
-        })
-        .await
-    }
-
     /// Unenroll the sender from portfolio margin via the `pm_unenroll` tag under
     /// the typed scheme.
     ///

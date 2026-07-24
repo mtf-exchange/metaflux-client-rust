@@ -17,6 +17,7 @@
 
 #![allow(missing_docs)] // binary crate
 #![allow(clippy::print_stdout, clippy::print_stderr)] // CLI is allowed to use stdout/err
+#![allow(deprecated)] // drives the deprecated operator-injected MIP-3 deploy lane
 
 use std::process::ExitCode;
 
@@ -158,6 +159,11 @@ impl From<AuctionKindArg> for AuctionKind {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    eprintln!(
+        "warning: the MIP-3 deploy-submit lane is DEPRECATED — the node rejects the \
+         opaque deploy digest (400). Deploy actions are operator-injected today. \
+         Use --dry-run to inspect the sequence."
+    );
     let cli = Cli::parse();
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,

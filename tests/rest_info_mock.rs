@@ -9,13 +9,20 @@
 
 use metaflux_client::{
     Client,
-    rest::info::{MarginMode, MarketKind, Tier},
+    rest::info::{MarginMode, MarketKind, OrderStatus, Tier},
     types::VaultId,
     wallet::Address,
 };
 use serde_json::{Value, json};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_json, body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// The canonical test account (`0x42…42`) shared by the account-scoped reads.
+const ADDR: &str = "0x4242424242424242424242424242424242424242";
+
+fn test_addr() -> Address {
+    Address::from_hex(ADDR).unwrap()
+}
 
 /// Wrap a payload in the committed `{ type, data }` info envelope.
 fn envelope(ty: &str, data: Value) -> Value {
@@ -596,4 +603,391 @@ async fn predicted_fundings_decodes_entries() {
     assert_eq!(pf[0].coin, "BTC");
     assert_eq!(pf[0].next_funding_time, 1_783_011_600_000);
     assert_eq!(pf[1].predicted_rate, "-0.0087");
+}
+
+// ── P2 wave-1: typed /info reads (request-body + envelope round-trip) ──
+
+/// `order_status_by_oid` posts `{type, oid}` (no `cloid`) and decodes the filled
+/// branch = the canonical fill record.
+#[tokio::test]
+async fn order_status_by_oid_posts_oid_and_decodes_filled() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_partial_json(
+            json!({ "type": "order_status", "oid": 42 }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "order_status",
+            json!({
+                "status": "filled",
+                "fill": {
+                    "coin": "MTF", "side": "B", "px": "0.12126000", "sz": "112.22",
+                    "time": 1_784_820_001_998u64, "oid": 42u64, "tid": 7u64,
+                    "fee": "0.000952", "closed_pnl": "0", "dir": "Open Long",
+                    "start_position": "-357795.12", "block": 8_416_000u64, "hash": ""
+                }
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let st = client.rest().info().order_status_by_oid(42).await.unwrap();
+    let OrderStatus::Filled { fill } = st else {
+        panic!("expected Filled");
+    };
+    assert_eq!(fill.coin, "MTF");
+    assert_eq!(fill.px, "0.12126000");
+    assert_eq!(fill.block, Some(8_416_000));
+}
+
+/// `order_status_by_cloid` posts `{type, cloid}` (no `oid`) and decodes the
+/// resting branch.
+#[tokio::test]
+async fn order_status_by_cloid_posts_cloid_and_decodes_resting() {
+    let cloid = "0x0000000000000000000000000000abcd";
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_partial_json(
+            json!({ "type": "order_status", "cloid": cloid }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "order_status",
+            json!({
+                "status": "resting",
+                "order": { "oid": 7u64, "coin": "BTC", "side": "ask", "px": "62500.12",
+                           "size": "1.5", "inserted_at_ms": 1u64, "cloid": cloid }
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let st = client
+        .rest()
+        .info()
+        .order_status_by_cloid(cloid)
+        .await
+        .unwrap();
+    let OrderStatus::Resting { order } = st else {
+        panic!("expected Resting");
+    };
+    assert_eq!(order.oid, 7);
+    assert_eq!(order.cloid.as_deref(), Some(cloid));
+}
+
+/// `historical_orders` posts `{type, address, limit}` and decodes the fold rows.
+#[tokio::test]
+async fn historical_orders_posts_address_and_limit() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_partial_json(json!({
+            "type": "historical_orders", "address": ADDR, "limit": 5
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "historical_orders",
+            json!({
+                "address": ADDR,
+                "orders": [
+                    { "oid": 9u64, "coin": "MTF", "side": "A", "status": "filled",
+                      "time": 1_784_820_001_000u64, "px": "194.78000000",
+                      "filled_sz": "112.2", "hash": "", "block": 2u64 }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let h = client
+        .rest()
+        .info()
+        .historical_orders(test_addr(), Some(5))
+        .await
+        .unwrap();
+    assert_eq!(h.address, Some(test_addr()));
+    assert_eq!(h.orders.len(), 1);
+    assert_eq!(h.orders[0].oid, 9);
+    assert_eq!(h.orders[0].filled_sz, "112.2");
+    assert_eq!(h.orders[0].block, Some(2));
+}
+
+/// `user_funding` omits the window keys when both bounds are `None` (exact body
+/// match) and preserves a 28-digit `usdc` verbatim.
+#[tokio::test]
+async fn user_funding_omits_window_and_keeps_28_digit_usdc() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        // EXACT body: no start_time / end_time keys when both are None.
+        .and(body_json(
+            json!({ "type": "user_funding", "address": ADDR }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "user_funding",
+            json!({
+                "address": ADDR, "start_time": null, "end_time": null,
+                "fundings": [
+                    { "coin": "MTF", "time": 1_784_800_000_000u64,
+                      "usdc": "0.0189543210987654321098765432",
+                      "szi": "17415", "funding_rate": "-0.0005" }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let f = client
+        .rest()
+        .info()
+        .user_funding(test_addr(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(f.fundings.len(), 1);
+    assert_eq!(f.fundings[0].usdc, "0.0189543210987654321098765432");
+    assert_eq!(f.start_time, None);
+}
+
+/// `user_funding` inserts the window bounds only when `Some`.
+#[tokio::test]
+async fn user_funding_inserts_window_when_present() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(json!({
+            "type": "user_funding", "address": ADDR,
+            "start_time": 5u64, "end_time": 9u64
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "user_funding",
+            json!({ "address": ADDR, "start_time": 5u64, "end_time": 9u64, "fundings": [] }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let f = client
+        .rest()
+        .info()
+        .user_funding(test_addr(), Some(5), Some(9))
+        .await
+        .unwrap();
+    assert_eq!(f.start_time, Some(5));
+    assert_eq!(f.end_time, Some(9));
+}
+
+/// `user_ledger_updates` (node kind) posts `{type, address}` and decodes the
+/// envelope with raw records.
+#[tokio::test]
+async fn user_ledger_updates_node_kind_decodes_envelope() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_partial_json(json!({
+            "type": "user_ledger_updates", "address": ADDR
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "user_ledger_updates",
+            json!({ "address": ADDR, "start_time": null, "end_time": null, "updates": [] }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let u = client
+        .rest()
+        .info()
+        .user_ledger_updates(test_addr(), None, None)
+        .await
+        .unwrap();
+    assert!(u.updates.is_empty());
+}
+
+/// `user_non_funding_ledger_updates` decodes the camelCase `ledgerUpdates` union.
+#[tokio::test]
+async fn user_non_funding_ledger_updates_decodes_camel_union() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_partial_json(json!({
+            "type": "user_non_funding_ledger_updates", "address": ADDR
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "user_non_funding_ledger_updates",
+            json!({
+                "ledgerUpdates": [
+                    { "coin": "USDC", "time": 1_784_800_000_001u64, "kind": "deposit",
+                      "delta": "100", "counterparty": "0xabc" },
+                    { "coin": "MTF", "time": 1_784_800_000_003u64, "kind": "trade",
+                      "tid": 77u64, "realized_pnl": "1.5", "fee": "0.02",
+                      "fee_token": "USDC" }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let l = client
+        .rest()
+        .info()
+        .user_non_funding_ledger_updates(test_addr(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(l.ledger_updates.len(), 2);
+    assert_eq!(l.ledger_updates[0].coin, "USDC");
+    assert_eq!(l.ledger_updates[1].tid, Some(77));
+}
+
+/// `spot_margin_state` posts the `user` key (NOT `address`) — asserted by an
+/// EXACT body match.
+#[tokio::test]
+async fn spot_margin_state_posts_user_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(
+            json!({ "type": "spot_margin_state", "user": ADDR }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "spot_margin_state",
+            json!({
+                "user": ADDR,
+                "accounts": [
+                    { "pair": 200u32, "collateral": "1000", "borrowed": "250.5",
+                      "borrow_index_snapshot": "1.02", "base_held": "3.14",
+                      "current_debt": "255.51",
+                      "params": { "init_bps": "1000", "maint_bps": "500" } }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let s = client
+        .rest()
+        .info()
+        .spot_margin_state(test_addr())
+        .await
+        .unwrap();
+    assert_eq!(s.user, test_addr());
+    assert_eq!(s.accounts.len(), 1);
+    assert_eq!(s.accounts[0].pair, 200);
+    assert_eq!(
+        s.accounts[0].params.as_ref().unwrap().maint_bps.as_str(),
+        "500"
+    );
+}
+
+/// `earn_state` with a `user` inserts the `user` key and decodes per-user fields.
+#[tokio::test]
+async fn earn_state_with_user_inserts_key_and_decodes_user_fields() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(json!({ "type": "earn_state", "user": ADDR })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "earn_state",
+            json!({
+                "pools": [
+                    { "asset": 0u32, "total_supplied": "10000", "total_borrowed": "4000",
+                      "idle": "6000", "shares_total": "9500", "share_value": "1.0526",
+                      "borrow_index": "1.03", "reserve_factor_bps": "1000",
+                      "borrow_rate_bps_annual": "550", "reserve_accrued": "12.5",
+                      "user_shares": "100", "user_value": "105.26" }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let e = client
+        .rest()
+        .info()
+        .earn_state(Some(test_addr()))
+        .await
+        .unwrap();
+    assert_eq!(e.pools.len(), 1);
+    assert_eq!(e.pools[0].user_shares.as_deref(), Some("100"));
+}
+
+/// `earn_state` without a `user` omits the key (exact body = `{type}` only).
+#[tokio::test]
+async fn earn_state_without_user_omits_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(json!({ "type": "earn_state" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "earn_state",
+            json!({
+                "pools": [
+                    { "asset": 0u32, "total_supplied": "1", "total_borrowed": "0",
+                      "idle": "1", "shares_total": "1", "share_value": "1",
+                      "borrow_index": "1", "reserve_factor_bps": "0",
+                      "borrow_rate_bps_annual": "0", "reserve_accrued": "0" }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let e = client.rest().info().earn_state(None).await.unwrap();
+    assert_eq!(e.pools[0].user_shares, None);
+}
+
+/// `pm_summary` posts the `address` key (NOT `user`) — asserted by an EXACT body
+/// match — and decodes the enrolled shape.
+#[tokio::test]
+async fn pm_summary_posts_address_key() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(json!({ "type": "pm_summary", "address": ADDR })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "pm_summary",
+            json!({
+                "address": ADDR, "enrolled": true,
+                "enrolled_at_ms": 1_700_000_000_000u64, "last_computed_block": 8_416_000u64,
+                "pm_maint_margin_cents": "123456", "net_value_cents": "10000000",
+                "concentration_penalty_cents": "250"
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let p = client.rest().info().pm_summary(test_addr()).await.unwrap();
+    assert!(p.enrolled);
+    assert_eq!(p.address, test_addr());
+    assert_eq!(p.pm_maint_margin_cents, "123456");
+}
+
+/// `encode_action` posts `{type, action}` and returns the `action_json` STRING.
+#[tokio::test]
+async fn encode_action_returns_action_json_string() {
+    let action = json!({ "type": "cancel_all_orders", "params": {} });
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_partial_json(json!({
+            "type": "encode_action", "action": action
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "encode_action",
+            json!({ "action_json": "{\"CancelAllOrders\":{}}" }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let blob = client.rest().info().encode_action(&action).await.unwrap();
+    assert_eq!(blob, "{\"CancelAllOrders\":{}}");
 }

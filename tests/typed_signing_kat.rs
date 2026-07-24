@@ -409,9 +409,9 @@ fn optional_absent_typed_kat_vectors_match_pinned_digests() {
 /// string, the `uint8` side / `uint64` numeric encoding, the optional-flatten
 /// (`hasLimitPx` / `hasStpGroup`), the domain, or the envelope would change them.
 ///
-/// `encrypted_order_submit` and `pm_unenroll` are NOT pinned here: they are pure
-/// wire-tag ALIASES that reuse the already-pinned `SubmitEncryptedOrder` /
-/// `UserPortfolioMargin` digests (see (1c) + the sign/recover sweep).
+/// `pm_unenroll` is NOT pinned here: it is a pure wire-tag ALIAS that reuses the
+/// already-pinned `UserPortfolioMargin` digest (see (1c) + the sign/recover
+/// sweep).
 #[test]
 fn w1_micro_typed_kat_vectors_match_pinned_digests() {
     // side 0 = Bid; numeric fields are the raw u64 wire form (NOT decimal-scaled).

@@ -1,5 +1,10 @@
 //! End-to-end MIP-3 deploy demo.
 //!
+//! DEPRECATED LANE: the deploy-submit path (`submit_gas_auction_bid` /
+//! `submit_deploy_action`) is deprecated — the node rejects the opaque deploy
+//! digest at serde (400). MIP-3 deploy actions are operator-injected today. This
+//! example is retained to show the builder / preset shape, not a clearing flow.
+//!
 //! Steps:
 //! 1. Read `MTF_PRIVATE_KEY` and build a wallet.
 //! 2. Bid in the perp-deploy gas auction.
@@ -13,6 +18,8 @@
 //! ```bash
 //! MTF_PRIVATE_KEY=0x... cargo run --example mip3_full_deploy
 //! ```
+
+#![allow(deprecated)] // demonstrates the deprecated operator-injected MIP-3 deploy lane
 
 use std::time::Duration;
 

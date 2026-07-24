@@ -37,7 +37,7 @@ use crate::types::{
         UserPortfolioMargin, UserSetAbstraction,
     },
     chase::{CancelChaseParams, ChaseParams},
-    encrypted::{EncryptedOrderSubmit, SubmitEncryptedOrder},
+    encrypted::SubmitEncryptedOrder,
     fba::FbaSubmit,
     meta_bridge::MbWithdraw,
     order::{
@@ -1235,31 +1235,6 @@ impl<'a> Exchange<'a> {
         .await
     }
 
-    /// Submit a threshold-encrypted order via the `encrypted_order_submit` tag
-    /// under the typed scheme.
-    ///
-    /// The node accepts only the 5-field `SubmitEncryptedOrder` digest, so this
-    /// 3-field type signs `threshold` / `target_block` as `0`; prefer
-    /// [`Exchange::submit_encrypted_order`], which carries both.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn encrypted_order_submit(
-        &self,
-        wallet: &Wallet,
-        params: &EncryptedOrderSubmit,
-    ) -> Result<Value, ClientError> {
-        self.encrypted_order_submit_typed(
-            wallet,
-            params.ciphertext.clone(),
-            params.commitment,
-            0,
-            0,
-            params.reveal_deadline_ms,
-        )
-        .await
-    }
-
     // --- Legacy opaque MIP-3 deploy lane ---
 
     /// Sign + POST a MIP-3 deploy-lane action under the LEGACY opaque
@@ -1274,6 +1249,9 @@ impl<'a> Exchange<'a> {
     /// # Errors
     /// - [`ClientError::Signature`] on signing failure.
     /// - HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[deprecated(
+        note = "operator-injected lane; the node rejects this opaque digest at serde (400). Kept for reference only."
+    )]
     pub async fn submit_deploy_action<R: serde::de::DeserializeOwned>(
         &self,
         wallet: &Wallet,
