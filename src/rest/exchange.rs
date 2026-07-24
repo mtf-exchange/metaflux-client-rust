@@ -1,33 +1,28 @@
 //! `/exchange` — signed write actions.
 //!
-//! Each method takes `&Wallet` and a typed action; the SDK builds an
-//! EIP-712 digest from the action, signs it deterministically, and posts:
-//!
-//! ```json
-//! {
-//!   "action":    { "type": "<action>", ... },
-//!   "nonce":     <unix_ms>,
-//!   "signature": "0x<65-byte-hex>"
-//! }
-//! ```
-//!
-//! The MTF-native gateway recovers the signer from the signature against
-//! the EIP-712 digest, validates the `action.owner`/`action.user`/`action.sender`
-//! field equals the recovered address, and forwards to the node.
+//! Every write action here builds a node-accepted structured [`TypedAction`]
+//! EIP-712 digest and posts the typed envelope `{ action, nonce, signature }`
+//! to the typed-only `/exchange`. The node REJECTS the old opaque
+//! `MetaFluxAction(string action,uint64 nonce)` scheme, so this module carries
+//! NO opaque digest path: the plain convenience methods delegate to their typed
+//! twins in the sibling [`crate::rest::exchange_typed`] module, which own the
+//! structured digest + wire shape.
 //!
 //! ## EIP-712 domain
 //!
-//! Every action shares the same MTF-native EIP-712 domain:
+//! Every typed action shares the MTF-native V1 domain (`name = "MetaFlux"`,
+//! `version = "1"`, `chainId = <chain id>`, `verifyingContract = 0x0`); see
+//! [`crate::wallet::metaflux_domain_separator`].
 //!
-//! ```text
-//!   name             = "MetaFlux"
-//!   version          = "1"
-//!   chain_id         = <chain id>
-//!   verifying_contract = <gateway-fixed; 0x0 in v0>
-//! ```
+//! [`TypedAction`]: crate::wallet::TypedAction
 //!
-//! The per-action struct hash is computed from the action's typed-data
-//! schema (matches the gateway's signed-action decoder).
+//! ## One remaining legacy lane
+//!
+//! [`Exchange::submit_deploy_action`] still signs the legacy opaque
+//! `MetaFluxAction(string action,uint64 nonce)` digest. It is retained ONLY for
+//! the MIP-3 deploy actions (`submit_gas_auction_bid` / `perp_deploy` /
+//! `spot_deploy`), which have NO typed-scheme variant yet. Every STANDARD
+//! trading / account action signs the structured [`TypedAction`] digest.
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -57,7 +52,7 @@ use crate::types::{
     },
     staking::{ClaimRewards, LinkStakingUser, TokenDelegate},
     twap::{TwapCancel, TwapOrder},
-    vault::{CreateVault, VaultDistribute, VaultModify, VaultTransfer, VaultWithdraw},
+    vault::{CreateVault, VaultDistribute, VaultKind, VaultModify, VaultTransfer, VaultWithdraw},
 };
 use crate::wallet::{Address, Eip712, Signature, TypedTradingAction, Wallet};
 
@@ -92,7 +87,8 @@ pub struct Exchange<'a> {
     /// expiry into the signature. Set via [`Exchange::with_expires_after`].
     ///
     /// A non-zero expiry is only admitted once the network activates the field.
-    /// The legacy opaque path ([`Exchange::post_signed`]) ignores this knob.
+    /// The legacy deploy lane ([`Exchange::submit_deploy_action`]) ignores this
+    /// knob.
     pub(crate) expires_after_ms: u64,
 }
 
@@ -110,7 +106,9 @@ impl<'a> Exchange<'a> {
     }
 }
 
-/// Convenience: a signed action ready to POST to `/exchange`.
+/// Envelope for the legacy opaque MIP-3 deploy lane
+/// ([`Exchange::submit_deploy_action`]). The typed path builds its own envelope
+/// in [`crate::rest::exchange_typed`].
 #[derive(Clone, Debug, Serialize)]
 struct SignedEnvelope<'a> {
     action: &'a Value,
@@ -195,8 +193,7 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         hedge: bool,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "set_position_mode", "params": { "hedge": hedge } });
-        self.post_signed(wallet, action).await
+        self.set_position_mode_typed(wallet, hedge).await
     }
 
     /// Submit a spot CLOB order.
@@ -244,13 +241,17 @@ impl<'a> Exchange<'a> {
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[deprecated(
+        note = "node rejects after spot_margin_cross activation (F=8416000); use spot_margin_open / spot_margin_close"
+    )]
+    #[allow(deprecated)]
     pub async fn spot_margin_deposit(
         &self,
         wallet: &Wallet,
         params: &SpotMarginDeposit,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "spot_margin_deposit", "params": params });
-        self.post_signed(wallet, action).await
+        self.spot_margin_deposit_typed(wallet, params.pair, params.amount.clone())
+            .await
     }
 
     /// Withdraw free collateral from a spot-margin account.
@@ -260,13 +261,17 @@ impl<'a> Exchange<'a> {
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[deprecated(
+        note = "node rejects after spot_margin_cross activation (F=8416000); use spot_margin_open / spot_margin_close"
+    )]
+    #[allow(deprecated)]
     pub async fn spot_margin_withdraw(
         &self,
         wallet: &Wallet,
         params: &SpotMarginWithdraw,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "spot_margin_withdraw", "params": params });
-        self.post_signed(wallet, action).await
+        self.spot_margin_withdraw_typed(wallet, params.pair, params.amount.clone())
+            .await
     }
 
     /// Open a leveraged spot position: borrow quote from the pair's Earn pool
@@ -283,8 +288,14 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &SpotMarginOpen,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "spot_margin_open", "params": params });
-        self.post_signed(wallet, action).await
+        self.spot_margin_open_typed(
+            wallet,
+            params.pair,
+            params.size,
+            params.limit_px,
+            params.borrow.clone(),
+        )
+        .await
     }
 
     /// Close a leveraged spot position: IOC-sell the held base, repay principal
@@ -299,8 +310,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &SpotMarginClose,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "spot_margin_close", "params": params });
-        self.post_signed(wallet, action).await
+        self.spot_margin_close_typed(wallet, params.pair, params.limit_px)
+            .await
     }
 
     /// Supply quote into an Earn lending pool for pool shares.
@@ -316,8 +327,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &EarnDeposit,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "earn_deposit", "params": params });
-        self.post_signed(wallet, action).await
+        self.earn_deposit_typed(wallet, params.asset, params.amount.clone())
+            .await
     }
 
     /// Redeem Earn pool shares back to quote.
@@ -333,8 +344,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &EarnWithdraw,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "earn_withdraw", "params": params });
-        self.post_signed(wallet, action).await
+        self.earn_withdraw_typed(wallet, params.asset, params.shares.clone())
+            .await
     }
 
     // ---- order management ----
@@ -564,8 +575,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &CancelAllOrders,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "cancel_all_orders", "params": params });
-        self.post_signed(wallet, action).await
+        self.cancel_all_orders_typed(wallet, params.asset.map(|m| m.0))
+            .await
     }
 
     // ---- SCALE ladder (node-native; fork-gated `scale_order` feature) ----
@@ -787,8 +798,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &UpdateLeverage,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "update_leverage", "params": params });
-        self.post_signed(wallet, action).await
+        self.update_leverage_typed(wallet, params.asset.0, params.leverage, params.is_isolated)
+            .await
     }
 
     /// Add or remove isolated margin on an open position.
@@ -800,8 +811,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &UpdateIsolatedMargin,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "update_isolated_margin", "params": params });
-        self.post_signed(wallet, action).await
+        self.update_isolated_margin_typed(wallet, params.asset.0, params.delta.clone())
+            .await
     }
 
     /// Top up the margin of a strict-isolated-only position.
@@ -813,8 +824,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &TopUpIsolatedOnlyMargin,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "top_up_isolated_only_margin", "params": params });
-        self.post_signed(wallet, action).await
+        self.top_up_isolated_only_margin_typed(wallet, params.asset.0, params.amount.clone())
+            .await
     }
 
     /// Enroll into or out of portfolio margin.
@@ -826,8 +837,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &UserPortfolioMargin,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "user_portfolio_margin", "params": params });
-        self.post_signed(wallet, action).await
+        self.user_portfolio_margin_typed(wallet, params.enroll)
+            .await
     }
 
     /// Enroll the signing account into portfolio margin.
@@ -867,8 +878,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &SetDisplayName,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "set_display_name", "params": params });
-        self.post_signed(wallet, action).await
+        self.set_display_name_typed(wallet, params.display_name.clone())
+            .await
     }
 
     /// Set the account referrer (one-time, immutable once set).
@@ -880,8 +891,7 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &SetReferrer,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "set_referrer", "params": params });
-        self.post_signed(wallet, action).await
+        self.set_referrer_typed(wallet, params.referrer).await
     }
 
     /// Approve an agent wallet to sign on behalf of this account.
@@ -893,8 +903,13 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &ApproveAgent,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "approve_agent", "params": params });
-        self.post_signed(wallet, action).await
+        self.approve_agent_typed(
+            wallet,
+            params.agent,
+            params.name.clone().unwrap_or_default(),
+            params.expires_at_ms.unwrap_or(0),
+        )
+        .await
     }
 
     /// Approve a builder to charge a fee (up to `max_bps`) on this account's
@@ -907,8 +922,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &ApproveBuilderFee,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "approve_builder_fee", "params": params });
-        self.post_signed(wallet, action).await
+        self.approve_builder_fee_typed(wallet, params.builder, params.max_bps)
+            .await
     }
 
     /// Convert the account to an M-of-N multisig.
@@ -920,8 +935,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &ConvertToMultiSigUser,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "convert_to_multi_sig_user", "params": params });
-        self.post_signed(wallet, action).await
+        self.convert_to_multi_sig_user_typed(wallet, params.signers.clone(), params.threshold)
+            .await
     }
 
     /// Set a self-scoped abstraction config value.
@@ -933,8 +948,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &UserSetAbstraction,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "user_set_abstraction", "params": params });
-        self.post_signed(wallet, action).await
+        self.user_set_abstraction_typed(wallet, params.kind, params.value.clone())
+            .await
     }
 
     /// As an approved agent, set an abstraction config value for `params.user`.
@@ -946,8 +961,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &AgentSetAbstraction,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "agent_set_abstraction", "params": params });
-        self.post_signed(wallet, action).await
+        self.agent_set_abstraction_typed(wallet, params.user, params.kind, params.value.clone())
+            .await
     }
 
     /// Pay a priority fee (bps) for block-front placement on an asset.
@@ -959,8 +974,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &PriorityBid,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "priority_bid", "params": params });
-        self.post_signed(wallet, action).await
+        self.priority_bid_typed(wallet, params.asset.0, params.bid_bps)
+            .await
     }
 
     // ---- staking ----
@@ -974,8 +989,14 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &TokenDelegate,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "token_delegate", "params": params });
-        self.post_signed(wallet, action).await
+        self.token_delegate_typed(
+            wallet,
+            params.validator,
+            params.amount.clone(),
+            params.is_undelegate,
+            params.lock_months,
+        )
+        .await
     }
 
     /// Claim accrued staking rewards.
@@ -987,8 +1008,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &ClaimRewards,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "claim_rewards", "params": params });
-        self.post_signed(wallet, action).await
+        self.claim_rewards_typed(wallet, params.validator.unwrap_or(Address::ZERO))
+            .await
     }
 
     /// Alias another account as this account's staking target.
@@ -1000,8 +1021,7 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &LinkStakingUser,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "link_staking_user", "params": params });
-        self.post_signed(wallet, action).await
+        self.link_staking_user_typed(wallet, params.target).await
     }
 
     // ---- encrypted orders ----
@@ -1015,8 +1035,15 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &SubmitEncryptedOrder,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "submit_encrypted_order", "params": params });
-        self.post_signed(wallet, action).await
+        self.submit_encrypted_order_typed(
+            wallet,
+            params.ciphertext.clone(),
+            params.commitment,
+            params.threshold,
+            params.target_block,
+            params.reveal_deadline_ms,
+        )
+        .await
     }
 
     // ---- vaults ----
@@ -1030,8 +1057,14 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &CreateVault,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "create_vault", "params": params });
-        self.post_signed(wallet, action).await
+        // The typed `CreateVault` digest is TOP-LEVEL only: `params.parent` is
+        // not part of the frozen type string and is dropped here.
+        let kind = match params.kind {
+            VaultKind::Metaliquidity => 1u8,
+            VaultKind::User => 0u8,
+        };
+        self.create_vault_typed(wallet, params.name.clone(), params.lock_period_secs, kind)
+            .await
     }
 
     /// Leader moves capital into or out of a vault.
@@ -1043,8 +1076,13 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &VaultTransfer,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "vault_transfer", "params": params });
-        self.post_signed(wallet, action).await
+        self.vault_transfer_typed(
+            wallet,
+            params.vault_id.0,
+            params.deposit,
+            params.amount.clone(),
+        )
+        .await
     }
 
     /// Leader updates vault configuration.
@@ -1056,8 +1094,15 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &VaultModify,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "vault_modify", "params": params });
-        self.post_signed(wallet, action).await
+        // The typed `VaultModify` digest binds only `newName`; the node's frozen
+        // type string carries no lock-period / fee / paused fields, so those are
+        // dropped here.
+        self.vault_modify_typed(
+            wallet,
+            params.vault_id.0,
+            params.new_name.clone().unwrap_or_default(),
+        )
+        .await
     }
 
     /// Follower redeems shares from a vault (subject to the per-vault lock).
@@ -1069,17 +1114,15 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &VaultWithdraw,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "vault_withdraw", "params": params });
-        self.post_signed(wallet, action).await
+        self.vault_withdraw_typed(wallet, params.vault_id.0, params.shares.clone())
+            .await
     }
 
     /// Follower-deposit USD into a vault, minting shares at the current NAV
     /// (`vault_distribute`).
     ///
     /// The amount rides the `pnl` field (a legacy name on the node) as a
-    /// positive decimal string. **Forward-compat:** the node currently returns
-    /// `UnsupportedAction` for this tag on `/exchange` until it bridges the
-    /// `vault_distribute` handler; the SDK emits the byte-correct wire shape.
+    /// positive decimal string, hashed verbatim.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -1088,8 +1131,8 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &VaultDistribute,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "vault_distribute", "params": params });
-        self.post_signed(wallet, action).await
+        self.vault_distribute_typed(wallet, params.vault_id.0, params.pnl.clone())
+            .await
     }
 
     // ---- MetaBridge ----
@@ -1103,65 +1146,101 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &MbWithdraw,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "mb_withdraw", "params": params });
-        self.post_signed(wallet, action).await
+        self.mb_withdraw_typed(
+            wallet,
+            params.chain,
+            params.asset,
+            params.amount,
+            params.dst_addr.clone(),
+        )
+        .await
     }
 
-    // ---- RFQ / FBA / cross-chain / encrypted (forward-compat) ----
+    // ---- RFQ / FBA / encrypted ----
     //
-    // The node recognizes these action tags but currently lowers them to
-    // `UnsupportedAction` on the public `/exchange` path (the real handlers run
-    // on the EVM core-writer path). The SDK emits the byte-correct wire shape
-    // each core param struct expects, so these become live the moment the node
-    // bridges them — no SDK change required. Note the per-action wrapper keys
-    // differ (`rfq` / `accept` / `submit` / `msg` / `encrypted`).
+    // These delegate to their typed twins, which own the node-accepted
+    // `TypedAction` digest and the `{type, params}` wire shape. The node reads
+    // the RFQ / FBA numeric fields as `u64`, so the wider `u128` / `i128` param
+    // structs are range-checked on the way down.
 
-    /// Open an RFQ session as a taker (`rfq_request`). Wrapper key is `rfq`.
+    /// Open an RFQ session as a taker (`rfq_request`) under the typed scheme.
     ///
     /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    /// - [`ClientError::Validation`] if `size` / `limit_px` exceed `u64`.
+    /// - HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn rfq_request(
         &self,
         wallet: &Wallet,
         params: &RfqRequest,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "rfq_request", "rfq": params });
-        self.post_signed(wallet, action).await
+        let size = u64::try_from(params.size)
+            .map_err(|_| ClientError::Validation("rfq size overflows u64".into()))?;
+        let limit_px = params
+            .limit_px
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| ClientError::Validation("rfq limit_px out of u64 range".into()))?;
+        self.rfq_request_typed(
+            wallet,
+            params.market.0,
+            params.side,
+            size,
+            limit_px,
+            params.expiry_ms,
+            params.stp_group,
+        )
+        .await
     }
 
-    /// Cross against a specific resting RFQ quote (`rfq_accept`). Wrapper key is
-    /// `accept`.
+    /// Cross against a specific resting RFQ quote (`rfq_accept`) under the typed
+    /// scheme.
     ///
     /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    /// - [`ClientError::Validation`] if `size` exceeds `u64`.
+    /// - HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn rfq_accept(
         &self,
         wallet: &Wallet,
         params: &RfqAccept,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "rfq_accept", "accept": params });
-        self.post_signed(wallet, action).await
+        let size = u64::try_from(params.size)
+            .map_err(|_| ClientError::Validation("rfq accept size overflows u64".into()))?;
+        self.rfq_accept_typed(wallet, params.rfq_id.0, params.quote_idx, size)
+            .await
     }
 
     /// Submit an order into a market's frequent-batch-auction pool
-    /// (`fba_submit`). Wrapper key is `submit`.
+    /// (`fba_submit`) under the typed scheme.
     ///
     /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    /// - [`ClientError::Validation`] if `size` / `price` exceed `u64`.
+    /// - HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn fba_submit(
         &self,
         wallet: &Wallet,
         params: &FbaSubmit,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "fba_submit", "submit": params });
-        self.post_signed(wallet, action).await
+        let size = u64::try_from(params.size)
+            .map_err(|_| ClientError::Validation("fba size overflows u64".into()))?;
+        let price = u64::try_from(params.price)
+            .map_err(|_| ClientError::Validation("fba price out of u64 range".into()))?;
+        self.fba_submit_typed(
+            wallet,
+            params.market.0,
+            params.side,
+            size,
+            price,
+            params.stp_group,
+        )
+        .await
     }
 
-    /// Submit a threshold-encrypted order via the `encrypted_order_submit` tag.
-    /// Wrapper key is `encrypted`.
+    /// Submit a threshold-encrypted order via the `encrypted_order_submit` tag
+    /// under the typed scheme.
     ///
-    /// Distinct from [`Exchange::submit_encrypted_order`], which targets a
-    /// different (bridged) core handler with a 5-field payload.
+    /// The node accepts only the 5-field `SubmitEncryptedOrder` digest, so this
+    /// 3-field type signs `threshold` / `target_block` as `0`; prefer
+    /// [`Exchange::submit_encrypted_order`], which carries both.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -1170,61 +1249,55 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &EncryptedOrderSubmit,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "encrypted_order_submit", "encrypted": params });
-        self.post_signed(wallet, action).await
+        self.encrypted_order_submit_typed(
+            wallet,
+            params.ciphertext.clone(),
+            params.commitment,
+            0,
+            0,
+            params.reveal_deadline_ms,
+        )
+        .await
     }
 
-    // --- Internals ---
+    // --- Legacy opaque MIP-3 deploy lane ---
 
-    /// Sign + POST an arbitrary action JSON. Public for power users.
+    /// Sign + POST a MIP-3 deploy-lane action under the LEGACY opaque
+    /// `MetaFluxAction(string action,uint64 nonce)` digest.
+    ///
+    /// This is the ONE remaining opaque path. It exists ONLY for the MIP-3
+    /// deploy actions (`submit_gas_auction_bid` / `perp_deploy` / `spot_deploy`),
+    /// which have no typed-scheme variant. Do NOT use it for standard trading /
+    /// account actions — those sign the structured [`crate::wallet::TypedAction`]
+    /// digest through the dedicated methods in this module.
     ///
     /// # Errors
-    /// See [`Exchange::submit_order`].
-    pub async fn post_signed<R: serde::de::DeserializeOwned>(
+    /// - [`ClientError::Signature`] on signing failure.
+    /// - HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn submit_deploy_action<R: serde::de::DeserializeOwned>(
         &self,
         wallet: &Wallet,
         action: Value,
     ) -> Result<R, ClientError> {
-        let (nonce, signature) = sign_action(wallet, &action)?;
+        let nonce = next_nonce();
+        let digest = ActionSignedDigest {
+            action: &action,
+            nonce,
+        };
+        let signature = wallet.sign_eip712(&digest)?.to_hex();
         let envelope = SignedEnvelope {
             action: &action,
             nonce,
             signature,
         };
-        // `/exchange` is the node's MTF-native signed-action front door. The
-        // `{action, nonce, signature}` envelope + EIP-712-over-canonical-JSON
-        // digest match the server's handler byte-for-byte (cross-impl KAT in
-        // this module pins it).
         self.client.post_json("/exchange", &envelope).await
     }
 }
 
-/// Sign an action with a fresh monotonic nonce, returning `(nonce, 0x-hex
-/// signature)`.
-///
-/// This is the one signing primitive shared by the REST `POST /exchange` path
-/// ([`Exchange::post_signed`]) and the WebSocket `post` action path
-/// ([`crate::ws::WsClient::post_action`]). Both recover the signer over the
-/// **compact `serde_json` serialization of the action object**, so a single
-/// helper guarantees the two transports sign byte-identical digests.
-pub(crate) fn sign_action(wallet: &Wallet, action: &Value) -> Result<(u64, String), ClientError> {
-    let nonce = next_nonce();
-    let digest = ActionSignedDigest { action, nonce };
-    let sig = wallet.sign_eip712(&digest)?;
-    Ok((nonce, sig.to_hex()))
-}
-
-/// EIP-712 typed-data hash for an `(action, nonce)` pair.
-///
-/// The MTF-native domain is:
-///
-/// ```text
-///   EIP712Domain(name string, version string, chainId uint256, verifyingContract address)
-///   MetaFluxAction(action string, nonce uint64)  -- action is the canonical-JSON action body
-/// ```
-///
-/// Canonical-JSON = `serde_json::to_string()` with no whitespace. This is
-/// deliberately simple for v0; the gateway's verifier uses the same rule.
+/// Legacy opaque EIP-712 digest for an `(action, nonce)` pair
+/// (`MetaFluxAction(string action,uint64 nonce)` over the canonical-JSON action
+/// body). Used ONLY by [`Exchange::submit_deploy_action`]; the typed path lives
+/// in [`crate::wallet::TypedActionDigest`].
 struct ActionSignedDigest<'a> {
     action: &'a Value,
     nonce: u64,
@@ -1232,48 +1305,29 @@ struct ActionSignedDigest<'a> {
 
 impl Eip712 for ActionSignedDigest<'_> {
     fn domain_separator(&self) -> [u8; 32] {
-        // EIP712Domain typeHash and the encoded domain struct. 5-field form,
-        // byte-for-byte mirroring the server's domain separator.
-        //
-        // typeHash = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)")
-        // domain   = keccak256( typeHash || keccak256(name) || keccak256(version) || chainId || verifyingContract )
-        let name = "MetaFlux";
-        let version = "1";
-        let chain_id: u64 = MTF_CHAIN_ID;
-
         let type_hash = keccak(
             "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
                 .as_bytes(),
         );
-        let name_hash = keccak(name.as_bytes());
-        let version_hash = keccak(version.as_bytes());
-
+        let name_hash = keccak("MetaFlux".as_bytes());
+        let version_hash = keccak("1".as_bytes());
         let mut buf = Vec::with_capacity(32 * 5);
         buf.extend_from_slice(&type_hash);
         buf.extend_from_slice(&name_hash);
         buf.extend_from_slice(&version_hash);
-        // chain_id encoded as 32-byte big-endian uint256
         let mut chain_be = [0u8; 32];
-        chain_be[24..].copy_from_slice(&chain_id.to_be_bytes());
+        chain_be[24..].copy_from_slice(&MTF_CHAIN_ID.to_be_bytes());
         buf.extend_from_slice(&chain_be);
-        // verifyingContract = 20-byte zero address (L1 actions), left-padded to 32.
-        let verifying_contract = [0u8; 20];
-        let mut verifying_padded = [0u8; 32];
-        verifying_padded[12..].copy_from_slice(&verifying_contract);
-        buf.extend_from_slice(&verifying_padded);
+        buf.extend_from_slice(&[0u8; 32]); // verifyingContract = 0x0, left-padded.
         keccak(&buf)
     }
 
     fn struct_hash(&self) -> [u8; 32] {
-        // typeHash = keccak256("MetaFluxAction(string action,uint64 nonce)")
-        // struct   = keccak256( typeHash || keccak256(action_json) || nonce )
         let type_hash = keccak("MetaFluxAction(string action,uint64 nonce)".as_bytes());
         let action_json = serde_json::to_string(self.action).unwrap_or_default();
         let action_hash = keccak(action_json.as_bytes());
-
         let mut nonce_be = [0u8; 32];
         nonce_be[24..].copy_from_slice(&self.nonce.to_be_bytes());
-
         let mut buf = Vec::with_capacity(32 * 3);
         buf.extend_from_slice(&type_hash);
         buf.extend_from_slice(&action_hash);
@@ -1363,13 +1417,13 @@ pub(crate) fn next_nonce() -> u64 {
     }
 }
 
-/// Test-only escape hatch: compute the EIP-712 digest the SDK would sign
-/// for the given action + nonce. Used by the integration tests under
-/// `tests/`. Not part of the stable public API.
+/// Test-only escape hatch: the LEGACY opaque digest for the MIP-3 deploy lane
+/// ([`Exchange::submit_deploy_action`]). Used by the deploy-lane tests under
+/// `tests/`. Not part of the stable public API — standard actions sign the
+/// typed digest (see [`crate::rest::exchange_typed::_typed_digest_for_test`]).
 #[doc(hidden)]
 pub fn _action_digest_for_test(action: &Value, nonce: u64) -> [u8; 32] {
-    let d = ActionSignedDigest { action, nonce };
-    d.to_digest()
+    ActionSignedDigest { action, nonce }.to_digest()
 }
 
 /// Test-only escape hatch: recover the signer address from a digest + 65-byte
@@ -1381,101 +1435,4 @@ pub fn _recover_for_test(
     sig: &Signature,
 ) -> Result<crate::wallet::Address, ClientError> {
     crate::wallet::sign_recover_for_test_only(digest, sig)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn domain_separator_is_deterministic() {
-        let a = ActionSignedDigest {
-            action: &json!({"type": "submit_order"}),
-            nonce: 1,
-        };
-        let b = ActionSignedDigest {
-            action: &json!({"type": "submit_order"}),
-            nonce: 1,
-        };
-        assert_eq!(a.domain_separator(), b.domain_separator());
-    }
-
-    #[test]
-    fn struct_hash_changes_with_nonce() {
-        let a = ActionSignedDigest {
-            action: &json!({"type": "submit_order"}),
-            nonce: 1,
-        };
-        let b = ActionSignedDigest {
-            action: &json!({"type": "submit_order"}),
-            nonce: 2,
-        };
-        assert_ne!(a.struct_hash(), b.struct_hash());
-    }
-
-    #[test]
-    fn struct_hash_changes_with_action() {
-        let a = ActionSignedDigest {
-            action: &json!({"type": "submit_order"}),
-            nonce: 1,
-        };
-        let b = ActionSignedDigest {
-            action: &json!({"type": "cancel_order"}),
-            nonce: 1,
-        };
-        assert_ne!(a.struct_hash(), b.struct_hash());
-    }
-
-    /// Cross-impl known-answer vector. Pins the SDK's EIP-712 domain (now
-    /// 5-field) + digest FORMULA against the server's committed native-action
-    /// KAT value.
-    ///
-    /// We hash the LITERAL action_json bytes via the keccak primitives directly
-    /// — NOT through `ActionSignedDigest`, which serializes a `serde_json::Value`
-    /// and may reorder keys. This isolates the test to the domain + composition,
-    /// the only thing the SDK fix touched.
-    #[test]
-    fn native_action_kat_matches_server() {
-        // EXACT bytes the server hashed in its KAT vector.
-        let action_json = br#"{"type":"submit_order","order":{"owner":"0x000000000000000000000000000000000000beef","market":1,"side":"bid","kind":"limit","size":1000,"limit_px":5000000000000,"tif":"gtc","stp_mode":"cancel_oldest","reduce_only":false}}"#;
-        let nonce: u64 = 1_700_000_000_000;
-
-        // Reuse the SDK's fixed 5-field domain separator.
-        let domain = ActionSignedDigest {
-            action: &json!({}),
-            nonce: 0,
-        }
-        .domain_separator();
-
-        // struct_hash = keccak( typeHash || keccak(action_json) || nonce_be32 )
-        let type_hash = keccak("MetaFluxAction(string action,uint64 nonce)".as_bytes());
-        let action_hash = keccak(action_json);
-        let mut nonce_be = [0u8; 32];
-        nonce_be[24..].copy_from_slice(&nonce.to_be_bytes());
-        let mut sh_buf = Vec::with_capacity(32 * 3);
-        sh_buf.extend_from_slice(&type_hash);
-        sh_buf.extend_from_slice(&action_hash);
-        sh_buf.extend_from_slice(&nonce_be);
-        let struct_hash = keccak(&sh_buf);
-
-        // digest = keccak( 0x19 0x01 || domain || struct_hash )
-        let mut d_buf = Vec::with_capacity(2 + 64);
-        d_buf.extend_from_slice(&[0x19, 0x01]);
-        d_buf.extend_from_slice(&domain);
-        d_buf.extend_from_slice(&struct_hash);
-        let digest = keccak(&d_buf);
-
-        // Server's committed native-action KAT value, recomputed for the MTF
-        // testnet chain id 114514 (MTF_CHAIN_ID):
-        // f7aa1087f79b30fb3f13a190636d32b32720d5984191992d707e2afbca716e0d
-        let expected: [u8; 32] = [
-            0xf7, 0xaa, 0x10, 0x87, 0xf7, 0x9b, 0x30, 0xfb, 0x3f, 0x13, 0xa1, 0x90, 0x63, 0x6d,
-            0x32, 0xb3, 0x27, 0x20, 0xd5, 0x98, 0x41, 0x91, 0x99, 0x2d, 0x70, 0x7e, 0x2a, 0xfb,
-            0xca, 0x71, 0x6e, 0x0d,
-        ];
-        assert_eq!(
-            digest, expected,
-            "SDK digest must equal server KAT f7aa10..6e0d; got {digest:02x?}"
-        );
-    }
 }

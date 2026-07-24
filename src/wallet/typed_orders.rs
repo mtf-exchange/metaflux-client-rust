@@ -110,7 +110,6 @@ fn tif_str(t: TimeInForce) -> &'static str {
     match t {
         TimeInForce::Gtc => "gtc",
         TimeInForce::Ioc => "ioc",
-        TimeInForce::Aon => "aon",
         TimeInForce::Alo => "alo",
     }
 }
@@ -119,7 +118,6 @@ fn stp_str(s: StpMode) -> &'static str {
         StpMode::CancelOldest => "cancel_oldest",
         StpMode::CancelNewest => "cancel_newest",
         StpMode::CancelBoth => "cancel_both",
-        StpMode::Reject => "reject",
     }
 }
 fn position_side_str(p: PositionSide) -> &'static str {

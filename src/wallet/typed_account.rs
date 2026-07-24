@@ -75,6 +75,18 @@ pub(crate) const RFQ_REQUEST_TYPE: &[u8] =
 /// the accepted `quoteIdx`, and the accepted `uint64` `size`.
 pub(crate) const RFQ_ACCEPT_TYPE: &[u8] =
     b"MetaFluxTransaction:RfqAccept(string metafluxChain,uint64 rfqId,uint32 quoteIdx,uint64 size,uint64 nonce)";
+/// `MetaFluxTransaction:RfqQuote` // CONSENSUS-FROZEN. Maker quote onto an open
+/// RFQ session: `price` / `maxSize` are the raw `uint64` wire form
+/// (digest-symmetric with `RfqRequest`, NOT decimal-scaled); the optional
+/// `stpGroup` flattens to a presence `bool` + value (`0` when absent).
+pub(crate) const RFQ_QUOTE_TYPE: &[u8] =
+    b"MetaFluxTransaction:RfqQuote(string metafluxChain,uint64 rfqId,uint64 price,uint64 maxSize,uint64 validUntilMs,bool hasStpGroup,uint64 stpGroup,uint64 nonce)";
+/// `MetaFluxTransaction:RfqQuote` with the params-level `owner` bound (an
+/// approved agent quotes AS a vault) // CONSENSUS-FROZEN. `owner` sits right
+/// after `metafluxChain`, mirroring the RFQ taker pair's `*_WITH_OWNER` shapes;
+/// used ONLY when the wire action carries an `owner` (absent → [`RFQ_QUOTE_TYPE`]).
+pub(crate) const RFQ_QUOTE_WITH_OWNER_TYPE: &[u8] =
+    b"MetaFluxTransaction:RfqQuote(string metafluxChain,address owner,uint64 rfqId,uint64 price,uint64 maxSize,uint64 validUntilMs,bool hasStpGroup,uint64 stpGroup,uint64 nonce)";
 /// `MetaFluxTransaction:FbaSubmit` // CONSENSUS-FROZEN. `side` is a `uint8`;
 /// `size` / `price` are the raw `uint64` wire form; the optional `stpGroup`
 /// flattens to a presence `bool` + value (`0` when absent).
@@ -290,6 +302,57 @@ pub(crate) fn rfq_accept_words(
         enc_u64(rfq_id),
         enc_u32(quote_idx),
         enc_u64(size),
+        enc_u64(nonce),
+    ]
+}
+
+/// `RfqQuote` words. `price` / `maxSize` are the raw `uint64` wire form; the
+/// optional STP group flattens to presence + value.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rfq_quote_words(
+    chain: &str,
+    rfq_id: u64,
+    price: u64,
+    max_size: u64,
+    valid_until_ms: u64,
+    has_stp_group: bool,
+    stp_group: u64,
+    nonce: u64,
+) -> Vec<[u8; 32]> {
+    vec![
+        enc_string(chain),
+        enc_u64(rfq_id),
+        enc_u64(price),
+        enc_u64(max_size),
+        enc_u64(valid_until_ms),
+        enc_bool(has_stp_group),
+        enc_u64(stp_group),
+        enc_u64(nonce),
+    ]
+}
+
+/// `RfqQuote` words with the params-level `owner` bound, after `metafluxChain`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rfq_quote_words_with_owner(
+    chain: &str,
+    owner: &crate::wallet::Address,
+    rfq_id: u64,
+    price: u64,
+    max_size: u64,
+    valid_until_ms: u64,
+    has_stp_group: bool,
+    stp_group: u64,
+    nonce: u64,
+) -> Vec<[u8; 32]> {
+    vec![
+        enc_string(chain),
+        enc_addr(owner),
+        enc_u64(rfq_id),
+        enc_u64(price),
+        enc_u64(max_size),
+        enc_u64(valid_until_ms),
+        enc_bool(has_stp_group),
+        enc_u64(stp_group),
         enc_u64(nonce),
     ]
 }

@@ -386,6 +386,27 @@ impl WsClient {
         self.subscribe(Subscription::ExplorerTxs).await
     }
 
+    /// Subscribe to a user's resting-order set. Every frame is a full snapshot
+    /// of the account's current open orders.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_open_orders(
+        &self,
+        user: crate::wallet::Address,
+    ) -> Result<(), ClientError> {
+        self.subscribe(Subscription::OpenOrders { user }).await
+    }
+
+    /// Subscribe to the global per-market dynamic-state tape (coinless /
+    /// userless): an on-subscribe snapshot, then per-commit changed-row deltas.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_markets(&self) -> Result<(), ClientError> {
+        self.subscribe(Subscription::Markets).await
+    }
+
     /// Receive inbound channel frames.
     ///
     /// Each call returns a fresh [`broadcast::Receiver`] so multiple consumers
@@ -397,27 +418,6 @@ impl WsClient {
     }
 
     // ---- `post` request/response (HL `post` method) ----
-
-    /// Issue a signed exchange action over the WebSocket `post` channel,
-    /// returning the node's action response payload.
-    ///
-    /// This is the WS analogue of [`crate::rest::exchange::Exchange::post_signed`]: the
-    /// action is signed with the SAME EIP-712 digest (recovered over the
-    /// compact JSON of the action object), wrapped as
-    /// `{"method":"post","id":N,"request":{"type":"action","payload":{signature,nonce,action}}}`,
-    /// and sent over the existing connection. The returned `Value` is the
-    /// `payload` of the node's `action` response (e.g. `{"accepted":true,…}`);
-    /// a malformed-request rejection surfaces as [`ClientError::WebSocket`].
-    ///
-    /// # Errors
-    /// - [`ClientError::Signature`] on signing failure.
-    /// - [`ClientError::WebSocket`] if the socket is down, the post times out,
-    ///   or the node returns a post-level error frame.
-    pub async fn post_action(&self, wallet: &Wallet, action: Value) -> Result<Value, ClientError> {
-        let (nonce, signature) = crate::rest::exchange::sign_action(wallet, &action)?;
-        let payload = json!({ "signature": signature, "nonce": nonce, "action": action });
-        self.post_request("action", payload).await
-    }
 
     /// Issue a TRADING action (order / cancel / …) over the WS `post` channel,
     /// signed under the typed scheme. The 12 trading actions migrated to the
@@ -458,15 +458,15 @@ impl WsClient {
     /// Submit a limit / market / trigger order over the WS `post` channel,
     /// decoding the typed [`OrderResponse`].
     ///
-    /// Convenience wrapper over [`Self::post_action`] mirroring
-    /// [`crate::rest::exchange::Exchange::submit_order`]. The order's `owner` MUST equal
-    /// the wallet address.
+    /// Signs the SAME typed EIP-712 digest as REST
+    /// [`crate::rest::exchange::Exchange::submit_order`] and posts it over the WS
+    /// `post` lane. The order's `owner` MUST equal the wallet address.
     ///
     /// # Errors
     /// - [`ClientError::Validation`] if `order.owner != wallet.address()`.
     /// - [`ClientError::Decode`] if the response payload is not an
     ///   [`OrderResponse`].
-    /// - WebSocket / signature errors per [`Self::post_action`].
+    /// - WebSocket / signature errors per the WS `post` path.
     pub async fn submit_order(
         &self,
         wallet: &Wallet,
@@ -491,12 +491,13 @@ impl WsClient {
 
     /// Cancel an order over the WS `post` channel.
     ///
-    /// Convenience wrapper over [`Self::post_action`] mirroring
-    /// [`crate::rest::exchange::Exchange::cancel_order`].
+    /// Signs the SAME typed EIP-712 digest as REST
+    /// [`crate::rest::exchange::Exchange::cancel_order`] and posts it over the WS
+    /// `post` lane.
     ///
     /// # Errors
     /// - [`ClientError::Validation`] if `cancel.owner != wallet.address()`.
-    /// - WebSocket / signature errors per [`Self::post_action`].
+    /// - WebSocket / signature errors per the WS `post` path.
     pub async fn cancel_order(
         &self,
         wallet: &Wallet,

@@ -463,6 +463,88 @@ fn w1_micro_typed_kat_vectors_match_pinned_digests() {
     );
 }
 
+/// (1f) The P1 additions (`vault_distribute` / `claim_builder_rewards` /
+/// `claim_referral_rewards` / `rfq_quote` owner-less + with-owner) must reproduce
+/// the node's frozen contract digests byte-for-byte. Inputs mirror the node's
+/// `all_actions()` KAT entries (chain id 114514 / `"Testnet"`); `owner` = the
+/// all-`0xE4` address, exactly as the node's `RfqQuoteWithOwner` vector.
+#[test]
+fn p1_typed_kat_vectors_match_pinned_digests() {
+    let vault_distribute = TypedAction::VaultDistribute {
+        metaflux_chain: "Testnet".into(),
+        vault_id: 42,
+        pnl: "250.75".into(),
+        nonce: 18,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&vault_distribute)),
+        "a51d392ef7a24aef8600eaa3e31ff67b32f9c35ed3383045c33f330b605f3939",
+        "VaultDistribute digest drift vs node"
+    );
+
+    let claim_builder = TypedAction::ClaimBuilderRewards {
+        metaflux_chain: "Testnet".into(),
+        nonce: 31,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&claim_builder)),
+        "af77c478f442d240a28321177569a43a3300cd890e123bc0e9c677117d48655e",
+        "ClaimBuilderRewards digest drift vs node"
+    );
+
+    let claim_referral = TypedAction::ClaimReferralRewards {
+        metaflux_chain: "Testnet".into(),
+        nonce: 32,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&claim_referral)),
+        "d451acc374db4aa01a301690ccf847c96cdec0c37cb7fbbac6c4890b9ca3687e",
+        "ClaimReferralRewards digest drift vs node"
+    );
+
+    // Owner-less RFQ maker quote.
+    let rfq_quote = TypedAction::RfqQuote {
+        metaflux_chain: "Testnet".into(),
+        owner: None,
+        rfq_id: 9,
+        price: 105,
+        max_size: 500,
+        valid_until_ms: 9_000,
+        has_stp_group: false,
+        stp_group: 0,
+        nonce: 54,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&rfq_quote)),
+        "86ea54e354da6e4626aeaf4001a27bee86793e4fde366d0cfa8662ace831ee25",
+        "RfqQuote (owner-less) digest drift vs node"
+    );
+
+    // Owner-bound RFQ maker quote (agent quotes AS a vault).
+    let rfq_quote_owner = TypedAction::RfqQuote {
+        metaflux_chain: "Testnet".into(),
+        owner: Some(addr(0xE4)),
+        rfq_id: 9,
+        price: 105,
+        max_size: 500,
+        valid_until_ms: 9_000,
+        has_stp_group: false,
+        stp_group: 0,
+        nonce: 54,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&rfq_quote_owner)),
+        "6583f5d725c522a8a0adbec966da23784dff48c90be3835086e0a4f070179bed",
+        "RfqQuoteWithOwner digest drift vs node"
+    );
+    // The owner word must actually change the digest.
+    assert_ne!(
+        _typed_digest_for_test(&rfq_quote),
+        _typed_digest_for_test(&rfq_quote_owner),
+        "binding owner must change the RfqQuote digest"
+    );
+}
+
 /// (2) Every typed action signs to a 65-byte `r||s||v` that recovers the
 /// signing wallet — proving the SDK's digest + signature are accepted by the
 /// node's recovery contract across the whole typed surface.
@@ -752,6 +834,42 @@ fn every_typed_action_signs_and_recovers() {
             stp_group: 5,
             nonce: 43,
         },
+        TypedAction::VaultDistribute {
+            metaflux_chain: chain.clone(),
+            vault_id: 42,
+            pnl: "250.75".into(),
+            nonce: 45,
+        },
+        TypedAction::ClaimBuilderRewards {
+            metaflux_chain: chain.clone(),
+            nonce: 46,
+        },
+        TypedAction::ClaimReferralRewards {
+            metaflux_chain: chain.clone(),
+            nonce: 47,
+        },
+        TypedAction::RfqQuote {
+            metaflux_chain: chain.clone(),
+            owner: None,
+            rfq_id: 9,
+            price: 105,
+            max_size: 500,
+            valid_until_ms: 9_000,
+            has_stp_group: false,
+            stp_group: 0,
+            nonce: 48,
+        },
+        TypedAction::RfqQuote {
+            metaflux_chain: chain.clone(),
+            owner: Some(addr(0xE4)),
+            rfq_id: 9,
+            price: 105,
+            max_size: 500,
+            valid_until_ms: 9_000,
+            has_stp_group: false,
+            stp_group: 0,
+            nonce: 49,
+        },
         TypedAction::MultiSig {
             metaflux_chain: chain,
             user: addr(0x22),
@@ -760,7 +878,7 @@ fn every_typed_action_signs_and_recovers() {
             nonce: 44,
         },
     ];
-    assert_eq!(actions.len(), 42, "all 42 reachable typed actions covered");
+    assert_eq!(actions.len(), 47, "all 47 reachable typed actions covered");
 
     for action in &actions {
         let digest = _typed_digest_for_test(action);

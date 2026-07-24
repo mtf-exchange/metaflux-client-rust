@@ -189,6 +189,12 @@ const AGENT_SET_ABSTRACTION_TYPE: &[u8] =
     b"MetaFluxTransaction:AgentSetAbstraction(string metafluxChain,address user,uint8 kind,string value,uint64 nonce)";
 const MB_WITHDRAW_TYPE: &[u8] =
     b"MetaFluxTransaction:MbWithdraw(string metafluxChain,uint8 chain,uint32 asset,uint64 amount,string dstAddr,uint64 nonce)";
+const VAULT_DISTRIBUTE_TYPE: &[u8] =
+    b"MetaFluxTransaction:VaultDistribute(string metafluxChain,uint64 vaultId,string pnl,uint64 nonce)";
+const CLAIM_BUILDER_REWARDS_TYPE: &[u8] =
+    b"MetaFluxTransaction:ClaimBuilderRewards(string metafluxChain,uint64 nonce)";
+const CLAIM_REFERRAL_REWARDS_TYPE: &[u8] =
+    b"MetaFluxTransaction:ClaimReferralRewards(string metafluxChain,uint64 nonce)";
 
 // ===== TypedAction =====
 
@@ -474,6 +480,39 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `VaultDistribute(string metafluxChain,uint64 vaultId,string pnl,uint64 nonce)`
+    ///
+    /// Follower deposit into a vault (mints shares at the current NAV). The
+    /// deposit amount rides the `pnl` field (a legacy name on the node) as a
+    /// positive canonical decimal string, hashed VERBATIM.
+    VaultDistribute {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Vault id.
+        vault_id: u64,
+        /// Deposit amount as a canonical decimal string (node field name `pnl`).
+        pnl: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `ClaimBuilderRewards(string metafluxChain,uint64 nonce)`
+    ///
+    /// Drain the sender's accrued builder-code fee credit. No params.
+    ClaimBuilderRewards {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `ClaimReferralRewards(string metafluxChain,uint64 nonce)`
+    ///
+    /// Drain the sender's accrued referrer fee credit. No params.
+    ClaimReferralRewards {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
     /// `SpotMarginDeposit(string metafluxChain,uint32 pair,string amount,uint64 nonce)`
     SpotMarginDeposit {
         /// Chain tag.
@@ -750,6 +789,34 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `RfqQuote(string metafluxChain,uint64 rfqId,uint64 price,uint64 maxSize,uint64 validUntilMs,bool hasStpGroup,uint64 stpGroup,uint64 nonce)`
+    /// (owner-less) or the `*_WITH_OWNER` shape when an approved agent quotes AS a
+    /// vault — the owner binds the `entry.maker` identity, so it IS signed.
+    ///
+    /// Maker quote onto an open RFQ session. `price` / `max_size` are the raw
+    /// `uint64` wire form (the order path's convention, NOT decimal-scaled); the
+    /// optional `stp_group` flattens to a presence `bool` + value (`0` when absent).
+    RfqQuote {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Params-level owner the agent quotes for. `None` = self / legacy →
+        /// owner-less digest. `Some` binds the maker identity into the digest.
+        owner: Option<Address>,
+        /// Parent RFQ session id.
+        rfq_id: u64,
+        /// Maker's quoted price (the `u64` 1e8-plane wire form).
+        price: u64,
+        /// Maximum size the maker will fill (the `u64` wire form).
+        max_size: u64,
+        /// Quote's own expiry (ms; `<= request.expiry_ms`).
+        valid_until_ms: u64,
+        /// Whether an STP group is present.
+        has_stp_group: bool,
+        /// STP group id (`0` when absent).
+        stp_group: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
     /// `FbaSubmit(string metafluxChain,uint32 market,uint8 side,uint64 size,uint64 price,bool hasStpGroup,uint64 stpGroup,uint64 nonce)`
     ///
     /// Sender-authorized submit into a market's frequent-batch-auction pool.
@@ -827,6 +894,11 @@ impl TypedAction {
             TypedAction::RfqRequest { .. } => account::RFQ_REQUEST_TYPE,
             TypedAction::RfqAccept { .. } => account::RFQ_ACCEPT_TYPE,
             TypedAction::FbaSubmit { .. } => account::FBA_SUBMIT_TYPE,
+            TypedAction::VaultDistribute { .. } => VAULT_DISTRIBUTE_TYPE,
+            TypedAction::ClaimBuilderRewards { .. } => CLAIM_BUILDER_REWARDS_TYPE,
+            TypedAction::ClaimReferralRewards { .. } => CLAIM_REFERRAL_REWARDS_TYPE,
+            TypedAction::RfqQuote { owner: None, .. } => account::RFQ_QUOTE_TYPE,
+            TypedAction::RfqQuote { owner: Some(_), .. } => account::RFQ_QUOTE_WITH_OWNER_TYPE,
         }
     }
 
@@ -1346,6 +1418,58 @@ impl TypedAction {
                 *stp_group,
                 *nonce,
             ),
+            TypedAction::VaultDistribute {
+                metaflux_chain,
+                vault_id,
+                pnl,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u64(*vault_id),
+                enc_string(pnl),
+                enc_u64(*nonce),
+            ],
+            TypedAction::ClaimBuilderRewards {
+                metaflux_chain,
+                nonce,
+            } => vec![enc_string(metaflux_chain), enc_u64(*nonce)],
+            TypedAction::ClaimReferralRewards {
+                metaflux_chain,
+                nonce,
+            } => vec![enc_string(metaflux_chain), enc_u64(*nonce)],
+            TypedAction::RfqQuote {
+                metaflux_chain,
+                owner,
+                rfq_id,
+                price,
+                max_size,
+                valid_until_ms,
+                has_stp_group,
+                stp_group,
+                nonce,
+            } => match owner {
+                Some(o) => account::rfq_quote_words_with_owner(
+                    metaflux_chain,
+                    o,
+                    *rfq_id,
+                    *price,
+                    *max_size,
+                    *valid_until_ms,
+                    *has_stp_group,
+                    *stp_group,
+                    *nonce,
+                ),
+                None => account::rfq_quote_words(
+                    metaflux_chain,
+                    *rfq_id,
+                    *price,
+                    *max_size,
+                    *valid_until_ms,
+                    *has_stp_group,
+                    *stp_group,
+                    *nonce,
+                ),
+            },
         }
     }
 

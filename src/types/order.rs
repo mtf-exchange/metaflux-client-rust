@@ -61,8 +61,6 @@ pub enum TimeInForce {
     Gtc,
     /// Immediate-or-cancel — match what we can, cancel the remainder.
     Ioc,
-    /// All-or-none — match in full or cancel.
-    Aon,
     /// Post-only / "ALO" — reject if would cross (queue jump prevention).
     Alo,
 }
@@ -84,7 +82,8 @@ pub enum PositionSide {
     Short,
 }
 
-/// Self-trade prevention mode (`CancelOldest` is the default).
+/// Self-trade prevention mode. The node's own default is `CancelNewest`; the
+/// SDK order builders set `CancelOldest` explicitly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StpMode {
@@ -94,8 +93,6 @@ pub enum StpMode {
     CancelNewest,
     /// Cancel both sides.
     CancelBoth,
-    /// Reject the new order (no cancellations).
-    Reject,
 }
 
 /// A single order submission.
@@ -507,7 +504,6 @@ mod tests {
         for (tif, expected) in [
             (TimeInForce::Gtc, "\"gtc\""),
             (TimeInForce::Ioc, "\"ioc\""),
-            (TimeInForce::Aon, "\"aon\""),
             (TimeInForce::Alo, "\"alo\""),
         ] {
             assert_eq!(serde_json::to_string(&tif).unwrap(), expected);
@@ -827,12 +823,7 @@ mod tests {
     fn limit_order_tif_is_untouched() {
         // Limit orders keep whatever tif the caller chose — coercion is
         // Market-only.
-        for tif in [
-            TimeInForce::Gtc,
-            TimeInForce::Ioc,
-            TimeInForce::Aon,
-            TimeInForce::Alo,
-        ] {
+        for tif in [TimeInForce::Gtc, TimeInForce::Ioc, TimeInForce::Alo] {
             let o = Order {
                 kind: OrderKind::Limit,
                 tif,

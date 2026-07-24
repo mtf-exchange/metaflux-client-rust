@@ -657,6 +657,9 @@ impl<'a> Exchange<'a> {
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[deprecated(
+        note = "node rejects after spot_margin_cross activation (F=8416000); use spot_margin_open / spot_margin_close"
+    )]
     pub async fn spot_margin_deposit_typed(
         &self,
         wallet: &Wallet,
@@ -684,6 +687,9 @@ impl<'a> Exchange<'a> {
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[deprecated(
+        note = "node rejects after spot_margin_cross activation (F=8416000); use spot_margin_open / spot_margin_close"
+    )]
     pub async fn spot_margin_withdraw_typed(
         &self,
         wallet: &Wallet,
@@ -1389,6 +1395,167 @@ impl<'a> Exchange<'a> {
                 "stp_group": stp_group,
             });
             (action, "fba_submit", params)
+        })
+        .await
+    }
+
+    /// Follower-deposit USD into a vault under the typed scheme
+    /// (`vault_distribute`).
+    ///
+    /// The deposit amount rides the node's legacy `pnl` field as a positive
+    /// canonical decimal string, hashed verbatim; the posted string MUST equal
+    /// the signed string.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn vault_distribute_typed(
+        &self,
+        wallet: &Wallet,
+        vault_id: u64,
+        pnl: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let pnl = pnl.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::VaultDistribute {
+                metaflux_chain: chain,
+                vault_id,
+                pnl: pnl.clone(),
+                nonce,
+            };
+            let params = json!({ "vault_id": vault_id, "pnl": pnl });
+            (action, "vault_distribute", params)
+        })
+        .await
+    }
+
+    /// Post a maker quote onto an open RFQ session under the typed scheme
+    /// (`rfq_quote`).
+    ///
+    /// `price` / `max_size` are the raw `u64` wire form (the order path's
+    /// convention, NOT decimal-scaled). `stp_group` is optional (absent →
+    /// presence `false` + `0` in the digest, `null` on the wire). For an
+    /// approved agent quoting AS a vault, use [`Self::rfq_quote_as`].
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn rfq_quote_typed(
+        &self,
+        wallet: &Wallet,
+        rfq_id: u64,
+        price: u64,
+        max_size: u64,
+        valid_until_ms: u64,
+        stp_group: Option<u64>,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::RfqQuote {
+                metaflux_chain: chain,
+                owner: None,
+                rfq_id,
+                price,
+                max_size,
+                valid_until_ms,
+                has_stp_group: stp_group.is_some(),
+                stp_group: stp_group.unwrap_or(0),
+                nonce,
+            };
+            let params = json!({
+                "rfq_id": rfq_id,
+                "price": price,
+                "max_size": max_size,
+                "valid_until_ms": valid_until_ms,
+                "stp_group": stp_group,
+            });
+            (action, "rfq_quote", params)
+        })
+        .await
+    }
+
+    /// As an approved agent, post a maker RFQ quote AS `owner` (a vault) under
+    /// the typed scheme — the owner-bound counterpart of [`Self::rfq_quote_typed`].
+    ///
+    /// The signed digest binds `owner` right after `metafluxChain` (selecting the
+    /// `RfqQuote` `*_WITH_OWNER` type string) — the handler captures
+    /// `entry.maker`, so which account the quote is made as IS signed. The POST
+    /// carries a params-level `owner` (`0x`-hex).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn rfq_quote_as(
+        &self,
+        wallet: &Wallet,
+        owner: crate::wallet::Address,
+        rfq_id: u64,
+        price: u64,
+        max_size: u64,
+        valid_until_ms: u64,
+        stp_group: Option<u64>,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::RfqQuote {
+                metaflux_chain: chain,
+                owner: Some(owner),
+                rfq_id,
+                price,
+                max_size,
+                valid_until_ms,
+                has_stp_group: stp_group.is_some(),
+                stp_group: stp_group.unwrap_or(0),
+                nonce,
+            };
+            let mut params = json!({
+                "rfq_id": rfq_id,
+                "price": price,
+                "max_size": max_size,
+                "valid_until_ms": valid_until_ms,
+                "stp_group": stp_group,
+            });
+            // The agent-resolved owner rides as a params-level `0x`-hex field.
+            params["owner"] = json!(owner);
+            (action, "rfq_quote", params)
+        })
+        .await
+    }
+
+    /// Drain the sender's accrued builder-code fee credit under the typed scheme
+    /// (`claim_builder_rewards`). No params.
+    ///
+    /// The node variant carries a required (empty) `params` struct, so the wire
+    /// body is `{"type":"claim_builder_rewards","params":{}}`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn claim_builder_rewards_typed(&self, wallet: &Wallet) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::ClaimBuilderRewards {
+                metaflux_chain: chain,
+                nonce,
+            };
+            (action, "claim_builder_rewards", json!({}))
+        })
+        .await
+    }
+
+    /// Drain the sender's accrued referrer fee credit under the typed scheme
+    /// (`claim_referral_rewards`). No params.
+    ///
+    /// The node variant carries a required (empty) `params` struct, so the wire
+    /// body is `{"type":"claim_referral_rewards","params":{}}`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn claim_referral_rewards_typed(
+        &self,
+        wallet: &Wallet,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::ClaimReferralRewards {
+                metaflux_chain: chain,
+                nonce,
+            };
+            (action, "claim_referral_rewards", json!({}))
         })
         .await
     }

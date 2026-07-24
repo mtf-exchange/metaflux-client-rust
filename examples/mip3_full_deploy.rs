@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let resp: serde_json::Value = client
             .rest()
             .exchange()
-            .post_signed(&wallet, action.to_json())
+            .submit_deploy_action(&wallet, action.to_json())
             .await?;
         println!(
             "  [{}/{}] {} -> {}",

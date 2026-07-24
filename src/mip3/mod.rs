@@ -34,7 +34,7 @@
 //!     .with_asset_name("BANANA-PERP")
 //!     .with_asset_symbol("BANANA");
 //! for action in builder.deploy_sequence() {
-//!     client.rest().exchange().post_signed::<serde_json::Value>(&wallet, action.to_json()).await?;
+//!     client.rest().exchange().submit_deploy_action::<serde_json::Value>(&wallet, action.to_json()).await?;
 //! }
 //! # Ok(()) }
 //! ```

@@ -11,7 +11,6 @@ use metaflux_client::{
     },
     wallet::Wallet,
 };
-use serde_json::json;
 
 fn order(owner: metaflux_client::wallet::Address, side: Side, px: u64) -> Order {
     Order {
@@ -40,19 +39,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new("http://127.0.0.1:8080")?;
 
     let ask = order(a.address(), Side::Ask, 6_200_000_000_000);
-    let ra: serde_json::Value = client
-        .exchange()
-        .post_signed(&a, json!({ "type": "submit_order", "order": &ask }))
-        .await?;
-    println!("A-ask raw: {ra}");
+    let ra = client.exchange().submit_order(&a, &ask).await?;
+    println!("A-ask raw: {ra:?}");
 
     tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
 
     let bid = order(b.address(), Side::Bid, 6_250_000_000_000);
-    let rb: serde_json::Value = client
-        .exchange()
-        .post_signed(&b, json!({ "type": "submit_order", "order": &bid }))
-        .await?;
-    println!("B-bid raw: {rb}");
+    let rb = client.exchange().submit_order(&b, &bid).await?;
+    println!("B-bid raw: {rb:?}");
     Ok(())
 }

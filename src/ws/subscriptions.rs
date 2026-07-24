@@ -152,6 +152,17 @@ pub enum Subscription {
     /// Global stream of committed explorer transaction rows. Each row carries a
     /// `hash` (the 0x action hash; empty for systemic transactions).
     ExplorerTxs,
+    /// Per-account resting-order set (MTF-native). EVERY frame is a FULL
+    /// snapshot of the account's current open orders, re-emitted on any
+    /// resting-set mutation.
+    OpenOrders {
+        /// User `0x` address.
+        user: Address,
+    },
+    /// GLOBAL per-market dynamic-state tape (MTF-native). Coinless / userless
+    /// like `all_mids`: an on-subscribe full snapshot, then per-commit
+    /// changed-row deltas.
+    Markets,
 }
 
 /// Typed channel frame (server -> client).
@@ -216,6 +227,10 @@ pub enum WsMessage {
     /// Committed explorer transaction rows (each row carries a 0x action `hash`,
     /// empty for systemic transactions).
     ExplorerTxs(serde_json::Value),
+    /// Per-account resting-order snapshot frame.
+    OpenOrders(serde_json::Value),
+    /// Global per-market dynamic-state tape frame.
+    Markets(serde_json::Value),
     /// Pong reply to our heartbeat — a bare `{"channel":"pong"}` with no `data`.
     Pong,
     /// Any channel the SDK doesn't yet decode — carries no typed payload.

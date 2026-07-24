@@ -9,7 +9,7 @@
 
 use metaflux_client::{
     Client,
-    rest::exchange::{_action_digest_for_test, _recover_for_test, MTF_CHAIN_ID},
+    rest::exchange::{_recover_for_test, MTF_CHAIN_ID},
     rest::exchange_typed::{_typed_digest_for_test, _typed_trade_digest_for_test},
     types::{
         Cloid, MarketId, OrderId,
@@ -271,10 +271,18 @@ async fn spot_margin_open_posts_signed_sender_authorized_envelope() {
         "sender-authorized: no owner field"
     );
 
-    // The signature recovers to the wallet (the actor is the signer).
+    // The redirect signs the TYPED SpotMarginOpen digest, recovering the wallet.
     let nonce = body["nonce"].as_u64().unwrap();
     let sig_hex = body["signature"].as_str().unwrap();
-    let digest = _action_digest_for_test(&action, nonce);
+    let reconstructed = TypedAction::SpotMarginOpen {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        pair: 200,
+        size: 200,
+        limit_px: 200_000_000,
+        borrow: "400".into(),
+        nonce,
+    };
+    let digest = _typed_digest_for_test(&reconstructed);
     let sig = decode_sig(sig_hex);
     let recovered = _recover_for_test(&digest, &sig).expect("recover");
     assert_eq!(recovered, wallet.address());
@@ -313,7 +321,13 @@ async fn earn_withdraw_keeps_fractional_shares_as_string() {
     );
 
     let nonce = body["nonce"].as_u64().unwrap();
-    let digest = _action_digest_for_test(&action, nonce);
+    let reconstructed = TypedAction::EarnWithdraw {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        asset: 100,
+        shares: "1234.5".into(),
+        nonce,
+    };
+    let digest = _typed_digest_for_test(&reconstructed);
     let sig = decode_sig(body["signature"].as_str().unwrap());
     let recovered = _recover_for_test(&digest, &sig).expect("recover");
     assert_eq!(recovered, wallet.address());
@@ -359,7 +373,14 @@ async fn update_leverage_posts_sender_authorized_envelope() {
     );
 
     let nonce = body["nonce"].as_u64().unwrap();
-    let digest = _action_digest_for_test(&action, nonce);
+    let reconstructed = TypedAction::UpdateLeverage {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        asset: 2,
+        leverage: 10,
+        is_isolated: false,
+        nonce,
+    };
+    let digest = _typed_digest_for_test(&reconstructed);
     let sig = decode_sig(body["signature"].as_str().unwrap());
     assert_eq!(_recover_for_test(&digest, &sig).unwrap(), wallet.address());
 }
@@ -403,7 +424,14 @@ async fn create_vault_posts_signed_params_envelope() {
     );
 
     let nonce = body["nonce"].as_u64().unwrap();
-    let digest = _action_digest_for_test(&action, nonce);
+    let reconstructed = TypedAction::CreateVault {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        name: "v".into(),
+        lock_period_secs: 345_600,
+        kind: 0,
+        nonce,
+    };
+    let digest = _typed_digest_for_test(&reconstructed);
     let sig = decode_sig(body["signature"].as_str().unwrap());
     assert_eq!(_recover_for_test(&digest, &sig).unwrap(), wallet.address());
 }
@@ -835,6 +863,55 @@ async fn cancel_chase_as_carries_owner_and_signs_owner_form() {
         owner,
         &agent,
         TypedTradingAction::CancelChase(&params),
+    );
+}
+
+/// Redirect equivalence: a redirected plain method emits the SAME wire `action`
+/// object (`type` + `params`) as its typed twin. The nonce / signature differ
+/// per call, so this compares the nonce-independent `action` object.
+#[tokio::test]
+async fn redirect_emits_same_action_as_typed_twin() {
+    let (client, captor, wallet) = capturing_exchange().await;
+
+    // update_leverage (plain, `&UpdateLeverage`) vs update_leverage_typed.
+    let params = UpdateLeverage {
+        asset: MarketId(2),
+        leverage: 10,
+        is_isolated: true,
+    };
+    let _: Value = client
+        .exchange()
+        .update_leverage(&wallet, &params)
+        .await
+        .unwrap();
+    let plain = captor.last.lock().await.clone().unwrap()["action"].clone();
+    let _: Value = client
+        .exchange()
+        .update_leverage_typed(&wallet, 2, 10, true)
+        .await
+        .unwrap();
+    let typed = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(
+        plain, typed,
+        "update_leverage redirect must emit the typed twin's action"
+    );
+
+    // earn_withdraw (plain, `&EarnWithdraw`) vs earn_withdraw_typed.
+    let wd = EarnWithdraw {
+        asset: 100,
+        shares: "1234.5".into(),
+    };
+    let _: Value = client.exchange().earn_withdraw(&wallet, &wd).await.unwrap();
+    let plain = captor.last.lock().await.clone().unwrap()["action"].clone();
+    let _: Value = client
+        .exchange()
+        .earn_withdraw_typed(&wallet, 100, "1234.5")
+        .await
+        .unwrap();
+    let typed = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(
+        plain, typed,
+        "earn_withdraw redirect must emit the typed twin's action"
     );
 }
 

@@ -100,7 +100,10 @@ impl Client {
             "kind": bid.kind,
             "bid_amount_usdc_cents": bid.bid_amount_usdc_cents,
         });
-        self.rest().exchange().post_signed(wallet, action).await
+        self.rest()
+            .exchange()
+            .submit_deploy_action(wallet, action)
+            .await
     }
 
     /// Query the L1 for `address`'s outstanding deploy credits.

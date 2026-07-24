@@ -398,7 +398,7 @@ async fn handle_perp(
         let resp: serde_json::Value = client
             .rest()
             .exchange()
-            .post_signed(&wallet, action.to_json())
+            .submit_deploy_action(&wallet, action.to_json())
             .await?;
         if cli.json {
             println!(
@@ -454,7 +454,7 @@ async fn handle_spot(
         let resp: serde_json::Value = client
             .rest()
             .exchange()
-            .post_signed(&wallet, action.to_json())
+            .submit_deploy_action(&wallet, action.to_json())
             .await?;
         if cli.json {
             println!(
