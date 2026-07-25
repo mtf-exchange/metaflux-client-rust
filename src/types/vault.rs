@@ -1,40 +1,46 @@
 //! User-vault types.
 //!
-//! The `vault_state` endpoint returns one [`VaultState`] per vault id. Each
+//! The `vault_state` endpoint returns one [`VaultState`] per vault ADDRESS. Each
 //! vault has a leader (controlling account), follower-supplied capital, and
 //! a NAV computed by the L1 settlement loop.
 
 use serde::{Deserialize, Serialize};
 
 use crate::types::VaultId;
-use crate::wallet::Address;
 
 /// Snapshot of a user vault returned by `info: { type: "vault_state" }`.
 ///
-/// Field shape matches the node's MTF-native `/info` `vault_state` response.
+/// The request key is the vault ADDRESS (`vault`), not a numeric id.
+///
+/// # Value planes
+/// `tvl`, `share_price` and `high_water_mark` are HUMAN whole-USDC decimal
+/// strings, NOT cents and NOT raw-share plane. `share_price` is whole USDC per
+/// WHOLE share at full precision — do not scale it by the share scale, that
+/// double-scales the value by 1e18.
+///
+/// `lock_period_ms` keeps its `_ms` suffix because it is a DURATION, not a
+/// timestamp.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct VaultState {
-    /// Echo of the requested vault id.
-    pub vault_id: VaultId,
-    /// Leader account (20-byte address). Stored as `Address` (not `account_id`)
-    /// since the SDK's user surface is keyed by address.
-    pub leader: Address,
-    /// Total share count across all followers.
-    pub total_shares: u128,
-    /// NAV in USD cents (signed — vaults can go negative on backstop takeovers).
-    pub nav_usd_cents: i64,
-    /// Whether the leader has paused the vault.
-    pub paused: bool,
-    /// Leader management fee in bps (protocol pins this to 1000 = 10%).
-    pub management_fee_bps: u16,
-    /// Follower withdrawal lock duration in milliseconds (4 days =
-    /// 345_600_000 ms).
-    pub withdrawal_lock_ms: u64,
-    /// Vault creation timestamp.
-    pub created_at_ms: u64,
-    /// Distinct follower count.
-    pub follower_count: u32,
+    /// Vault address (`0x`-hex).
+    pub vault: String,
+    /// Vault display name.
+    pub name: String,
+    /// Total value locked, whole-USDC decimal string.
+    pub tvl: String,
+    /// Price of one WHOLE share, whole-USDC decimal string, full precision.
+    pub share_price: String,
+    /// Distinct depositor count.
+    pub depositor_count: u64,
+    /// High-water mark, whole-USDC decimal string.
+    pub high_water_mark: String,
+    /// Leader performance fee in bps.
+    pub performance_fee_bps: u16,
+    /// Follower withdrawal lock DURATION in milliseconds.
+    pub lock_period_ms: u64,
+    /// Vault strategy class (`"User"` / `"Metaliquidity"`).
+    pub strategy: String,
 }
 
 /// Kind of vault created by [`CreateVault`]. Serializes in PascalCase to match
@@ -153,47 +159,62 @@ mod tests {
         assert_eq!(dec, d);
     }
 
+    fn sample_vault_state() -> VaultState {
+        VaultState {
+            vault: "0x00000000000000000000000000000000000000aa".into(),
+            name: "mlp".into(),
+            tvl: "50000".into(),
+            share_price: "1.000000000000000001".into(),
+            depositor_count: 5,
+            high_water_mark: "50000".into(),
+            performance_fee_bps: 1000,
+            lock_period_ms: 345_600_000,
+            strategy: "Metaliquidity".into(),
+        }
+    }
+
     #[test]
     fn vault_state_round_trips() {
-        let v = VaultState {
-            vault_id: VaultId(42),
-            leader: Address::ZERO,
-            total_shares: 1_000_000,
-            nav_usd_cents: 5_000_000,
-            paused: false,
-            management_fee_bps: 1000,
-            withdrawal_lock_ms: 345_600_000,
-            created_at_ms: 1_700_000_000_000,
-            follower_count: 5,
-        };
+        let v = sample_vault_state();
         let j = serde_json::to_string(&v).unwrap();
         let dec: VaultState = serde_json::from_str(&j).unwrap();
         assert_eq!(v, dec);
     }
 
     #[test]
+    fn vault_state_decodes_the_node_wire_shape() {
+        let wire = serde_json::json!({
+            "vault": "0x00000000000000000000000000000000000000aa",
+            "name": "mlp",
+            "tvl": "50000",
+            "share_price": "1.000000000000000001",
+            "depositor_count": 5,
+            "high_water_mark": "50000",
+            "performance_fee_bps": 1000,
+            "lock_period_ms": 345_600_000u64,
+            "strategy": "Metaliquidity"
+        });
+        let v: VaultState = serde_json::from_value(wire).unwrap();
+        assert_eq!(v, sample_vault_state());
+        // share_price is whole USDC per WHOLE share — a client that scales it by
+        // the 1e18 share scale reads 1e18x high.
+        assert_eq!(v.share_price, "1.000000000000000001");
+    }
+
+    #[test]
     fn vault_state_uses_snake_case_on_wire() {
-        let v = VaultState {
-            vault_id: VaultId(42),
-            leader: Address::ZERO,
-            total_shares: 0,
-            nav_usd_cents: 0,
-            paused: false,
-            management_fee_bps: 1000,
-            withdrawal_lock_ms: 345_600_000,
-            created_at_ms: 0,
-            follower_count: 0,
-        };
-        let j = serde_json::to_value(&v).unwrap();
-        // No camelCase keys.
+        let j = serde_json::to_value(sample_vault_state()).unwrap();
+        // No camelCase keys, and no retired cents-plane keys.
         for forbidden in [
             "vaultId",
+            "vault_id",
             "navUsdCents",
-            "managementFeeBps",
-            "withdrawalLockMs",
-            "createdAtMs",
-            "followerCount",
-            "totalShares",
+            "nav_usd_cents",
+            "sharePrice",
+            "highWaterMark",
+            "performanceFeeBps",
+            "lockPeriodMs",
+            "depositorCount",
         ] {
             assert!(j.get(forbidden).is_none(), "wire leak: {forbidden}");
         }

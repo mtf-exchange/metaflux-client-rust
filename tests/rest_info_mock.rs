@@ -9,8 +9,7 @@
 
 use metaflux_client::{
     Client,
-    rest::info::{MarginMode, MarketKind, OrderStatus, Tier},
-    types::VaultId,
+    rest::info::{Abstraction, MarketKind, OrderSide, OrderStatus, Tier},
     wallet::Address,
 };
 use serde_json::{Value, json};
@@ -86,68 +85,43 @@ async fn markets_decodes_array_of_market_info() {
 }
 
 #[tokio::test]
-async fn user_state_decodes_positions() {
+async fn vault_state_is_keyed_by_address_and_reads_the_human_plane() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "user_state",
-            json!({
-                "address": "0x0000000000000000000000000000000000000001",
-                "account_value_cents": 10_000_000i64,
-                "total_unrealised_pnl_cents": 1_234i64,
-                "position_count": 1,
-                "positions": [{
-                    "owner": "0x0000000000000000000000000000000000000001",
-                    "market": 1,
-                    "size": 500,
-                    "entry_px": 4_999_500_000_000u64,
-                    "unrealised_pnl_cents": 1_234i64,
-                    "margin_cents": 500_000u64,
-                    "funding_paid_cents": -42i64
-                }]
-            }),
-        )))
-        .mount(&server)
-        .await;
-
-    let client = Client::new(server.uri()).unwrap();
-    let addr = Address::from_hex("0x0000000000000000000000000000000000000001").unwrap();
-    let state = client.rest().info().user_state(addr).await.unwrap();
-    assert_eq!(state.position_count, 1);
-    assert_eq!(state.positions.len(), 1);
-    assert_eq!(state.positions[0].size, 500);
-    assert_eq!(state.account_value_cents, 10_000_000);
-}
-
-#[tokio::test]
-async fn vault_state_decodes_pinned_constants() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/info"))
+        .and(body_partial_json(
+            json!({ "type": "vault_state", "vault": ADDR }),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
             "vault_state",
             json!({
-                "vault_id": 42,
-                "leader": "0x0000000000000000000000000000000000000002",
-                "total_shares": 1_000_000u64,
-                "nav_usd_cents": 5_000_000i64,
-                "paused": false,
-                "management_fee_bps": 1000,
-                "withdrawal_lock_ms": 345_600_000u64,
-                "created_at_ms": 1_700_000_000_000u64,
-                "follower_count": 3
+                "vault": ADDR,
+                "name": "mlp",
+                "tvl": "50000",
+                "share_price": "1.000000000000000001",
+                "depositor_count": 3,
+                "high_water_mark": "50000",
+                "performance_fee_bps": 1000,
+                "lock_period_ms": 345_600_000u64,
+                "strategy": "Metaliquidity"
             }),
         )))
         .mount(&server)
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let v = client.rest().info().vault_state(VaultId(42)).await.unwrap();
-    assert_eq!(v.vault_id.0, 42);
-    assert_eq!(v.management_fee_bps, 1000);
-    assert_eq!(v.withdrawal_lock_ms, 345_600_000);
-    assert!(!v.paused);
+    let v = client.rest().info().vault_state(test_addr()).await.unwrap();
+    assert_eq!(v.vault, ADDR);
+    assert_eq!(v.name, "mlp");
+    // Whole USDC, not cents.
+    assert_eq!(v.tvl, "50000");
+    assert_eq!(v.high_water_mark, "50000");
+    // Whole USDC per WHOLE share, full precision — no client-side share scaling.
+    assert_eq!(v.share_price, "1.000000000000000001");
+    assert_eq!(v.performance_fee_bps, 1000);
+    // A DURATION keeps its `_ms` suffix.
+    assert_eq!(v.lock_period_ms, 345_600_000);
+    assert_eq!(v.strategy, "Metaliquidity");
 }
 
 #[tokio::test]
@@ -259,8 +233,10 @@ async fn spot_clearinghouse_state_decodes_balances_by_address() {
             json!({
                 "address": "0x4242424242424242424242424242424242424242",
                 "balances": [
-                    { "asset": 101, "name": "BTC/USDC", "balance": "500" }
-                ]
+                    { "asset": 101, "name": "BTC", "total": "500", "hold": "20" }
+                ],
+                "height": 8_416_000u64,
+                "time": 1_783_011_600_000u64
             }),
         )))
         .mount(&server)
@@ -277,8 +253,11 @@ async fn spot_clearinghouse_state_decodes_balances_by_address() {
     assert_eq!(s.address, addr);
     assert_eq!(s.balances.len(), 1);
     assert_eq!(s.balances[0].asset, 101);
-    assert_eq!(s.balances[0].name, "BTC/USDC");
-    assert_eq!(s.balances[0].balance, "500");
+    assert_eq!(s.balances[0].name, "BTC");
+    assert_eq!(s.balances[0].total, "500");
+    assert_eq!(s.balances[0].hold, "20");
+    assert_eq!(s.height, 8_416_000);
+    assert_eq!(s.time, 1_783_011_600_000);
 }
 
 #[tokio::test]
@@ -341,24 +320,28 @@ async fn account_state_decodes_rich_shape_by_address() {
                 "address": "0x000000000000000000000000000000000000beef",
                 "account_value": "100000000",
                 "free_collateral": "80000000",
-                "maint_margin": "10000000",
                 "init_margin": "20000000",
                 "health": "10000000",
                 "tier": "Safe",
-                "mode": "Cross",
-                "pm_enabled": false,
-                "positions": [{
-                    "asset": 0,
-                    "size": "100000000",
-                    "entry": "10000000000",
-                    "upnl": "500000",
-                    "isolated": false,
-                    "lev": 10
-                }],
-                "balances": {
-                    "usdc": "100000000",
-                    "spot": { "ETH": { "asset_id": 102, "total": "5000000000", "hold": "0", "value": "0" } }
-                }
+                "abstraction": "unified",
+                "position_mode": "one_way",
+                "clearinghouse_state": {
+                    "": { "positions": [{
+                        "coin": "BTC", "size": "1", "entry": "64000", "upnl": "500000",
+                        "isolated": false, "lev": 10, "liq": "58000", "roe": "0.01",
+                        "funding": "0", "margin": "6400", "maint_margin": "320",
+                        "notional": "64000"
+                    }] }
+                },
+                "balances": [
+                    { "asset": 0, "name": "USDC", "total": "100000000", "hold": "0" },
+                    { "asset": 102, "name": "ETH", "total": "5000000000", "hold": "0" }
+                ],
+                "pm_maint_margin": "0",
+                "pm_net_value": "0",
+                "pm_concentration_penalty": "0",
+                "height": 8_416_000u64,
+                "time": 1_783_011_600_000u64
             }),
         )))
         .mount(&server)
@@ -370,15 +353,18 @@ async fn account_state_decodes_rich_shape_by_address() {
     assert_eq!(a.account_value, "100000000");
     assert_eq!(a.free_collateral, "80000000");
     assert_eq!(a.tier, Tier::Safe);
-    assert_eq!(a.margin_mode, MarginMode::Cross);
-    assert!(!a.pm_enabled);
-    assert_eq!(a.positions.len(), 1);
-    assert_eq!(a.positions[0].leverage, 10);
-    assert_eq!(a.balances.usdc, "100000000");
-    assert_eq!(
-        a.balances.spot.get("ETH").map(|b| b.total.as_str()),
-        Some("5000000000")
-    );
+    assert_eq!(a.abstraction, Abstraction::Unified);
+    // Positions live under the core dex key `""`.
+    assert_eq!(a.core_positions().len(), 1);
+    assert_eq!(a.core_positions()[0].coin, "BTC");
+    assert_eq!(a.core_positions()[0].leverage, 10);
+    assert_eq!(a.core_positions()[0].maint_margin, "320");
+    // Balances are an array; USDC first.
+    assert_eq!(a.balances[0].name, "USDC");
+    assert_eq!(a.balances[1].name, "ETH");
+    assert_eq!(a.balances[1].total, "5000000000");
+    assert_eq!(a.pm_net_value, "0");
+    assert_eq!(a.height, 8_416_000);
 }
 
 #[tokio::test]
@@ -451,8 +437,8 @@ async fn staking_state_decodes_by_address() {
     let client = Client::new(server.uri()).unwrap();
     let addr = Address::from_hex("0x0000000000000000000000000000000000000003").unwrap();
     let s = client.rest().info().staking_state(addr).await.unwrap();
-    assert_eq!(s.total_staked, "0");
-    assert!(s.delegations.is_empty());
+    assert_eq!(s.state.total_staked, "0");
+    assert!(s.state.delegations.is_empty());
 }
 
 #[tokio::test]
@@ -463,8 +449,8 @@ async fn l2_book_decodes_levels() {
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
             "l2_book",
             json!({
-                "bids": [{ "px": "4990000000000", "size": "1000", "n_orders": 3 }],
-                "asks": [{ "px": "5010000000000", "size": "800", "n_orders": 2 }]
+                "bids": [{ "px": "4990000000000", "sz": "1000", "n_orders": 3 }],
+                "asks": [{ "px": "5010000000000", "sz": "800", "n_orders": 2 }]
             }),
         )))
         .mount(&server)
@@ -473,7 +459,7 @@ async fn l2_book_decodes_levels() {
     let client = Client::new(server.uri()).unwrap();
     let book = client.rest().info().l2_book("BTC", None).await.unwrap();
     assert_eq!(book.bids.len(), 1);
-    assert_eq!(book.bids[0].size, "1000");
+    assert_eq!(book.bids[0].sz, "1000");
     assert_eq!(book.asks[0].n_orders, 2);
 }
 
@@ -487,8 +473,8 @@ async fn l2_book_spot_pair_with_aggregation_params() {
             "l2_book",
             json!({
                 "coin": "BTC/USDC",
-                "bids": [{ "px": "61550", "size": "1.5", "n_orders": 2 }],
-                "asks": [{ "px": "61600", "size": "0.8", "n_orders": 1 }]
+                "bids": [{ "px": "61550", "sz": "1.5", "n_orders": 2 }],
+                "asks": [{ "px": "61600", "sz": "0.8", "n_orders": 1 }]
             }),
         )))
         .mount(&server)
@@ -507,7 +493,7 @@ async fn l2_book_spot_pair_with_aggregation_params() {
         .await
         .unwrap();
     assert_eq!(book.coin, "BTC/USDC");
-    assert_eq!(book.bids[0].size, "1.5");
+    assert_eq!(book.bids[0].sz, "1.5");
 }
 
 #[tokio::test]
@@ -590,8 +576,8 @@ async fn predicted_fundings_decodes_entries() {
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
             "predicted_fundings",
             json!([
-                { "coin": "BTC", "predicted_rate": "0.00176", "next_funding_time": 1_783_011_600_000u64 },
-                { "coin": "ETH", "predicted_rate": "-0.0087", "next_funding_time": 1_783_011_600_000u64 }
+                { "coin": "BTC", "predicted_rate": "0.00176", "next_funding_ts": 1_783_011_600_000u64 },
+                { "coin": "ETH", "predicted_rate": "-0.0087", "next_funding_ts": 1_783_011_600_000u64 }
             ]),
         )))
         .mount(&server)
@@ -601,7 +587,7 @@ async fn predicted_fundings_decodes_entries() {
     let pf = client.rest().info().predicted_fundings().await.unwrap();
     assert_eq!(pf.len(), 2);
     assert_eq!(pf[0].coin, "BTC");
-    assert_eq!(pf[0].next_funding_time, 1_783_011_600_000);
+    assert_eq!(pf[0].next_funding_ts, 1_783_011_600_000);
     assert_eq!(pf[1].predicted_rate, "-0.0087");
 }
 
@@ -657,8 +643,8 @@ async fn order_status_by_cloid_posts_cloid_and_decodes_resting() {
             "order_status",
             json!({
                 "status": "resting",
-                "order": { "oid": 7u64, "coin": "BTC", "side": "ask", "px": "62500.12",
-                           "size": "1.5", "inserted_at_ms": 1u64, "cloid": cloid }
+                "order": { "oid": 7u64, "coin": "BTC", "side": "A", "px": "62500.12",
+                           "sz": "1.5", "inserted_at": 1u64, "cloid": cloid }
             }),
         )))
         .mount(&server)
@@ -675,6 +661,9 @@ async fn order_status_by_cloid_posts_cloid_and_decodes_resting() {
         panic!("expected Resting");
     };
     assert_eq!(order.oid, 7);
+    assert_eq!(order.side, OrderSide::Ask);
+    assert_eq!(order.sz, "1.5");
+    assert_eq!(order.inserted_at, 1);
     assert_eq!(order.cloid.as_deref(), Some(cloid));
 }
 
@@ -858,7 +847,7 @@ async fn spot_margin_state_posts_user_key() {
             json!({
                 "user": ADDR,
                 "accounts": [
-                    { "pair": 200u32, "collateral": "1000", "borrowed": "250.5",
+                    { "pair": "BTC/USDC", "collateral": "1000", "borrowed": "250.5",
                       "borrow_index_snapshot": "1.02", "base_held": "3.14",
                       "current_debt": "255.51",
                       "params": { "init_bps": "1000", "maint_bps": "500" } }
@@ -877,7 +866,10 @@ async fn spot_margin_state_posts_user_key() {
         .unwrap();
     assert_eq!(s.user, test_addr());
     assert_eq!(s.accounts.len(), 1);
-    assert_eq!(s.accounts[0].pair, 200);
+    // The pair is SYMBOLIZED — a raw numeric pair id no longer reaches a client.
+    assert_eq!(s.accounts[0].pair, "BTC/USDC");
+    // `init_bps` / `maint_bps` are JSON STRINGS of integers; do not normalize
+    // them to numbers.
     assert_eq!(
         s.accounts[0].params.as_ref().unwrap().maint_bps.as_str(),
         "500"
@@ -895,7 +887,7 @@ async fn earn_state_with_user_inserts_key_and_decodes_user_fields() {
             "earn_state",
             json!({
                 "pools": [
-                    { "asset": 0u32, "total_supplied": "10000", "total_borrowed": "4000",
+                    { "asset": 0u32, "name": "USDC", "total_supplied": "10000", "total_borrowed": "4000",
                       "idle": "6000", "shares_total": "9500", "share_value": "1.0526",
                       "borrow_index": "1.03", "reserve_factor_bps": "1000",
                       "borrow_rate_bps_annual": "550", "reserve_accrued": "12.5",
@@ -928,7 +920,7 @@ async fn earn_state_without_user_omits_key() {
             "earn_state",
             json!({
                 "pools": [
-                    { "asset": 0u32, "total_supplied": "1", "total_borrowed": "0",
+                    { "asset": 0u32, "name": "USDC", "total_supplied": "1", "total_borrowed": "0",
                       "idle": "1", "shares_total": "1", "share_value": "1",
                       "borrow_index": "1", "reserve_factor_bps": "0",
                       "borrow_rate_bps_annual": "0", "reserve_accrued": "0" }
@@ -941,6 +933,8 @@ async fn earn_state_without_user_omits_key() {
     let client = Client::new(server.uri()).unwrap();
     let e = client.rest().info().earn_state(None).await.unwrap();
     assert_eq!(e.pools[0].user_shares, None);
+    // Every numeric asset id now travels beside its symbol.
+    assert_eq!(e.pools[0].name, "USDC");
 }
 
 /// `pm_summary` posts the `address` key (NOT `user`) — asserted by an EXACT body
@@ -955,7 +949,7 @@ async fn pm_summary_posts_address_key() {
             "pm_summary",
             json!({
                 "address": ADDR, "enrolled": true,
-                "enrolled_at_ms": 1_700_000_000_000u64, "last_computed_block": 8_416_000u64,
+                "enrolled_at": 1_700_000_000_000u64, "last_computed_block": 8_416_000u64,
                 "pm_maint_margin_cents": "123456", "net_value_cents": "10000000",
                 "concentration_penalty_cents": "250"
             }),
@@ -967,6 +961,9 @@ async fn pm_summary_posts_address_key() {
     let p = client.rest().info().pm_summary(test_addr()).await.unwrap();
     assert!(p.enrolled);
     assert_eq!(p.address, test_addr());
+    assert_eq!(p.enrolled_at, 1_700_000_000_000);
+    // The standalone pm_summary KEEPS its `*_cents` integer-string fields; only
+    // the folded account_state figures moved to the whole-USDC plane.
     assert_eq!(p.pm_maint_margin_cents, "123456");
 }
 
@@ -990,4 +987,242 @@ async fn encode_action_returns_action_json_string() {
     let client = Client::new(server.uri()).unwrap();
     let blob = client.rest().info().encode_action(&action).await.unwrap();
     assert_eq!(blob, "{\"CancelAllOrders\":{}}");
+}
+
+/// `open_orders` decodes ONE canonical row set: a perp resting order, a spot
+/// resting order, and a parked TP / SL trigger. The trigger detail the retired
+/// `frontend_open_orders` read carried now rides this row.
+#[tokio::test]
+async fn open_orders_decodes_the_enriched_canonical_row() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(json!({ "type": "open_orders", "address": ADDR })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "open_orders",
+            json!({
+                "address": ADDR,
+                "orders": [
+                    { "oid": 1u64, "coin": "BTC", "side": "B", "px": "62500.12",
+                      "sz": "1.5", "orig_sz": null, "cloid": null, "tif": "gtc",
+                      "reduce_only": false, "trigger": null, "inserted_at": 10u64 },
+                    { "oid": 2u64, "coin": "BTC/USDC", "side": "A", "px": "62800",
+                      "sz": "0.5", "orig_sz": null, "cloid": null, "tif": "alo",
+                      "reduce_only": false, "trigger": null, "inserted_at": 11u64 },
+                    { "oid": 3u64, "coin": "BTC", "side": "A", "px": "61000",
+                      "sz": "0.25", "orig_sz": null, "cloid": null, "tif": "trigger",
+                      "reduce_only": true,
+                      "trigger": { "trigger_px": "61000", "trigger_above": false,
+                                   "is_parked": true, "is_market": true,
+                                   "limit_px": null },
+                      "inserted_at": 12u64 }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let o = client.rest().info().open_orders(test_addr()).await.unwrap();
+    assert_eq!(o.orders.len(), 3);
+    assert_eq!(o.orders[0].side, OrderSide::Bid);
+    assert_eq!(o.orders[0].sz, "1.5");
+    assert_eq!(o.orders[0].inserted_at, 10);
+    // A spot row's coin is the pair NAME.
+    assert_eq!(o.orders[1].coin, "BTC/USDC");
+    assert_eq!(o.orders[1].side, OrderSide::Ask);
+    // A parked market trigger: `tif` is the non-TIF token, `limit_px` is null.
+    assert_eq!(o.orders[2].tif.as_deref(), Some("trigger"));
+    let t = o.orders[2].trigger.as_ref().unwrap();
+    assert_eq!(t.is_market, Some(true));
+    assert!(t.limit_px.is_none());
+}
+
+/// The `web_data` read: one round trip for the vault / staking / sub-account /
+/// multisig / agent facets, plus the flat `height` / `time` stamp.
+#[tokio::test]
+async fn web_data_decodes_every_facet() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(json!({ "type": "web_data", "address": ADDR })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "web_data",
+            json!({
+                "address": ADDR,
+                "vault": {
+                    "equities": [
+                        { "vault_id": 7u64,
+                          "vault_address": "0x00000000000000000000000000000000000000aa",
+                          "shares": "12.5", "equity": "1250" }
+                    ],
+                    "vaults": [
+                        { "vault": "0x00000000000000000000000000000000000000aa",
+                          "name": "mlp", "tvl": "50000",
+                          "share_price": "1.000000000000000001", "depositor_count": 3,
+                          "high_water_mark": "50000", "performance_fee_bps": 1000,
+                          "lock_period_ms": 345_600_000u64, "strategy": "Metaliquidity" }
+                    ]
+                },
+                "staking": {
+                    "state": {
+                        "total_staked": "500",
+                        "delegations": [
+                            { "validator": "0x00000000000000000000000000000000000000bb",
+                              "amount": "500", "since_ts": 1_700_000_000_000u64,
+                              "pending_rewards": "2.5" }
+                        ],
+                        "pending_unstakes": [
+                            { "amount": "100", "matures_at_ts": 1_800_000_000_000u64 }
+                        ]
+                    },
+                    "summary": {
+                        "total_delegated": "500", "pending_withdrawal": "100",
+                        "claimable_rewards": "2.5", "n_delegations": 1u64
+                    }
+                },
+                "sub_accounts": [
+                    { "index": 0u32,
+                      "address": "0x00000000000000000000000000000000000000cc",
+                      "equity": "42" }
+                ],
+                "multisig": {
+                    "is_multi_sig": true, "threshold": 2u32,
+                    "signers": ["0x00000000000000000000000000000000000000dd"]
+                },
+                "agents": [
+                    { "agent": "0x00000000000000000000000000000000000000ee",
+                      "name": "bot-1", "expires_at": 1_800_000_000_000u64 }
+                ],
+                "height": 8_416_000u64,
+                "time": 1_783_011_600_000u64
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let w = client.rest().info().web_data(test_addr()).await.unwrap();
+    assert_eq!(w.address, test_addr());
+
+    // Vault facet: whole-share equity + the full vault body on the human plane.
+    assert_eq!(w.vault.equities[0].vault_id, 7);
+    assert_eq!(w.vault.equities[0].shares, "12.5");
+    assert_eq!(w.vault.vaults[0].share_price, "1.000000000000000001");
+    // A DURATION keeps `_ms`.
+    assert_eq!(w.vault.vaults[0].lock_period_ms, 345_600_000);
+
+    // Staking facet: the per-facet address is stripped; `_ts` suffixes stay.
+    assert_eq!(w.staking.state.total_staked, "500");
+    assert_eq!(w.staking.state.delegations[0].since_ts, 1_700_000_000_000);
+    assert_eq!(
+        w.staking.state.pending_unstakes[0].matures_at_ts,
+        1_800_000_000_000
+    );
+    assert_eq!(w.staking.summary.n_delegations, 1);
+
+    assert_eq!(w.sub_accounts[0].equity, "42");
+    assert!(w.multisig.is_multi_sig);
+    assert_eq!(w.multisig.threshold, 2);
+    // The agent expiry dropped its `_ms` suffix.
+    assert_eq!(w.agents[0].expires_at, Some(1_800_000_000_000));
+
+    // The stamp is FLAT at the top level, not nested under `as_of`.
+    assert_eq!(w.height, 8_416_000);
+    assert_eq!(w.time, 1_783_011_600_000);
+}
+
+/// `funding_history` samples key on `ts`, and `predicted_fundings` keys on
+/// `next_funding_ts` — the `_ms` suffix is gone from every /info timestamp.
+#[tokio::test]
+async fn funding_history_sample_keys_on_ts() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(
+            json!({ "type": "funding_history", "coin": "MTF" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "funding_history",
+            json!({
+                "coin": "MTF",
+                "samples": [
+                    { "ts": 1_783_011_600_000u64, "premium": "0.01",
+                      "funding_rate": "0.01" }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let fh = client.rest().info().funding_history("MTF").await.unwrap();
+    assert_eq!(fh.samples[0].ts, 1_783_011_600_000);
+    assert_eq!(fh.samples[0].premium, "0.01");
+}
+
+/// `rfq_open` takes NO parameters and answers `{rfqs:[…]}`. The old SDK posted
+/// an `rfq_id` into a DTO the node never emits.
+#[tokio::test]
+async fn rfq_open_posts_no_params_and_decodes_sessions() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(json!({ "type": "rfq_open" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "rfq_open",
+            json!({
+                "rfqs": [
+                    { "rfq_id": 3u64, "coin": "BTC", "side": "B", "sz": "1.5",
+                      "requester": ADDR, "requester_stp_group": null,
+                      "expiry": 1_783_011_600_000u64, "limit_px": "62500",
+                      "created_at": 1_783_011_500_000u64,
+                      "quotes": [
+                          { "maker": "0x00000000000000000000000000000000000000ff",
+                            "maker_stp_group": null, "price": "62490",
+                            "max_size": "1", "valid_until": 1_783_011_560_000u64,
+                            "submitted_at": 1_783_011_510_000u64 }
+                      ] }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let r = client.rest().info().rfq_open().await.unwrap();
+    assert_eq!(r.rfqs.len(), 1);
+    assert_eq!(r.rfqs[0].side, OrderSide::Bid);
+    assert_eq!(r.rfqs[0].sz, "1.5");
+    // An RFQ quote keys on `price` / `max_size` — NOT the `px` / `sz` book
+    // dialect.
+    assert_eq!(r.rfqs[0].quotes[0].price, "62490");
+    assert_eq!(r.rfqs[0].quotes[0].max_size, "1");
+    assert_eq!(r.rfqs[0].quotes[0].valid_until, 1_783_011_560_000);
+}
+
+/// The node answers an unknown `/info` kind with 400. `frontend_open_orders`
+/// was removed, so the SDK must no longer expose a method for it — this test
+/// pins the server behavior a caller now sees.
+#[tokio::test]
+async fn retired_frontend_open_orders_kind_is_rejected() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_partial_json(json!({ "type": "frontend_open_orders" })))
+        .respond_with(
+            ResponseTemplate::new(400)
+                .set_body_json(json!({ "error": "unknown info type: frontend_open_orders" })),
+        )
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let err = client
+        .rest()
+        .info()
+        .raw(json!({ "type": "frontend_open_orders", "address": ADDR }))
+        .await
+        .unwrap_err();
+    assert!(format!("{err}").contains("frontend_open_orders"));
 }

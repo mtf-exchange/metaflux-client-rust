@@ -23,4 +23,4 @@ mod client;
 mod subscriptions;
 
 pub use client::{WsClient, WsConfig};
-pub use subscriptions::{Subscription, WsMessage};
+pub use subscriptions::{Subscription, WsFrame, WsMessage};

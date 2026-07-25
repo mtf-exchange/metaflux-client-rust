@@ -8,7 +8,6 @@
 
 use metaflux_client::{
     Client,
-    types::VaultId,
     types::vault::{CreateVault, VaultKind},
     wallet::Wallet,
 };
@@ -30,10 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let resp = client.exchange().create_vault(&wallet, &create).await?;
     println!("create_vault response: {resp:?}");
 
-    // Try to query the newly created vault's NAV.
-    // The action response typically carries the assigned vault_id; we
-    // demonstrate the info call against vault_id = 1 here.
-    let nav = client.rest().info().vault_state(VaultId(1)).await?;
+    // Read the vault back. `vault_state` is keyed by the vault ADDRESS; the
+    // create_vault response carries the assigned address.
+    let nav = client.rest().info().vault_state(wallet.address()).await?;
     println!("vault state: {nav:?}");
     Ok(())
 }

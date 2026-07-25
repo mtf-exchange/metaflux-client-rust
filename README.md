@@ -121,7 +121,7 @@ let bars = client
 
 // Predicted per-asset funding — the clamped rate charged at the next boundary.
 for pf in client.rest().info().predicted_fundings().await? {
-    println!("{}: {} @ {}", pf.coin, pf.predicted_rate, pf.next_funding_time);
+    println!("{}: {} @ {}", pf.coin, pf.predicted_rate, pf.next_funding_ts);
 }
 println!(
     "book {}x{}, {} recent, {} windowed, {} bars",
@@ -165,7 +165,7 @@ let bals = client
     .spot_clearinghouse_state(wallet.address())
     .await?;
 for b in &bals.balances {
-    println!("{} ({}) = {}", b.name, b.asset, b.balance);
+    println!("{} ({}) total={} hold={}", b.name, b.asset, b.total, b.hold);
 }
 
 // 4. Cancel a resting order by oid.

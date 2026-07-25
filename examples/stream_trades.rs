@@ -24,8 +24,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut got = 0u32;
     while got < 10 {
-        let msg = rx.recv().await?;
-        if let WsMessage::Trades(payload) = &msg {
+        let frame = rx.recv().await?;
+        if let WsMessage::Trades(payload) = &frame.message {
             println!("trade: {payload}");
             got += 1;
         }

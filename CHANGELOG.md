@@ -5,6 +5,112 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
+## [0.16.0]
+
+Aligns the whole typed `/info` read layer and the WS channel set to the node's
+**wire-v2** read surface. Wire-v2 reshaped `account_state`, enriched
+`open_orders`, added the `web_data` read + channel, added the
+`spot_margin_state` channel, removed the `spot_state` channel, dropped the `_ms`
+suffix from every `/info` timestamp, made `B`/`A` + `sz` the canonical order
+dialect, and symbolized coins. Every rename below was verified against the node
+serializer that emits the field.
+
+### Changed
+
+- **BREAKING** `AccountState` is reshaped. The flat `positions` array is now
+  `clearinghouse_state`, a map of dex key to `{positions:[…]}`; the core dex key
+  is the empty string `""` and is always present, and a MIP-3 deployer dex keys
+  on the deployer's lowercase `0x`-hex address. Use `AccountState::core_positions()`
+  for the common case. `balances` is now an ARRAY of `{asset, name, total, hold}`
+  token rows (USDC first); an all-zero token row is skipped. Top-level
+  `maint_margin` is gone — read it from `margin_summary`. `mode`
+  (`MarginMode`) and `pm_enabled` are gone: the margin class now rides
+  `abstraction` (`"unified"` / `"portfolio"`), typed as the new `Abstraction`
+  enum. `AccountPosition` keys on the symbol `coin` (was the numeric `asset`) and
+  gained `liq`, `roe`, `funding`, `margin`, `maint_margin`, `notional`, plus an
+  optional hedge-leg `side` (`"long"` / `"short"`, typed as `PositionSide` — NOT
+  the order-book side). `AccountState` also gained `position_mode`,
+  `pm_maint_margin`, `pm_net_value`, `pm_concentration_penalty` (whole-USDC
+  strings, always present) and the flat `height` / `time` stamp.
+- **BREAKING** `OrderSide` now serializes as `"B"` / `"A"` (was `"bid"` /
+  `"ask"`). This is the canonical order dialect on `open_orders`, `order_status`
+  and `rfq_open`. It is NOT the position leg label.
+- **BREAKING** the size key is `sz` (was `size`) on `L2Level`, `OpenOrder`,
+  `RestingOrderStatus` and `TriggerOrderStatus`. The `account_state` POSITION
+  size key stays `size` and stays SIGNED — the two planes are deliberately not
+  unified.
+- **BREAKING** every `/info` timestamp dropped its `_ms` suffix:
+  `OpenOrder.inserted_at_ms` -> `inserted_at`, `RestingOrderStatus.inserted_at_ms`
+  -> `inserted_at`, `TriggerOrderStatus.registered_at_ms` -> `registered_at`,
+  `PmSummary.enrolled_at_ms` -> `enrolled_at`, `AgentEntry.expires_at_ms` ->
+  `expires_at`, `FundingSample.ts_ms` -> `ts`, `PredictedFunding.next_funding_time`
+  -> `next_funding_ts`. DURATIONS keep `ms` — `lock_period_ms`, `interval_ms`,
+  `period_ms` and `delay_ms` are unchanged.
+- **BREAKING** `OpenOrder` is the ONE canonical order row the node renders for
+  the REST read, the WS `open_orders` snapshot, and the inner `order` of a WS
+  `order_updates` record. It gained `orig_sz`, `tif`, `reduce_only` and a folded
+  `trigger` block, and the row set now includes parked TP / SL / stop triggers
+  (`tif: "trigger"`). `tif` stays a `String` because `"trigger"` is not a TIF.
+- **BREAKING** `OpenOrders.account_id` is dropped — the node never emitted it.
+- **BREAKING** `VaultState` is a full rewrite:
+  `{vault, name, tvl, share_price, depositor_count, high_water_mark,
+  performance_fee_bps, lock_period_ms, strategy}`. The old
+  `vault_id` / `leader` / `nav_usd_cents` shape matched nothing the node emits.
+  `Info::vault_state` now takes the vault ADDRESS and posts the `vault` key (it
+  posted `vault_id`). `tvl` and `high_water_mark` are whole USDC, NOT cents, and
+  `share_price` is whole USDC per WHOLE share at full precision — a client that
+  scales it by the share scale reads 1e18x high.
+- **BREAKING** `SpotBalance` now carries `total` + `hold` (was a single
+  `balance` the node never emitted), and `SpotClearinghouseState` gained the
+  `height` / `time` stamp.
+- **BREAKING** `SpotMarginAccount.pair` is a symbolized pair NAME `String`
+  (e.g. `"BTC/USDC"`), was a raw `u32` pair id. `params.init_bps` /
+  `maint_bps` stay JSON strings — do not normalize them to numbers.
+- **BREAKING** `StakingState` now nests its body in the new `StakingSnapshot`
+  (`state` field). The `web_data` read reuses the same type for its
+  `staking.state` facet.
+- **BREAKING** `WsClient::messages()` yields `WsFrame` (was `WsMessage`).
+  `WsFrame` pairs the typed `message` with the envelope's `is_snapshot` flag; an
+  absent flag reads `false`, so a delta is never mistaken for a snapshot.
+- **BREAKING** `Info::rfq_state(rfq_id)` is replaced by `Info::rfq_open()` and
+  `Info::rfq_user(address)`. The node `rfq_open` takes no parameters and answers
+  `{rfqs:[…]}`; the old `RfqState` DTO could never decode it.
+
+### Added
+
+- `Info::web_data(address)` — the consolidated account snapshot (vault equities
+  + followed / led vault states, staking state + delegator summary,
+  sub-accounts, the multisig signer set, agent wallets) plus a flat `height` /
+  `time` stamp. One round trip replaces five facet reads. New `WebData`,
+  `WebDataVault`, `VaultEquity`, `WebDataStaking`, `StakingSnapshot`,
+  `DelegatorSummary` and `MultiSigSigners` types.
+- `Subscription::WebData` + `WsClient::subscribe_web_data(user)` — the same body
+  on a WS channel.
+- `Subscription::SpotMarginState` + `WsClient::subscribe_spot_margin_state(user)`
+  — per-commit spot-margin positions, body identical to the REST read.
+- `EarnPool.name` — the token symbol beside the numeric `asset`.
+- `OrderTrigger` (the repurposed `FrontendTrigger`), `Abstraction`,
+  `PositionSide`, `DexPositions`, `TokenBalance`, `RfqOpen`, `RfqUser`,
+  `RfqSession` and `RfqQuote`.
+
+### Removed
+
+- **BREAKING** `Info::frontend_open_orders()` and the `FrontendOpenOrders` /
+  `FrontendOpenOrder` / `FrontendTrigger` types. The node removed the
+  `frontend_open_orders` kind (an unknown kind answers 400); its parked TP / SL
+  detail is folded into the enriched `open_orders` row.
+- **BREAKING** `Subscription::SpotState`, `WsMessage::SpotState` and
+  `WsClient::subscribe_spot_state()`. The node removed the WS `spot_state`
+  channel; a subscribe now answers an error envelope. The REST
+  `spot_clearinghouse_state` read STAYS. Migration note: `account_state`
+  `balances` skips all-zero token rows that `spot_state` used to emit.
+- **BREAKING** `Info::user_state()` and the `types::position` module
+  (`UserState` / `Position`). The method posted `account_state` into a
+  cents-plane DTO that could never decode the response.
+- **BREAKING** `types::rfq::RfqState`, `MmQuote` and `RfqStatus` — read types
+  that matched no node response. The write actions (`RfqRequest`, `RfqAccept`,
+  `CoreSide`, `RfqId`) are unchanged.
+
 ## [0.15.0]
 
 ### Added

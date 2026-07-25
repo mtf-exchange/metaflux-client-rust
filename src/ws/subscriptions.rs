@@ -135,8 +135,16 @@ pub enum Subscription {
         /// User `0x` address.
         user: Address,
     },
-    /// Per-account live SPOT clearinghouse state, one per commit.
-    SpotState {
+    /// Per-account CONSOLIDATED snapshot: vaults, staking, sub-accounts, the
+    /// multisig signer set, and agent wallets. Body identical to the REST
+    /// `web_data` read.
+    WebData {
+        /// User `0x` address.
+        user: Address,
+    },
+    /// Per-account spot-margin positions, one per commit. Body identical to the
+    /// REST `spot_margin_state` read.
+    SpotMarginState {
         /// User `0x` address.
         user: Address,
     },
@@ -218,8 +226,11 @@ pub enum WsMessage {
     UserTwapHistory(serde_json::Value),
     /// Per-account live PERP account state.
     AccountState(serde_json::Value),
-    /// Per-account live SPOT state.
-    SpotState(serde_json::Value),
+    /// Per-account consolidated snapshot (vaults / staking / sub-accounts /
+    /// multisig / agents).
+    WebData(serde_json::Value),
+    /// Per-account spot-margin positions.
+    SpotMarginState(serde_json::Value),
     /// Per-(user, market) leverage/margin context.
     ActiveAssetData(serde_json::Value),
     /// Committed explorer block header frame.
@@ -236,6 +247,39 @@ pub enum WsMessage {
     /// Any channel the SDK doesn't yet decode — carries no typed payload.
     #[serde(other)]
     Unknown,
+}
+
+/// One decoded inbound frame: the typed channel message plus the envelope's
+/// snapshot flag.
+///
+/// `is_snapshot` marks a frame that carries FULL state rather than a delta. The
+/// server omits the flag on deltas, and an absent flag reads `false`, so an
+/// older server never makes a consumer mistake a delta for a snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WsFrame {
+    /// The typed channel message.
+    pub message: WsMessage,
+    /// Whether `message` carries a full-state snapshot.
+    pub is_snapshot: bool,
+}
+
+impl WsFrame {
+    /// Decode one raw inbound frame.
+    ///
+    /// An unknown channel — or a `data` payload this SDK cannot type — decodes
+    /// to [`WsMessage::Unknown`] instead of being dropped, so a
+    /// forward-compatible consumer still sees that a frame arrived.
+    #[must_use]
+    pub fn from_value(value: serde_json::Value) -> Self {
+        let is_snapshot = value
+            .get("is_snapshot")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        Self {
+            message: serde_json::from_value(value).unwrap_or(WsMessage::Unknown),
+            is_snapshot,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -402,7 +446,8 @@ mod tests {
             "fills",
             "order_updates",
             "account_state",
-            "spot_state",
+            "web_data",
+            "spot_margin_state",
             "user_fundings",
             "explorer_block",
             "explorer_txs",
@@ -415,6 +460,69 @@ mod tests {
                 "channel {chan} fell through to Unknown"
             );
         }
+    }
+
+    #[test]
+    fn spot_state_channel_is_retired() {
+        // The node dropped the WS `spot_state` channel; a subscribe now answers
+        // an error envelope. Keep the SDK from re-declaring it.
+        let raw = serde_json::json!({ "channel": "spot_state", "data": { "x": 1 } });
+        assert!(serde_json::from_value::<WsMessage>(raw).is_err());
+        let subs = serde_json::to_string(&Subscription::WebData {
+            user: Address::ZERO,
+        })
+        .unwrap();
+        assert!(!subs.contains("spot_state"));
+    }
+
+    #[test]
+    fn ws_frame_reads_the_snapshot_flag() {
+        let snap = WsFrame::from_value(serde_json::json!({
+            "channel": "open_orders",
+            "data": [],
+            "is_snapshot": true
+        }));
+        assert!(snap.is_snapshot);
+        assert!(matches!(snap.message, WsMessage::OpenOrders(_)));
+
+        // An absent flag reads as a delta, never as a snapshot.
+        let delta = WsFrame::from_value(serde_json::json!({
+            "channel": "order_updates",
+            "data": []
+        }));
+        assert!(!delta.is_snapshot);
+
+        // A typed-decode failure still surfaces the frame, with its flag.
+        let opaque = WsFrame::from_value(serde_json::json!({
+            "channel": "definitely_not_real",
+            "data": { "x": 1 },
+            "is_snapshot": true
+        }));
+        assert!(opaque.is_snapshot);
+        assert!(matches!(opaque.message, WsMessage::Unknown));
+    }
+
+    #[test]
+    fn new_account_channels_carry_only_user() {
+        for sub in [
+            Subscription::WebData {
+                user: Address::ZERO,
+            },
+            Subscription::SpotMarginState {
+                user: Address::ZERO,
+            },
+        ] {
+            let j = serde_json::to_value(&sub).unwrap();
+            assert!(j.get("user").is_some(), "missing user: {j}");
+            assert!(j.get("coin").is_none());
+        }
+        assert_eq!(
+            serde_json::to_value(Subscription::SpotMarginState {
+                user: Address::ZERO
+            })
+            .unwrap()["type"],
+            "spot_margin_state"
+        );
     }
 
     #[test]

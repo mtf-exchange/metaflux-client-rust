@@ -27,7 +27,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::error::ClientError;
 use crate::types::order::{CancelOrder, Order, OrderResponse};
 use crate::wallet::{TypedTradingAction, TypedTradingDigest, Wallet};
-use crate::ws::subscriptions::{Subscription, WsMessage};
+use crate::ws::subscriptions::{Subscription, WsFrame};
 
 /// Tunable WS configuration.
 #[derive(Clone, Debug)]
@@ -85,7 +85,7 @@ enum Command {
 #[derive(Debug, Clone)]
 pub struct WsClient {
     /// Inbound message broadcast.
-    inbound_tx: broadcast::Sender<WsMessage>,
+    inbound_tx: broadcast::Sender<WsFrame>,
     /// Control-plane channel to the background task.
     cmd_tx: mpsc::UnboundedSender<Command>,
     /// Connection state flag (true while the background loop is running).
@@ -347,15 +347,27 @@ impl WsClient {
         self.subscribe(Subscription::AccountState { user }).await
     }
 
-    /// Subscribe to the per-user live spot clearinghouse-state stream.
+    /// Subscribe to the per-user consolidated account snapshot (vaults /
+    /// staking / sub-accounts / multisig / agents).
     ///
     /// # Errors
     /// See [`WsClient::subscribe`].
-    pub async fn subscribe_spot_state(
+    pub async fn subscribe_web_data(
         &self,
         user: crate::wallet::Address,
     ) -> Result<(), ClientError> {
-        self.subscribe(Subscription::SpotState { user }).await
+        self.subscribe(Subscription::WebData { user }).await
+    }
+
+    /// Subscribe to the per-user spot-margin position stream.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_spot_margin_state(
+        &self,
+        user: crate::wallet::Address,
+    ) -> Result<(), ClientError> {
+        self.subscribe(Subscription::SpotMarginState { user }).await
     }
 
     /// Subscribe to per-user realized funding payments.
@@ -413,7 +425,7 @@ impl WsClient {
     /// can subscribe to the same stream. Returns `None` once the task has
     /// shut down.
     #[must_use]
-    pub fn messages(&self) -> broadcast::Receiver<WsMessage> {
+    pub fn messages(&self) -> broadcast::Receiver<WsFrame> {
         self.inbound_tx.subscribe()
     }
 
@@ -593,7 +605,7 @@ fn l2_book_is_coin(sub: &Subscription, coin: &str) -> bool {
 struct TaskState {
     url: String,
     config: WsConfig,
-    inbound_tx: broadcast::Sender<WsMessage>,
+    inbound_tx: broadcast::Sender<WsFrame>,
     cmd_rx: mpsc::UnboundedReceiver<Command>,
     alive: Arc<AtomicBool>,
     active: Arc<Mutex<Vec<Subscription>>>,
@@ -708,13 +720,7 @@ async fn run_connection(state: &mut TaskState) -> Result<ConnectionExit, ClientE
                                 }
                             }
                             Ok(v) => {
-                                // Unknown / future channels (and any frame whose
-                                // `data` we can't type) fall back to `Unknown`
-                                // instead of being dropped, so a forward-compat
-                                // consumer still sees that a frame arrived.
-                                let msg = serde_json::from_value::<WsMessage>(v)
-                                    .unwrap_or(WsMessage::Unknown);
-                                let _ = state.inbound_tx.send(msg);
+                                let _ = state.inbound_tx.send(WsFrame::from_value(v));
                             }
                             Err(_) => {}
                         }
