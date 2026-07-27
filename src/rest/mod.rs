@@ -26,6 +26,7 @@ pub mod exchange;
 pub mod exchange_typed;
 pub mod explorer;
 pub mod info;
+pub mod place;
 
 /// REST client. Cheap to clone (uses an `Arc` internally via `reqwest::Client`).
 #[derive(Debug, Clone)]

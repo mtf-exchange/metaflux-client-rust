@@ -24,6 +24,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::types::candle::CandleType;
 use crate::wallet::Address;
 
 /// One subscription request body — sent inside the
@@ -81,12 +82,20 @@ pub enum Subscription {
         /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
         coin: String,
     },
-    /// OHLCV bar updates for one market + interval (`1m`/`5m`/`15m`/`1h`/…).
+    /// Rolling PRICE bars for one market, one series, one bar size. The routing
+    /// key is `(coin, interval, candle_type)`, so `1m` and `5m` — or `mark` and
+    /// `oracle` at the same interval — are independent subscriptions. The ack
+    /// echoes `interval` and `candle_type`.
+    ///
+    /// The initial frame is an ARRAY of recent bars, oldest first; every later
+    /// frame is a SINGLE bar object, the current open bar.
     Candles {
         /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
         coin: String,
-        /// Bar interval token.
+        /// Bar interval token (`1m`/`5m`/`15m`/`1h`/`4h`/`1d`).
         interval: String,
+        /// Price series. The executed-trade candle is retired.
+        candle_type: CandleType,
     },
     /// Global `{coin: mid}` snapshot, one per commit.
     AllMids,
@@ -375,15 +384,28 @@ mod tests {
     }
 
     #[test]
-    fn subscription_candles_carries_coin_and_interval() {
+    fn subscription_candles_carries_coin_interval_and_candle_type() {
         let s = Subscription::Candles {
             coin: "7".into(),
             interval: "5m".into(),
+            candle_type: CandleType::Oracle,
         };
         let j = serde_json::to_value(&s).unwrap();
         assert_eq!(j["type"], "candles");
         assert_eq!(j["coin"], "7");
         assert_eq!(j["interval"], "5m");
+        assert_eq!(j["candle_type"], "oracle");
+        // The routing key is the triple, so the same market at the same interval
+        // on a different series is a DIFFERENT subscription.
+        let mark = Subscription::Candles {
+            coin: "7".into(),
+            interval: "5m".into(),
+            candle_type: CandleType::Mark,
+        };
+        assert_ne!(serde_json::to_value(&mark).unwrap(), j);
+        assert_eq!(serde_json::to_value(&mark).unwrap()["candle_type"], "mark");
+        // No camelCase leak.
+        assert!(j.get("candleType").is_none());
     }
 
     #[test]

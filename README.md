@@ -89,6 +89,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Placing orders — one entry point
+
+The wire carries three order actions: `order` (one perp order), `batch_order` (N
+perp orders) and `spot_order` (one spot order, on its own id space).
+`place_order` is one entry point over all of them, so a caller does not pick the
+wire action. It is a convenience over the wire, never a replacement — every
+per-action method stays, and `place_order` posts the same bytes.
+
+| request | wire action | actions sent |
+|---|---|---|
+| perp, any count | `batch_order` | 1 |
+| spot, N orders | `spot_order` | N — **not atomic** |
+| mixed perp and spot | none — refused | 0 |
+
+```rust,ignore
+use metaflux_client::{PlaceRequest, Placement, types::order::OrderGrouping};
+
+// Any number of perp orders ride ONE batch_order action, so the node returns a
+// status per leg. `owner` is the params-level batch owner: the wallet for
+// self-trading, or a vault address for operator-driven vault trading.
+let req = PlaceRequest::perp(wallet.address(), vec![order_a, order_b])
+    .with_grouping(OrderGrouping::Na);
+match client.exchange().place_order(&wallet, &req).await? {
+    Placement::BatchAction(b) => println!("{} leg statuses", b.statuses.len()),
+    Placement::SeparateSpotActions(p) => println!("{} separate actions", p.sent.len()),
+}
+```
+
+The wire cannot batch spot orders, so a spot request sends one `spot_order`
+action per order. The result is `Placement::SeparateSpotActions`, which reports
+each action on its own — read it as N independent submissions, not one atomic
+one. A request that mixes perp and spot orders is refused, never split: build it
+with `PlaceRequest::from_legs` to get that refusal before any signing. An
+approved agent places spot legs here too — build the request with
+`PlaceRequest::spot_as(owner, orders)`.
+
 ## Market data reads
 
 `/info` market reads are keyed by `coin` (the market symbol). Prices/sizes come
@@ -97,6 +133,8 @@ each market as `margin_tiers` (upper-bound bands; `max_open_interest = None` on
 the unbounded top tier).
 
 ```rust,ignore
+use metaflux_client::CandleType;
+
 // `client` as in the Quick start above.
 
 // All perp markets, with the inline margin-tier ladder.
@@ -106,6 +144,9 @@ for m in &markets {
 }
 
 // Depth, a bounded window of recent prints, and the single candle query.
+// A candle bar folds a PRICE series, never executions: pick `mark` (the node
+// default, perp + spot) or `oracle` (perp only). The trade candle is retired,
+// so read executions from the trade prints above.
 let book = client.rest().info().l2_book("BTC", 20).await?;
 let trades = client.rest().info().recent_trades("BTC").await?;
 let recent = client
@@ -116,7 +157,7 @@ let recent = client
 let bars = client
     .rest()
     .info()
-    .candle_snapshot("BTC", "1m", 0, u64::MAX)
+    .candle_snapshot("BTC", "1m", CandleType::Mark, 0, u64::MAX)
     .await?;
 
 // Predicted per-asset funding — the clamped rate charged at the next boundary.
@@ -131,10 +172,11 @@ println!(
 
 ## Spot trading
 
-The spot CLOB (v0 = IOC limit only, `limit_px > 0` on the 1e8 price plane) is a
-separate book from the perp engine, keyed by a numeric **pair id**. Discover
-pairs via `spot_meta()`, trade with `spot_order` / `spot_cancel`, and read
-balances back with `spot_clearinghouse_state(address)`:
+The spot CLOB is a separate book from the perp engine, keyed by a numeric **pair
+id**. `tif` accepts `ioc`, `gtc` and `alo`; a `gtc` / `alo` residual rests
+against escrowed funds. `limit_px` must be `> 0`, on the 1e8 price plane.
+Discover pairs via `spot_meta()`, trade with `spot_order` / `spot_cancel`, and
+read balances back with `spot_clearinghouse_state(address)`:
 
 ```rust,ignore
 use metaflux_client::types::{
@@ -171,13 +213,41 @@ for b in &bals.balances {
 // 4. Cancel a resting order by oid.
 client
     .exchange()
-    .spot_cancel(&wallet, &SpotCancel { pair: pair.id, oid: 12345 })
+    .spot_cancel(&wallet, &SpotCancel::new(pair.id, 12345))
     .await?;
 ```
 
 On the WebSocket `trades` / `candles` / `fills` channels, spot prints carry the
 **numeric pair id** as the `coin` label (e.g. `"101"`), not the display name —
-use `spot_meta()` to map `id` to its `"{base}/{quote}"` name.
+use `spot_meta()` to map `id` to its `"{base}/{quote}"` name. A spot pair has a
+`mark` candle series but no `oracle` one.
+
+### Placing spot orders as an approved agent
+
+A spot order and a spot cancel each carry an optional `owner`. Set it and the
+signing wallet acts as an approved **agent** of that address: the node places or
+cancels the order AS the owner, and `owner` is bound into the EIP-712 digest, so
+a relay can neither strip nor swap it. Leave it unset and the signer trades for
+itself — the signed bytes are unchanged.
+
+```rust,ignore
+let vault = wallet.address(); // the account whose agent this wallet is
+
+// One order, placed as the owner.
+let order = SpotOrder::ioc_limit(pair.id, Side::Bid, 1_000, 5_000_000_000)
+    .with_owner(vault);
+client.exchange().spot_order(&agent_wallet, &order).await?;
+
+// The same through the unified entry point, for every leg at once.
+let req = PlaceRequest::spot_as(vault, [order]);
+client.exchange().place_order(&agent_wallet, &req).await?;
+
+// Cancels take the same owner.
+client
+    .exchange()
+    .spot_cancel(&agent_wallet, &SpotCancel::new(pair.id, 12345).with_owner(vault))
+    .await?;
+```
 
 ### Spot margin & Earn (devnet preview)
 
@@ -191,10 +261,15 @@ admission envelope, not a synchronous oid; observe committed state via `/info`
 `shares`) are passed as **strings**; `size` / `limit_px` are integers on the
 raw-lot / 1e8 planes.
 
+`spot_margin_deposit` and `spot_margin_withdraw` are **dead**. Collateral is the
+one unified USDC account, so there is no per-pair bucket to post into or
+withdraw from. The node rejects both actions whenever the cross-margin model is
+active, which on the live chain is from genesis. Both stay on the wire, and both
+types keep their EIP-712 type strings, only so old signatures stay verifiable.
+Fund the unified USDC account instead, then open and close.
+
 ```rust,ignore
-use metaflux_client::types::spot::{
-    EarnDeposit, SpotMarginClose, SpotMarginDeposit, SpotMarginOpen,
-};
+use metaflux_client::types::spot::{EarnDeposit, SpotMarginClose, SpotMarginOpen};
 
 // `client`, `wallet`, `pair` as above.
 
@@ -204,11 +279,8 @@ client
     .earn_deposit(&wallet, &EarnDeposit { asset: pair.quote, amount: "5000".into() })
     .await?;
 
-// Borrow side: post collateral, then open a leveraged long.
-client
-    .exchange()
-    .spot_margin_deposit(&wallet, &SpotMarginDeposit { pair: pair.id, amount: "100".into() })
-    .await?;
+// Borrow side: the margin is drawn from the unified USDC account — there is no
+// separate deposit step.
 client
     .exchange()
     .spot_margin_open(

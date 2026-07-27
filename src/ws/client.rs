@@ -282,8 +282,12 @@ impl WsClient {
         .await
     }
 
-    /// Subscribe to OHLCV candles for a market + interval token
-    /// (`"1m"`/`"5m"`/`"15m"`/`"1h"`/`"4h"`/`"1d"`).
+    /// Subscribe to rolling PRICE bars for one market, one interval token
+    /// (`"1m"`/`"5m"`/`"15m"`/`"1h"`/`"4h"`/`"1d"`) and one price series.
+    ///
+    /// The routing key is `(coin, interval, candle_type)`, so two series at the
+    /// same interval are two subscriptions. The executed-trade candle is
+    /// retired; see [`CandleType`](crate::types::candle::CandleType).
     ///
     /// # Errors
     /// See [`WsClient::subscribe`].
@@ -291,10 +295,12 @@ impl WsClient {
         &self,
         market: crate::types::MarketId,
         interval: impl Into<String>,
+        candle_type: crate::types::candle::CandleType,
     ) -> Result<(), ClientError> {
         self.subscribe(Subscription::Candles {
             coin: market.0.to_string(),
             interval: interval.into(),
+            candle_type,
         })
         .await
     }

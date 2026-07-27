@@ -18,13 +18,15 @@ use tiny_keccak::{Hasher, Keccak};
 
 use metaflux_client::{
     rest::exchange::{_recover_for_test, MTF_CHAIN_ID},
-    rest::exchange_typed::{_typed_digest_for_test, _typed_trade_digest_for_test},
+    rest::exchange_typed::{
+        _typed_digest_for_test, _typed_trade_digest_for_test, _typed_trade_digest_for_test_as,
+    },
     types::{
-        MarketId,
+        Cloid, MarketId,
         order::{Order, OrderKind, PositionSide, Side, StpMode, TimeInForce},
         spot::{SpotCancel, SpotOrder},
     },
-    wallet::{Signature, TypedAction, TypedTradingAction, Wallet, metaflux_chain_tag},
+    wallet::{Address, Signature, TypedAction, TypedTradingAction, Wallet, metaflux_chain_tag},
 };
 
 /// The fixed signing key the SDK cross-check tests use (`[0x42; 32]`).
@@ -157,8 +159,10 @@ fn sdk_set_position_mode_path_round_trips() {
     );
 }
 
-/// `spot_order` — the typed `SpotOrder` trading digest recovers the signer; the
-/// order body carries no owner field (the node binds the recovered signer).
+/// `spot_order` — the typed `SpotOrder` trading digest recovers the signer.
+/// Without an `owner` the signer trades for itself and the node binds the
+/// recovered signer; see `sdk_spot_owner_binds_the_digest_and_the_wire` for the
+/// agent path.
 #[test]
 fn sdk_spot_order_path_round_trips() {
     let mut order = SpotOrder::ioc_limit(3, Side::Bid, 1000, 5_000_000_000);
@@ -178,16 +182,114 @@ fn sdk_spot_order_path_round_trips() {
 /// `SpotCancel` digest.
 #[test]
 fn sdk_spot_cancel_path_round_trips() {
-    let cancel = SpotCancel {
-        pair: 3,
-        oid: 12345,
-    };
+    let cancel = SpotCancel::new(3, 12345);
     assert_typed_trade_round_trips(TypedTradingAction::SpotCancel(&cancel), 7);
 
     let action = json!({ "type": "spot_cancel", "cancel": cancel });
     assert_eq!(
         serde_json::to_string(&action).unwrap(),
         r#"{"cancel":{"oid":12345,"pair":3},"type":"spot_cancel"}"#
+    );
+}
+
+/// An approved AGENT places a spot order AS its owner. The `owner` must land in
+/// BOTH halves or the node rejects the action: the wire body (so
+/// `NativeSpotOrder.owner` is set and admission resolves the agent) and the
+/// EIP-712 digest (the `*_WITH_OWNER` type string). The recovered signer stays
+/// the AGENT — never the owner.
+#[test]
+fn sdk_spot_owner_binds_the_digest_and_the_wire() {
+    let agent = Wallet::from_bytes(FIXED_KEY).expect("wallet");
+    let owner = Address([0xbb; 20]);
+
+    let order = SpotOrder::ioc_limit(3, Side::Bid, 1000, 5_000_000_000).with_owner(owner);
+    let action = json!({ "type": "spot_order", "order": order });
+    assert_eq!(
+        serde_json::to_string(&action).unwrap(),
+        r#"{"order":{"limit_px":5000000000,"owner":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","pair":3,"side":"bid","size":1000,"stp_mode":"cancel_oldest","tif":"ioc"},"type":"spot_order"}"#
+    );
+
+    let cancel = SpotCancel::new(3, 12345).with_owner(owner);
+    let action = json!({ "type": "spot_cancel", "cancel": cancel });
+    assert_eq!(
+        serde_json::to_string(&action).unwrap(),
+        r#"{"cancel":{"oid":12345,"owner":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","pair":3},"type":"spot_cancel"}"#
+    );
+
+    let plain_order = SpotOrder::ioc_limit(3, Side::Bid, 1000, 5_000_000_000);
+    let plain_cancel = SpotCancel::new(3, 12345);
+    for (typed, plain) in [
+        (
+            TypedTradingAction::SpotOrder(&order),
+            TypedTradingAction::SpotOrder(&plain_order),
+        ),
+        (
+            TypedTradingAction::SpotCancel(&cancel),
+            TypedTradingAction::SpotCancel(&plain_cancel),
+        ),
+    ] {
+        let bound = _typed_trade_digest_for_test_as(typed, owner, 7);
+        assert_ne!(
+            bound,
+            _typed_trade_digest_for_test(plain, 7),
+            "the owner must be cryptographically bound, not advisory"
+        );
+        // The payload owner alone selects the `*_WITH_OWNER` digest: the plain
+        // constructor cannot sign the owner-less form for an owner-bearing body.
+        assert_eq!(
+            bound,
+            _typed_trade_digest_for_test(typed, 7),
+            "the payload owner binds the digest with no explicit owner"
+        );
+        let sig: Signature = agent.sign_digest(&bound).expect("sign");
+        assert_eq!(
+            _recover_for_test(&bound, &sig).expect("sdk recover"),
+            agent.address(),
+            "the recovered signer is the AGENT"
+        );
+        assert_eq!(
+            &recover(&bound, &sig.r, &sig.s, sig.v),
+            agent.address().as_bytes()
+        );
+        assert_ne!(
+            agent.address(),
+            owner,
+            "the fixture must exercise agent != owner"
+        );
+    }
+}
+
+/// An owner-LESS spot order still signs the PRE-OWNER digest byte-for-byte.
+/// The two vectors are the node-derived KATs, restated at the integration
+/// boundary: adding the optional field must not move an existing caller's
+/// signature.
+#[test]
+fn sdk_spot_without_owner_keeps_the_pre_owner_digest() {
+    let order = SpotOrder {
+        owner: None,
+        pair: 3,
+        side: Side::Bid,
+        size: 50,
+        limit_px: 100_000_000,
+        tif: TimeInForce::Ioc,
+        stp_mode: StpMode::CancelOldest,
+        cloid: Some(Cloid([0xAB; 16])),
+    };
+    assert_eq!(
+        hex::encode(_typed_trade_digest_for_test(
+            TypedTradingAction::SpotOrder(&order),
+            1
+        )),
+        "981902cfbf00fc9c9bb26acdebfe356cd0e2b8da69199ed9b8ae2a316cf1cb34"
+    );
+
+    let cancel = SpotCancel::new(3, 99);
+    assert_eq!(
+        hex::encode(_typed_trade_digest_for_test(
+            TypedTradingAction::SpotCancel(&cancel),
+            1
+        )),
+        "5f794c0c7a2c1b473efd5e86a4386385ce4696ad2cdc8d849eb9b30745c5f7fc"
     );
 }
 

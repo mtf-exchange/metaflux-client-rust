@@ -5,6 +5,97 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
+## [0.16.0]
+
+Lands the unified `place_order` entry point, the agent-resolved spot `owner`, an
+owner-aware low-level digest, and the `candle_type` price series.
+
+### Added
+
+- `Exchange::place_order` — one entry point for perp and spot orders. It routes,
+  it does not reshape: a perp request (any count) becomes ONE `batch_order`
+  action; a spot request becomes ONE `spot_order` action PER order, because the
+  wire cannot batch spot. The posted `action` bytes are byte-identical to the
+  per-action methods, which a mock-server test asserts.
+- `PlaceRequest` / `OrderLeg` / `Placement` in `types::place`. The venue split
+  lives in the type: a perp leg and a spot leg are different structs.
+  `PlaceRequest::from_legs` REFUSES a mixed perp + spot request rather than
+  splitting it — two independent submissions would look like one atomic one.
+  `Placement::SeparateSpotActions` names its own non-atomicity and reports each
+  action separately.
+- `LegStatus` keeps an untyped status entry (for example a `pending` handle)
+  verbatim, so a new node status cannot fail the decode.
+- **BREAKING** `SpotOrder` and `SpotCancel` gain an optional `owner`
+  (`Option<Address>`), mirroring the node's `NativeSpotOrder.owner` /
+  `NativeSpotCancel.owner`. With `owner` present an approved AGENT places or
+  cancels the order AS that owner; absent, the signer trades for itself. The
+  node has supported this since the agent-resolved owner routing landed
+  (`NativeAction::claimed_owner` returns it), but no client could reach it. The
+  field is breaking only for struct-literal construction — build with
+  `SpotOrder::ioc_limit` / `SpotCancel::new`, then `with_owner`.
+- `PlaceRequest::spot_as` — a spot request through `place_order` placed AS an
+  owner. It stamps `owner` on every leg; `PlaceRequest::spot` stays owner-less.
+- `SpotCancel::new` — a constructor, so adding a field does not break callers
+  again.
+- `TypedTradingAction::payload_owner` — the agent-resolved `owner` an action's
+  own payload carries. `TypedTradingDigest::new` binds it, so the low-level
+  digest API can no longer sign an owner-less digest for an owner-carrying body.
+- `CandleType` (`mark` / `oracle`), the candle price-series selector. `mark` is
+  the node default and serves perp and spot; `oracle` serves perp only.
+
+### Changed
+
+- **BREAKING** `TypedTradingDigest::new` reads the action's payload `owner`.
+  Six actions carry it — `spot_order`, `spot_cancel`, `scale_order`,
+  `cancel_scale`, `chase_order`, `cancel_chase`. Before this the low-level API
+  ignored the field, so a caller signed the owner-LESS digest while the posted
+  body carried the owner; a present `owner` selects a DIFFERENT frozen EIP-712
+  type string, so the node rejected the signature. `TypedTradingDigest::digest`
+  now also FAILS when an explicitly bound owner contradicts the payload's own,
+  rather than emitting a digest that cannot verify. An owner-less payload signs
+  the same bytes as before. The public `Exchange` path was already correct.
+- **BREAKING** `Info::candle_snapshot` takes a `candle_type: CandleType`
+  argument and sends it inside `req`. The node serves TWO series, `mark`
+  (default) and `oracle`; the executed-trade candle is RETIRED and `trade` is a
+  400. The request field is named `candle_type`, not `price_type`.
+- **BREAKING** `Subscription::Candles` gains `candle_type`, and
+  `WsClient::subscribe_candles` takes it. The routing key is
+  `(coin, interval, candle_type)`, so two series at one interval are two
+  subscriptions.
+- **BREAKING** `Candle::num_trades` is renamed `num_samples`. A bar folds a
+  PRICE series, so `n` counts price samples and is `0` on a carry-forward bar.
+  `volume` and `quote_volume` are documented as always `"0"` for the same
+  reason. The old names described the retired trade candle.
+- Corrected the "sender-authorized" doc claims that contradict the node's
+  `claimed_owner` arms: `Modify`, the three margin actions in `types::account`,
+  `RfqRequest`, `RfqAccept`, `FbaSubmit`, and both TWAP actions all accept an
+  agent-resolved `owner` on the wire. Each note now says whether that owner
+  enters the EIP-712 digest or only routes admission. The stale sentence came
+  from the node source and cost real capability in both SDKs.
+
+- `Exchange::spot_order` / `Exchange::spot_cancel` read the new `owner`. Present
+  selects the node's `SpotOrder` / `SpotCancel` `*_WITH_OWNER` EIP-712 type
+  string and binds the owner word right after `metafluxChain`; absent signs the
+  pre-owner digest and posts pre-owner bytes BYTE-FOR-BYTE. Two byte pins and a
+  digest pin hold that.
+- Spot documentation corrected on two counts. (1) A spot order is NOT
+  sender-authorized-only: the wire carries an optional `owner` and an approved
+  agent may trade as it. (2) `tif` is not IOC-only — the node accepts `ioc`,
+  `gtc` and `alo`, and rests a `gtc` / `alo` residual against escrow. Both notes
+  described a node that no longer exists.
+
+- `spot_margin_deposit` / `spot_margin_withdraw` (and their `_typed` twins) are
+  documented as DEAD. The node rejects both whenever the cross-margin model is
+  active, which on the live chain is from genesis: collateral is the one unified
+  USDC account. Fund that account, then use `spot_margin_open` /
+  `spot_margin_close`. The actions, the types and the EIP-712 type strings stay
+  so old signatures remain verifiable. The old deprecation note pointed at a
+  future activation height, which was wrong for the live chain.
+- `batch_order` documentation corrected: a committed batch DOES return
+  synchronous per-leg statuses. The node's order path covers `batch_order` and
+  emits one entry per placed leg, each echoing its own `cloid`. Behaviour and
+  return type are unchanged.
+
 ## [0.15.0]
 
 Aligns the whole typed `/info` read layer and the WS channel set to the node's

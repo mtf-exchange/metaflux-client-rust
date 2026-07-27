@@ -651,14 +651,22 @@ impl<'a> Exchange<'a> {
         .await
     }
 
-    /// Post quote collateral to a spot-margin account under the typed scheme.
+    /// **DEPRECATED — the node REJECTS this action.** Post quote collateral to
+    /// a spot-margin account under the typed scheme.
     ///
-    /// `amount` is a canonical decimal string.
+    /// Dead surface. Spot margin is cross-collateralized against the one
+    /// unified USDC account, so there is no per-pair bucket to post into. The
+    /// node rejects the action whenever the cross-margin model is active, which
+    /// on the live chain is from genesis. Fund the unified USDC account and use
+    /// [`Self::spot_margin_open_typed`] / [`Self::spot_margin_close_typed`].
+    ///
+    /// Kept so old signatures stay verifiable. `amount` is a canonical decimal
+    /// string.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     #[deprecated(
-        note = "node rejects after spot_margin_cross activation (F=8416000); use spot_margin_open / spot_margin_close"
+        note = "the node rejects this action under cross-margin (live from genesis); fund the unified USDC account and use spot_margin_open / spot_margin_close"
     )]
     pub async fn spot_margin_deposit_typed(
         &self,
@@ -680,15 +688,23 @@ impl<'a> Exchange<'a> {
         .await
     }
 
-    /// Withdraw free collateral from a spot-margin account under the typed
-    /// scheme.
+    /// **DEPRECATED — the node REJECTS this action.** Withdraw free collateral
+    /// from a spot-margin account under the typed scheme.
     ///
-    /// `amount` is a canonical decimal string.
+    /// Dead surface, the twin of [`Self::spot_margin_deposit_typed`]. There is
+    /// no per-pair bucket to withdraw from under cross-margin. The node rejects
+    /// the action whenever the cross-margin model is active, which on the live
+    /// chain is from genesis. Close with [`Self::spot_margin_close_typed`],
+    /// then withdraw from the unified USDC account through the normal account
+    /// lane.
+    ///
+    /// Kept so old signatures stay verifiable. `amount` is a canonical decimal
+    /// string.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     #[deprecated(
-        note = "node rejects after spot_margin_cross activation (F=8416000); use spot_margin_open / spot_margin_close"
+        note = "the node rejects this action under cross-margin (live from genesis); close with spot_margin_close and withdraw from the unified USDC account"
     )]
     pub async fn spot_margin_withdraw_typed(
         &self,
@@ -1658,19 +1674,8 @@ impl<'a> Exchange<'a> {
         action: Value,
         typed: TypedTradingAction<'_>,
     ) -> Result<R, ClientError> {
-        let nonce = next_nonce();
-        let expires_after = self.expires_after_ms;
-        let digest = TypedTradingDigest::new(typed, MTF_CHAIN_ID, nonce)
-            .with_expires_after(expires_after)
-            .digest()?;
-        let signature = wallet.sign_digest(&digest)?.to_hex();
-        let envelope = TypedSignedEnvelope {
-            action: &action,
-            nonce,
-            signature,
-            expires_after: expires_after_wire(expires_after),
-        };
-        self.client.post_json("/exchange", &envelope).await
+        self.post_typed_trade_bound(wallet, None, action, typed)
+            .await
     }
 
     /// Sign + POST an agent-resolved (owner-bound) TRADING action — the
@@ -1691,15 +1696,38 @@ impl<'a> Exchange<'a> {
         mut action: Value,
         typed: TypedTradingAction<'_>,
     ) -> Result<R, ClientError> {
-        let nonce = next_nonce();
-        let expires_after = self.expires_after_ms;
-        let digest = TypedTradingDigest::new_with_owner(typed, owner, MTF_CHAIN_ID, nonce)
-            .with_expires_after(expires_after)
-            .digest()?;
-        let signature = wallet.sign_digest(&digest)?.to_hex();
         // The agent-resolved owner rides as a params-level `0x`-hex field; the
         // node reads `Native*.owner` from it (mirrors `cancel_all_orders_as`).
         action["params"]["owner"] = json!(owner);
+        self.post_typed_trade_bound(wallet, Some(owner), action, typed)
+            .await
+    }
+
+    /// Sign + POST a TRADING action whose wire body ALREADY carries its own
+    /// `owner` field — the spot lane, where `owner` lives inside the action's
+    /// `order` / `cancel` object rather than a `params` object.
+    ///
+    /// `owner = Some` binds the `*_WITH_OWNER` digest, so the recovered signer is
+    /// the approved AGENT and the node routes the action to the owner. `None`
+    /// signs the owner-less digest and posts byte-identical bytes to
+    /// [`Self::post_typed_trade`]. This method never edits `action`; the caller's
+    /// serialized type is the single source of the wire `owner`.
+    pub(crate) async fn post_typed_trade_bound<R: serde::de::DeserializeOwned>(
+        &self,
+        wallet: &Wallet,
+        owner: Option<crate::wallet::Address>,
+        action: Value,
+        typed: TypedTradingAction<'_>,
+    ) -> Result<R, ClientError> {
+        let nonce = next_nonce();
+        let expires_after = self.expires_after_ms;
+        let digest = match owner {
+            Some(o) => TypedTradingDigest::new_with_owner(typed, o, MTF_CHAIN_ID, nonce),
+            None => TypedTradingDigest::new(typed, MTF_CHAIN_ID, nonce),
+        }
+        .with_expires_after(expires_after)
+        .digest()?;
+        let signature = wallet.sign_digest(&digest)?.to_hex();
         let envelope = TypedSignedEnvelope {
             action: &action,
             nonce,
@@ -1744,6 +1772,19 @@ pub fn _typed_digest_for_test_with_expiry(action: &TypedAction, expires_after: u
 #[doc(hidden)]
 pub fn _typed_trade_digest_for_test(action: TypedTradingAction<'_>, nonce: u64) -> [u8; 32] {
     TypedTradingDigest::new(action, MTF_CHAIN_ID, nonce)
+        .digest()
+        .expect("typed trade digest")
+}
+
+/// Test-only escape hatch: the agent-resolved (`*_WITH_OWNER`) typed-scheme
+/// digest for a TRADING action against the default [`MTF_CHAIN_ID`] + nonce.
+#[doc(hidden)]
+pub fn _typed_trade_digest_for_test_as(
+    action: TypedTradingAction<'_>,
+    owner: crate::wallet::Address,
+    nonce: u64,
+) -> [u8; 32] {
+    TypedTradingDigest::new_with_owner(action, owner, MTF_CHAIN_ID, nonce)
         .digest()
         .expect("typed trade digest")
 }

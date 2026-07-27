@@ -2,16 +2,25 @@
 //!
 //! The spot order engine is a separate CLOB from the perp book: orders
 //! reference a spot `pair` id (not a perp `market` id) and trade raw base lots
-//! against a quote. v0 is **IOC limit only** — `tif` must be `ioc` and
-//! `limit_px > 0`; the node rejects `gtc` / `alo` and a market (`limit_px = 0`)
-//! order at admission. The builders here default `tif` to [`TimeInForce::Ioc`]
-//! and document the constraint, but do not hard-block other tifs so a caller
-//! can pass one through unchanged once the node lifts the v0 limit.
+//! against a quote. `tif` accepts `ioc`, `gtc` and `alo`; a `gtc` / `alo`
+//! residual RESTS on the book against escrowed funds. A limit is required
+//! (`limit_px > 0`) — the node rejects a market order. [`SpotOrder::ioc_limit`]
+//! defaults `tif` to [`TimeInForce::Ioc`].
+//!
+//! ## Who owns the order
+//!
+//! `owner` is OPTIONAL and mirrors the node's `NativeSpotOrder.owner`. With
+//! `owner` present, an approved agent of that address places the order AS the
+//! owner — the signer is the AGENT, and the node binds the order to the owner.
+//! Absent, the signer trades for itself. The same rule holds for
+//! [`SpotCancel`]. See
+//! [`Exchange::spot_order`](crate::rest::exchange::Exchange::spot_order).
 //!
 //! Wire shape (MTF-native, snake_case):
 //!
 //! ```json
 //! {
+//!   "owner":     "0x1111111111111111111111111111111111111111",
 //!   "pair":      3,
 //!   "side":      "bid",
 //!   "size":      1000,
@@ -24,27 +33,35 @@
 //!
 //! Numerics are plain integers. `size` is in raw base lots (u64); `limit_px`
 //! is on the 1e8 fixed-point price plane (u64). `cloid` is a 32-char hex
-//! `0x...` string or omitted (`null`).
+//! `0x...` string or omitted (`null`). `owner` is a `0x`-hex 20-byte address,
+//! omitted when absent.
 
 use serde::{Deserialize, Serialize};
 
 use crate::types::Cloid;
 use crate::types::order::{Side, StpMode, TimeInForce};
+use crate::wallet::Address;
 
 /// A single spot CLOB order submission.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SpotOrder {
+    /// Optional agent-resolved owner. `Some` = an approved agent of this
+    /// address places the order AS that owner; `None` = the signer trades for
+    /// itself. Bound into the `*_WITH_OWNER` digest when present; omitted from
+    /// the wire otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<Address>,
     /// Target spot pair id.
     pub pair: u32,
     /// Bid / ask.
     pub side: Side,
     /// Size in raw base lots (u64).
     pub size: u64,
-    /// Limit price on the 1e8 fixed-point price plane (u64). v0 requires
-    /// `limit_px > 0` — a market (px = 0) order is rejected.
+    /// Limit price on the 1e8 fixed-point price plane (u64). Must be `> 0` — a
+    /// market (px = 0) order is rejected.
     pub limit_px: u64,
-    /// Time-in-force. v0 supports `ioc` only; defaults to [`TimeInForce::Ioc`]
+    /// Time-in-force (`ioc` / `gtc` / `alo`). Defaults to [`TimeInForce::Ioc`]
     /// via [`SpotOrder::ioc_limit`].
     pub tif: TimeInForce,
     /// Self-trade-prevention mode (the same wire enum as a perp order — the spot
@@ -56,15 +73,17 @@ pub struct SpotOrder {
 }
 
 impl SpotOrder {
-    /// Build a v0-conformant IOC limit spot order.
+    /// Build an IOC limit spot order owned by the signer.
     ///
     /// `tif` defaults to [`TimeInForce::Ioc`] and `stp_mode` to
     /// [`StpMode::CancelOldest`] (the engine default); set
     /// [`SpotOrder::cloid`] / [`SpotOrder::stp_mode`] afterwards to override.
-    /// `limit_px` must be `> 0` for the node to accept it.
+    /// `limit_px` must be `> 0` for the node to accept it. For agent-placed
+    /// orders add an owner with [`SpotOrder::with_owner`].
     #[must_use]
     pub const fn ioc_limit(pair: u32, side: Side, size: u64, limit_px: u64) -> Self {
         Self {
+            owner: None,
             pair,
             side,
             size,
@@ -74,16 +93,50 @@ impl SpotOrder {
             cloid: None,
         }
     }
+
+    /// Place this order AS `owner`. The signing wallet must be an approved agent
+    /// of `owner`.
+    #[must_use]
+    pub const fn with_owner(mut self, owner: Address) -> Self {
+        self.owner = Some(owner);
+        self
+    }
 }
 
 /// Cancel a resting spot order by `oid`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SpotCancel {
+    /// Optional agent-resolved owner. `Some` = an approved agent of this
+    /// address cancels AS that owner; `None` = the signer cancels its own
+    /// order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<Address>,
     /// Target spot pair id.
     pub pair: u32,
     /// Server-assigned spot order id.
     pub oid: u64,
+}
+
+impl SpotCancel {
+    /// Cancel the signer's own resting order. For an agent-placed cancel add an
+    /// owner with [`SpotCancel::with_owner`].
+    #[must_use]
+    pub const fn new(pair: u32, oid: u64) -> Self {
+        Self {
+            owner: None,
+            pair,
+            oid,
+        }
+    }
+
+    /// Cancel AS `owner`. The signing wallet must be an approved agent of
+    /// `owner`.
+    #[must_use]
+    pub const fn with_owner(mut self, owner: Address) -> Self {
+        self.owner = Some(owner);
+        self
+    }
 }
 
 // ---- Spot margin (leveraged spot) + Earn (lending pool) ----
@@ -97,10 +150,18 @@ pub struct SpotCancel {
 // fractional precision; `size` / `limit_px` are plain integers on the raw-lot /
 // 1e8 planes, like a [`SpotOrder`].
 
-/// Post quote (USDC) collateral into the `(account, pair)` margin account.
+/// **DEPRECATED — the node REJECTS this action.** Post quote (USDC) collateral
+/// into the `(account, pair)` margin account.
 ///
-/// Margin must be enabled for the pair (per-pair risk params present), else the
-/// node rejects with `spot margin not enabled for pair`.
+/// Spot margin is cross-collateralized against the one unified USDC account, so
+/// there is no per-pair collateral bucket to post into. The node rejects the
+/// action whenever the cross-margin model is active, which on the live chain is
+/// from genesis. Fund the unified USDC account instead, then use
+/// [`SpotMarginOpen`] / [`SpotMarginClose`].
+///
+/// The type and its EIP-712 type string stay so old signatures remain
+/// verifiable. See
+/// [`Exchange::spot_margin_deposit`](crate::rest::exchange::Exchange::spot_margin_deposit).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SpotMarginDeposit {
@@ -110,11 +171,18 @@ pub struct SpotMarginDeposit {
     pub amount: String,
 }
 
-/// Withdraw free collateral from the `(account, pair)` margin account back to
-/// the spendable quote balance.
+/// **DEPRECATED — the node REJECTS this action.** Withdraw free collateral from
+/// the `(account, pair)` margin account.
 ///
-/// Full collateral is withdrawable while flat; an open position gates the
-/// withdraw at the initial-margin requirement.
+/// The twin of [`SpotMarginDeposit`]: there is no per-pair collateral bucket to
+/// withdraw from under cross-margin. The node rejects the action whenever the
+/// cross-margin model is active, which on the live chain is from genesis. Close
+/// with [`SpotMarginClose`], then withdraw from the unified USDC account through
+/// the normal account lane.
+///
+/// The type and its EIP-712 type string stay so old signatures remain
+/// verifiable. See
+/// [`Exchange::spot_margin_withdraw`](crate::rest::exchange::Exchange::spot_margin_withdraw).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SpotMarginWithdraw {
@@ -240,15 +308,102 @@ mod tests {
 
     #[test]
     fn spot_cancel_serializes_snake_case() {
-        let c = SpotCancel {
-            pair: 3,
-            oid: 12345,
-        };
+        let c = SpotCancel::new(3, 12345);
         let j = serde_json::to_value(c).unwrap();
         assert_eq!(j["pair"], serde_json::json!(3));
         assert_eq!(j["oid"], serde_json::json!(12345));
         let dec: SpotCancel = serde_json::from_value(j).unwrap();
         assert_eq!(c, dec);
+    }
+
+    // ---- agent-resolved `owner` ----
+
+    fn agent_owner() -> Address {
+        Address([0xbb; 20])
+    }
+
+    /// BYTE PIN: an owner-less order serializes exactly as it did before the
+    /// field existed. A caller signing a self-trade sees no change.
+    #[test]
+    fn spot_order_without_owner_is_byte_identical() {
+        let o = SpotOrder::ioc_limit(3, Side::Bid, 1000, 5_000_000_000);
+        assert_eq!(
+            serde_json::to_string(&o).unwrap(),
+            r#"{"pair":3,"side":"bid","size":1000,"limit_px":5000000000,"tif":"ioc","stp_mode":"cancel_oldest"}"#
+        );
+        let c = SpotCancel::new(3, 12345);
+        assert_eq!(
+            serde_json::to_string(&c).unwrap(),
+            r#"{"pair":3,"oid":12345}"#
+        );
+    }
+
+    /// A present `owner` serializes FIRST, mirroring the node's
+    /// `NativeSpotOrder` declaration order. The POSTed action nests this inside
+    /// a `serde_json::Value`, which re-keys alphabetically; those wire bytes are
+    /// pinned in `tests/native_signing_xcheck.rs`.
+    #[test]
+    fn spot_order_with_owner_emits_it_first() {
+        let o = SpotOrder::ioc_limit(3, Side::Bid, 1000, 5_000_000_000).with_owner(agent_owner());
+        assert_eq!(
+            serde_json::to_string(&o).unwrap(),
+            r#"{"owner":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","pair":3,"side":"bid","size":1000,"limit_px":5000000000,"tif":"ioc","stp_mode":"cancel_oldest"}"#
+        );
+        let c = SpotCancel::new(3, 12345).with_owner(agent_owner());
+        assert_eq!(
+            serde_json::to_string(&c).unwrap(),
+            r#"{"owner":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","pair":3,"oid":12345}"#
+        );
+    }
+
+    #[test]
+    fn spot_owner_round_trips() {
+        let o = SpotOrder::ioc_limit(7, Side::Ask, 42, 9_999).with_owner(agent_owner());
+        let dec: SpotOrder = serde_json::from_str(&serde_json::to_string(&o).unwrap()).unwrap();
+        assert_eq!(o, dec);
+        assert_eq!(dec.owner, Some(agent_owner()));
+
+        let c = SpotCancel::new(7, 42).with_owner(agent_owner());
+        let dec: SpotCancel = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
+        assert_eq!(c, dec);
+    }
+
+    /// An owner-less wire body still decodes — the node's `#[serde(default)]`
+    /// contract, mirrored here.
+    #[test]
+    fn spot_order_decodes_a_body_without_owner() {
+        let j = r#"{"pair":3,"side":"bid","size":1000,"limit_px":5000000000,"tif":"ioc","stp_mode":"cancel_oldest"}"#;
+        let dec: SpotOrder = serde_json::from_str(j).unwrap();
+        assert_eq!(dec.owner, None);
+        let dec: SpotCancel = serde_json::from_str(r#"{"pair":3,"oid":9}"#).unwrap();
+        assert_eq!(dec.owner, None);
+    }
+
+    /// An `owner` that is not a 20-byte hex address is REFUSED, not truncated or
+    /// zero-filled: a silently wrong owner would route the order to the wrong
+    /// account.
+    #[test]
+    fn spot_order_refuses_an_invalid_owner_address() {
+        for bad in [
+            r#""0xbeef""#,
+            r#""0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz""#,
+            r#""0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb""#,
+            "42",
+        ] {
+            let j = format!(
+                r#"{{"owner":{bad},"pair":3,"side":"bid","size":1,"limit_px":1,"tif":"ioc","stp_mode":"cancel_oldest"}}"#
+            );
+            assert!(
+                serde_json::from_str::<SpotOrder>(&j).is_err(),
+                "owner {bad} must be refused"
+            );
+            let j = format!(r#"{{"owner":{bad},"pair":3,"oid":9}}"#);
+            assert!(
+                serde_json::from_str::<SpotCancel>(&j).is_err(),
+                "owner {bad} must be refused"
+            );
+        }
+        assert!(Address::from_hex("0xbeef").is_err());
     }
 
     #[test]
