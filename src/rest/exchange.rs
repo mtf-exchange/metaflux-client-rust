@@ -198,9 +198,15 @@ impl<'a> Exchange<'a> {
 
     /// Submit a spot CLOB order.
     ///
-    /// The signing account is the order owner — the spot order body carries no
-    /// owner field; the node binds the order to the recovered signer. v0 is IOC
-    /// limit only (`tif = ioc`, `limit_px > 0`); see [`SpotOrder::ioc_limit`].
+    /// Ownership follows [`SpotOrder::owner`]. With `owner` present the signing
+    /// `wallet` must be an approved AGENT of that address, and the node places
+    /// the order AS the owner: the digest binds `owner` right after
+    /// `metafluxChain` (the `SpotOrder` `*_WITH_OWNER` type string) and the wire
+    /// body carries the same address. Absent, the signer trades for itself and
+    /// both the digest and the posted bytes are unchanged.
+    ///
+    /// `tif` accepts `ioc` / `gtc` / `alo`; a `gtc` / `alo` residual rests on the
+    /// book against escrowed funds. `limit_px` must be `> 0`.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -210,11 +216,20 @@ impl<'a> Exchange<'a> {
         order: &SpotOrder,
     ) -> Result<OrderResponse, ClientError> {
         let action = json!({ "type": "spot_order", "order": order });
-        self.post_typed_trade(wallet, action, TypedTradingAction::SpotOrder(order))
-            .await
+        self.post_typed_trade_bound(
+            wallet,
+            order.owner,
+            action,
+            TypedTradingAction::SpotOrder(order),
+        )
+        .await
     }
 
     /// Cancel a resting spot order by `oid`.
+    ///
+    /// Ownership follows [`SpotCancel::owner`], exactly as in
+    /// [`Self::spot_order`]: present = an approved agent cancels AS that owner;
+    /// absent = the signer cancels its own order.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -224,8 +239,13 @@ impl<'a> Exchange<'a> {
         cancel: &SpotCancel,
     ) -> Result<Value, ClientError> {
         let action = json!({ "type": "spot_cancel", "cancel": cancel });
-        self.post_typed_trade(wallet, action, TypedTradingAction::SpotCancel(cancel))
-            .await
+        self.post_typed_trade_bound(
+            wallet,
+            cancel.owner,
+            action,
+            TypedTradingAction::SpotCancel(cancel),
+        )
+        .await
     }
 
     /// **DEPRECATED — the node REJECTS this action.** Post quote collateral

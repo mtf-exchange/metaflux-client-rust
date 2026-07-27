@@ -12,6 +12,8 @@
 
 use metaflux_client::{
     Client, PlaceRequest, Placement,
+    rest::exchange::_recover_for_test,
+    rest::exchange_typed::{_typed_trade_digest_for_test, _typed_trade_digest_for_test_as},
     types::{
         MarketId, OrderId,
         order::{
@@ -20,7 +22,7 @@ use metaflux_client::{
         place::OrderLeg,
         spot::SpotOrder,
     },
-    wallet::{Address, Wallet},
+    wallet::{Address, Signature, TypedTradingAction, Wallet},
 };
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
@@ -346,6 +348,111 @@ async fn spot_route_posts_byte_identical_action_to_spot_order() {
         action_bytes(&bodies[1]),
         "place_order must post the SAME spot_order bytes"
     );
+}
+
+/// BYTE PIN: a spot order with no `owner` posts exactly the bytes it posted
+/// before the field existed, through BOTH the per-action method and the unified
+/// entry point.
+#[tokio::test]
+async fn spot_without_owner_posts_the_pre_owner_bytes() {
+    let (server, rec) = mock(one_resting(1)).await;
+    let client = Client::new(server.uri()).unwrap();
+    let w = wallet();
+
+    let order = spot_order(3, 100);
+    assert!(order.owner.is_none());
+    client.exchange().spot_order(&w, &order).await.unwrap();
+    client
+        .exchange()
+        .place_order(&w, &PlaceRequest::spot([order]))
+        .await
+        .unwrap();
+
+    for body in rec.bodies() {
+        assert_eq!(
+            action_bytes(&body),
+            r#"{"order":{"limit_px":5000000000,"pair":3,"side":"ask","size":100,"stp_mode":"cancel_oldest","tif":"ioc"},"type":"spot_order"}"#
+        );
+    }
+}
+
+/// An approved agent reaches the spot book through the unified entry point:
+/// `PlaceRequest::spot_as` stamps `owner` on every leg, each `spot_order` action
+/// carries it, and the bytes match the per-action method for the same input.
+#[tokio::test]
+async fn spot_route_carries_the_agent_owner() {
+    let (server, rec) = mock(one_resting(1)).await;
+    let client = Client::new(server.uri()).unwrap();
+    let w = wallet();
+    let owner = Address([0xbb; 20]);
+    assert_ne!(w.address(), owner, "the signer is the AGENT, not the owner");
+
+    let direct = spot_order(3, 100).with_owner(owner);
+    client.exchange().spot_order(&w, &direct).await.unwrap();
+
+    let req = PlaceRequest::spot_as(owner, [spot_order(3, 100), spot_order(4, 200)]);
+    client.exchange().place_order(&w, &req).await.unwrap();
+
+    let bodies = rec.bodies();
+    assert_eq!(bodies.len(), 3);
+    assert_eq!(
+        action_bytes(&bodies[0]),
+        action_bytes(&bodies[1]),
+        "the unified path must post the SAME owner-bearing bytes"
+    );
+    for body in &bodies[1..] {
+        assert_eq!(
+            action_json(body)["order"]["owner"],
+            json!("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+        );
+    }
+    assert_eq!(action_json(&bodies[2])["order"]["pair"], json!(4));
+}
+
+/// The `owner` is bound into the SIGNATURE, not carried as an advisory body
+/// field. The posted signature recovers the agent under the `*_WITH_OWNER`
+/// digest ONLY — the owner-less digest recovers a different address, which is
+/// what makes a stripped or swapped `owner` fail at the node.
+#[tokio::test]
+async fn spot_owner_is_bound_into_the_posted_signature() {
+    let (server, rec) = mock(one_resting(1)).await;
+    let client = Client::new(server.uri()).unwrap();
+    let w = wallet();
+    let owner = Address([0xbb; 20]);
+
+    let order = spot_order(3, 100).with_owner(owner);
+    client.exchange().spot_order(&w, &order).await.unwrap();
+
+    let envelope: Value = serde_json::from_str(&rec.bodies()[0]).unwrap();
+    let nonce = envelope["nonce"].as_u64().expect("nonce");
+    let sig = parse_signature(envelope["signature"].as_str().expect("signature"));
+
+    let bound =
+        _typed_trade_digest_for_test_as(TypedTradingAction::SpotOrder(&order), owner, nonce);
+    assert_eq!(
+        _recover_for_test(&bound, &sig).unwrap(),
+        w.address(),
+        "the owner-bound digest must recover the AGENT"
+    );
+
+    let unbound = _typed_trade_digest_for_test(TypedTradingAction::SpotOrder(&order), nonce);
+    assert_ne!(bound, unbound);
+    assert_ne!(
+        _recover_for_test(&unbound, &sig).unwrap(),
+        w.address(),
+        "the owner-less digest must NOT recover the agent"
+    );
+}
+
+/// Split a `0x`-hex 65-byte `r || s || v` signature.
+fn parse_signature(hex_sig: &str) -> Signature {
+    let raw = hex::decode(hex_sig.trim_start_matches("0x")).expect("hex signature");
+    assert_eq!(raw.len(), 65);
+    let mut r = [0u8; 32];
+    let mut s = [0u8; 32];
+    r.copy_from_slice(&raw[..32]);
+    s.copy_from_slice(&raw[32..64]);
+    Signature { r, s, v: raw[64] }
 }
 
 /// A Market leg keeps the `batch_order` IOC coercion — the unified path routes

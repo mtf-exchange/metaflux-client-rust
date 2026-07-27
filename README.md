@@ -121,7 +121,9 @@ The wire cannot batch spot orders, so a spot request sends one `spot_order`
 action per order. The result is `Placement::SeparateSpotActions`, which reports
 each action on its own — read it as N independent submissions, not one atomic
 one. A request that mixes perp and spot orders is refused, never split: build it
-with `PlaceRequest::from_legs` to get that refusal before any signing.
+with `PlaceRequest::from_legs` to get that refusal before any signing. An
+approved agent places spot legs here too — build the request with
+`PlaceRequest::spot_as(owner, orders)`.
 
 ## Market data reads
 
@@ -165,10 +167,11 @@ println!(
 
 ## Spot trading
 
-The spot CLOB (v0 = IOC limit only, `limit_px > 0` on the 1e8 price plane) is a
-separate book from the perp engine, keyed by a numeric **pair id**. Discover
-pairs via `spot_meta()`, trade with `spot_order` / `spot_cancel`, and read
-balances back with `spot_clearinghouse_state(address)`:
+The spot CLOB is a separate book from the perp engine, keyed by a numeric **pair
+id**. `tif` accepts `ioc`, `gtc` and `alo`; a `gtc` / `alo` residual rests
+against escrowed funds. `limit_px` must be `> 0`, on the 1e8 price plane.
+Discover pairs via `spot_meta()`, trade with `spot_order` / `spot_cancel`, and
+read balances back with `spot_clearinghouse_state(address)`:
 
 ```rust,ignore
 use metaflux_client::types::{
@@ -205,13 +208,40 @@ for b in &bals.balances {
 // 4. Cancel a resting order by oid.
 client
     .exchange()
-    .spot_cancel(&wallet, &SpotCancel { pair: pair.id, oid: 12345 })
+    .spot_cancel(&wallet, &SpotCancel::new(pair.id, 12345))
     .await?;
 ```
 
 On the WebSocket `trades` / `candles` / `fills` channels, spot prints carry the
 **numeric pair id** as the `coin` label (e.g. `"101"`), not the display name —
 use `spot_meta()` to map `id` to its `"{base}/{quote}"` name.
+
+### Placing spot orders as an approved agent
+
+A spot order and a spot cancel each carry an optional `owner`. Set it and the
+signing wallet acts as an approved **agent** of that address: the node places or
+cancels the order AS the owner, and `owner` is bound into the EIP-712 digest, so
+a relay can neither strip nor swap it. Leave it unset and the signer trades for
+itself — the signed bytes are unchanged.
+
+```rust,ignore
+let vault = wallet.address(); // the account whose agent this wallet is
+
+// One order, placed as the owner.
+let order = SpotOrder::ioc_limit(pair.id, Side::Bid, 1_000, 5_000_000_000)
+    .with_owner(vault);
+client.exchange().spot_order(&agent_wallet, &order).await?;
+
+// The same through the unified entry point, for every leg at once.
+let req = PlaceRequest::spot_as(vault, [order]);
+client.exchange().place_order(&agent_wallet, &req).await?;
+
+// Cancels take the same owner.
+client
+    .exchange()
+    .spot_cancel(&agent_wallet, &SpotCancel::new(pair.id, 12345).with_owner(vault))
+    .await?;
+```
 
 ### Spot margin & Earn (devnet preview)
 

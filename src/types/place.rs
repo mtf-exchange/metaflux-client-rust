@@ -97,8 +97,9 @@ pub enum PlaceRequest {
         grouping: OrderGrouping,
     },
     /// Spot orders. Routes to ONE `spot_order` action PER order, because the
-    /// wire cannot batch spot orders. The signing wallet owns every order — a
-    /// spot order body carries no owner field.
+    /// wire cannot batch spot orders. Each order carries its own optional
+    /// [`SpotOrder::owner`]: present = an approved agent places it AS that
+    /// owner; absent = the signing wallet trades for itself.
     Spot {
         /// Orders to place, in request order.
         orders: Vec<SpotOrder>,
@@ -117,10 +118,19 @@ impl PlaceRequest {
         }
     }
 
-    /// Build a spot request.
+    /// Build a spot request owned by the signing wallet.
     pub fn spot(orders: impl IntoIterator<Item = SpotOrder>) -> Self {
         PlaceRequest::Spot {
             orders: orders.into_iter().collect(),
+        }
+    }
+
+    /// Build a spot request placed AS `owner`, overwriting
+    /// [`SpotOrder::owner`] on every order. The signing wallet must be an
+    /// approved agent of `owner`.
+    pub fn spot_as(owner: Address, orders: impl IntoIterator<Item = SpotOrder>) -> Self {
+        PlaceRequest::Spot {
+            orders: orders.into_iter().map(|o| o.with_owner(owner)).collect(),
         }
     }
 

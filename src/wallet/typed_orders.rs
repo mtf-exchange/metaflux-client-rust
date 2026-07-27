@@ -759,6 +759,7 @@ mod tests {
     #[test]
     fn spot_order_kat() {
         let o = SpotOrder {
+            owner: None,
             pair: 3,
             side: Side::Bid,
             size: 50,
@@ -774,7 +775,7 @@ mod tests {
     }
     #[test]
     fn spot_cancel_kat() {
-        let c = SpotCancel { pair: 3, oid: 99 };
+        let c = SpotCancel::new(3, 99);
         assert_eq!(
             hexd(TypedTradingAction::SpotCancel(&c)),
             "5f794c0c7a2c1b473efd5e86a4386385ce4696ad2cdc8d849eb9b30745c5f7fc"
@@ -945,6 +946,7 @@ mod tests {
     fn spot_order_with_owner_kat() {
         let o = owner_bind();
         let order = SpotOrder {
+            owner: None,
             pair: 3,
             side: Side::Bid,
             size: 50,
@@ -972,7 +974,7 @@ mod tests {
     #[test]
     fn spot_cancel_with_owner_kat() {
         let o = owner_bind();
-        let c = SpotCancel { pair: 3, oid: 99 };
+        let c = SpotCancel::new(3, 99);
         let a = TypedTradingAction::SpotCancel(&c);
         assert_eq!(
             a.type_string_for(Some(&o)),

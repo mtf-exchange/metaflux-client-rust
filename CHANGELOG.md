@@ -22,8 +22,31 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   action separately.
 - `LegStatus` keeps an untyped status entry (for example a `pending` handle)
   verbatim, so a new node status cannot fail the decode.
+- **BREAKING** `SpotOrder` and `SpotCancel` gain an optional `owner`
+  (`Option<Address>`), mirroring the node's `NativeSpotOrder.owner` /
+  `NativeSpotCancel.owner`. With `owner` present an approved AGENT places or
+  cancels the order AS that owner; absent, the signer trades for itself. The
+  node has supported this since the agent-resolved owner routing landed
+  (`NativeAction::claimed_owner` returns it), but no client could reach it. The
+  field is breaking only for struct-literal construction — build with
+  `SpotOrder::ioc_limit` / `SpotCancel::new`, then `with_owner`.
+- `PlaceRequest::spot_as` — a spot request through `place_order` placed AS an
+  owner. It stamps `owner` on every leg; `PlaceRequest::spot` stays owner-less.
+- `SpotCancel::new` — a constructor, so adding a field does not break callers
+  again.
 
 ### Changed
+
+- `Exchange::spot_order` / `Exchange::spot_cancel` read the new `owner`. Present
+  selects the node's `SpotOrder` / `SpotCancel` `*_WITH_OWNER` EIP-712 type
+  string and binds the owner word right after `metafluxChain`; absent signs the
+  pre-owner digest and posts pre-owner bytes BYTE-FOR-BYTE. Two byte pins and a
+  digest pin hold that.
+- Spot documentation corrected on two counts. (1) A spot order is NOT
+  sender-authorized-only: the wire carries an optional `owner` and an approved
+  agent may trade as it. (2) `tif` is not IOC-only — the node accepts `ioc`,
+  `gtc` and `alo`, and rests a `gtc` / `alo` residual against escrow. Both notes
+  described a node that no longer exists.
 
 - `spot_margin_deposit` / `spot_margin_withdraw` (and their `_typed` twins) are
   documented as DEAD. The node rejects both whenever the cross-margin model is

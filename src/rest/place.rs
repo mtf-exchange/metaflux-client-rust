@@ -36,7 +36,11 @@ impl Exchange<'_> {
     /// its OWN `spot_order` action, with its own signature, nonce and commit.
     /// The result is [`Placement::SeparateSpotActions`] — NOT an atomic
     /// submission. The SDK stops at the first action that fails to send and
-    /// reports the remaining orders in `not_sent`.
+    /// reports the remaining orders in `not_sent`. Each order carries its own
+    /// [`SpotOrder::owner`], so an approved agent places spot orders here too;
+    /// build the request with [`PlaceRequest::spot_as`].
+    ///
+    /// [`SpotOrder::owner`]: crate::types::spot::SpotOrder::owner
     ///
     /// **Mixed request.** Refused. A caller who passes both venues expects one
     /// atomic submission, and two independent ones would be a surprise that
