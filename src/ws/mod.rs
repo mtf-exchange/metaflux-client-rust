@@ -7,12 +7,20 @@
 //! Wire shape (snake_case):
 //!
 //! ```json
-//! { "method": "subscribe",   "subscription": { "type": "l2_book", "coin": "1" } }
-//! { "method": "unsubscribe", "subscription": { "type": "l2_book", "coin": "1" } }
+//! { "method": "subscribe",   "subscription": { "type": "l2_book", "coin": "BTC" } }
+//! { "method": "unsubscribe", "subscription": { "type": "l2_book", "coin": "BTC" } }
 //! ```
 //!
-//! Per-market channels carry `coin` (a quoted asset-id string, e.g. `"1"`);
-//! per-account channels carry a `0x`-hex `user` address.
+//! Per-market channels carry `coin` as a JSON string — a market symbol
+//! (`"BTC"`), a spot pair name (`"BTC/USDC"`), or a decimal asset id (`"1"`).
+//! Per-account channels carry a `0x`-hex `user` address.
+//!
+//! ## Typed payloads
+//!
+//! Frames hand back a raw [`serde_json::Value`] so a new server field never
+//! breaks an old client. [`WsMessage::as_account_state`],
+//! [`WsMessage::as_open_orders`] and [`WsMessage::as_order_updates`] decode the
+//! account channels into the REST DTOs.
 //!
 //! ## Heartbeat
 //!
@@ -21,6 +29,8 @@
 
 mod client;
 mod subscriptions;
+mod typed;
 
 pub use client::{WsClient, WsConfig};
 pub use subscriptions::{Subscription, WsFrame, WsMessage};
+pub use typed::{OrderUpdate, WsOrderRow};

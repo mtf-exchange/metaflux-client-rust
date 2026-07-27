@@ -216,8 +216,9 @@ impl WsClient {
         .await
     }
 
-    /// Subscribe to L2 book updates by raw `coin` (a perp asset-id string or a
-    /// spot pair — name `"BTC/USDC"` or the pair-id string), with optional
+    /// Subscribe to L2 book updates by raw `coin` (a perp market symbol
+    /// `"BTC"` or asset-id string `"1"`, or a spot pair — name `"BTC/USDC"` or
+    /// the pair-id string), with optional
     /// deterministic away-from-spread aggregation ([`crate::rest::info::L2BookParams`]).
     ///
     /// Re-subscribing the same coin with different params REPLACES the view
