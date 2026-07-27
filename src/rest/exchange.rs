@@ -652,10 +652,11 @@ impl<'a> Exchange<'a> {
     /// As an approved agent, place a SCALE ladder OWNED by `owner` — the operator
     /// / vault counterpart of [`Self::scale_order`].
     ///
-    /// The signing `wallet` is a registered agent of `owner`; the signed digest
-    /// binds `owner` right after `metafluxChain` (selecting the `ScaleOrder`
-    /// `*_WITH_OWNER` type string), and the POST carries a params-level `owner`
-    /// (`0x`-hex) so the node's `NativeScaleOrder.owner` is set.
+    /// The signing `wallet` is a registered agent of `owner`. This method sets
+    /// `owner` on a copy of `params`, so the POSTed `params.owner` (`0x`-hex)
+    /// and the signed digest come from the SAME value: the digest binds `owner`
+    /// right after `metafluxChain` and selects the `ScaleOrder` `*_WITH_OWNER`
+    /// type string. Equivalent to [`Self::scale_order`] with `params.owner` set.
     ///
     /// # Errors
     /// See [`Self::scale_order`].
@@ -665,14 +666,13 @@ impl<'a> Exchange<'a> {
         owner: Address,
         params: &ScaleParams,
     ) -> Result<Value, ClientError> {
-        let action = scale_order_action(params)?;
-        self.post_typed_trade_as(
-            wallet,
-            owner,
-            action,
-            TypedTradingAction::ScaleOrder(params),
-        )
-        .await
+        let owned = ScaleParams {
+            owner: Some(owner),
+            ..params.clone()
+        };
+        let action = scale_order_action(&owned)?;
+        self.post_typed_trade(wallet, action, TypedTradingAction::ScaleOrder(&owned))
+            .await
     }
 
     /// Cancel every resting leg on `params.market` owned by the sender that
@@ -691,7 +691,8 @@ impl<'a> Exchange<'a> {
     }
 
     /// As an approved agent, cancel `owner`'s SCALE ladder by cloid — the
-    /// operator / vault counterpart of [`Self::cancel_scale`].
+    /// operator / vault counterpart of [`Self::cancel_scale`]. The owner rides
+    /// on the params, exactly as in [`Self::scale_order_as`].
     ///
     /// # Errors
     /// See [`Self::cancel_scale`].
@@ -701,14 +702,13 @@ impl<'a> Exchange<'a> {
         owner: Address,
         params: &CancelScaleParams,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "cancel_scale", "params": params });
-        self.post_typed_trade_as(
-            wallet,
-            owner,
-            action,
-            TypedTradingAction::CancelScale(params),
-        )
-        .await
+        let owned = CancelScaleParams {
+            owner: Some(owner),
+            ..*params
+        };
+        let action = json!({ "type": "cancel_scale", "params": owned });
+        self.post_typed_trade(wallet, action, TypedTradingAction::CancelScale(&owned))
+            .await
     }
 
     // ---- CHASE re-pricer (node-native `chase_order` feature) ----
@@ -742,10 +742,11 @@ impl<'a> Exchange<'a> {
     /// As an approved agent, place a CHASE order OWNED by `owner` — the operator
     /// / vault counterpart of [`Self::chase_order`].
     ///
-    /// The signing `wallet` is a registered agent of `owner`; the signed digest
-    /// binds `owner` right after `metafluxChain` (selecting the `ChaseOrder`
-    /// `*_WITH_OWNER` type string), and the POST carries a params-level `owner`
-    /// (`0x`-hex) so the node's `NativeChaseOrder.owner` is set.
+    /// The signing `wallet` is a registered agent of `owner`. This method sets
+    /// `owner` on a copy of `params`, so the POSTed `params.owner` (`0x`-hex)
+    /// and the signed digest come from the SAME value: the digest binds `owner`
+    /// right after `metafluxChain` and selects the `ChaseOrder` `*_WITH_OWNER`
+    /// type string. Equivalent to [`Self::chase_order`] with `params.owner` set.
     ///
     /// # Errors
     /// See [`Self::chase_order`].
@@ -755,14 +756,13 @@ impl<'a> Exchange<'a> {
         owner: Address,
         params: &ChaseParams,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "chase_order", "params": params });
-        self.post_typed_trade_as(
-            wallet,
-            owner,
-            action,
-            TypedTradingAction::ChaseOrder(params),
-        )
-        .await
+        let owned = ChaseParams {
+            owner: Some(owner),
+            ..params.clone()
+        };
+        let action = json!({ "type": "chase_order", "params": owned });
+        self.post_typed_trade(wallet, action, TypedTradingAction::ChaseOrder(&owned))
+            .await
     }
 
     /// Cancel a running CHASE by its registry handle (`params.chase_oid`, the
@@ -781,7 +781,8 @@ impl<'a> Exchange<'a> {
     }
 
     /// As an approved agent, cancel `owner`'s CHASE by its handle — the operator
-    /// / vault counterpart of [`Self::cancel_chase`].
+    /// / vault counterpart of [`Self::cancel_chase`]. The owner rides on the
+    /// params, exactly as in [`Self::chase_order_as`].
     ///
     /// # Errors
     /// See [`Self::cancel_chase`].
@@ -791,14 +792,13 @@ impl<'a> Exchange<'a> {
         owner: Address,
         params: &CancelChaseParams,
     ) -> Result<Value, ClientError> {
-        let action = json!({ "type": "cancel_chase", "params": params });
-        self.post_typed_trade_as(
-            wallet,
-            owner,
-            action,
-            TypedTradingAction::CancelChase(params),
-        )
-        .await
+        let owned = CancelChaseParams {
+            owner: Some(owner),
+            ..*params
+        };
+        let action = json!({ "type": "cancel_chase", "params": owned });
+        self.post_typed_trade(wallet, action, TypedTradingAction::CancelChase(&owned))
+            .await
     }
 
     // ---- TWAP ----

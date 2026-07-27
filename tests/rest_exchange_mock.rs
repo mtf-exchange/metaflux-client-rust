@@ -820,7 +820,8 @@ async fn cancel_chase_envelope_signs_and_recovers() {
 }
 
 /// `chase_order_as` carries a params-level `0x`-hex owner and signs the
-/// OWNER-FORM digest, recovering to the AGENT.
+/// OWNER-FORM digest, recovering to the AGENT. The owner rides on the params,
+/// so the POSTed body and the digest read the SAME value.
 #[tokio::test]
 async fn chase_order_as_carries_owner_and_signs_owner_form() {
     let (client, captor, agent) = capturing_exchange().await;
@@ -832,12 +833,16 @@ async fn chase_order_as_carries_owner_and_signs_owner_form() {
         .await
         .unwrap();
     let body = captor.last.lock().await.clone().expect("body captured");
+    let owned = ChaseParams {
+        owner: Some(owner),
+        ..params
+    };
     assert_owner_bound(
         &body,
         "chase_order",
         owner,
         &agent,
-        TypedTradingAction::ChaseOrder(&params),
+        TypedTradingAction::ChaseOrder(&owned),
     );
 }
 
@@ -857,12 +862,16 @@ async fn cancel_chase_as_carries_owner_and_signs_owner_form() {
         .await
         .unwrap();
     let body = captor.last.lock().await.clone().expect("body captured");
+    let owned = CancelChaseParams {
+        owner: Some(owner),
+        ..params
+    };
     assert_owner_bound(
         &body,
         "cancel_chase",
         owner,
         &agent,
-        TypedTradingAction::CancelChase(&params),
+        TypedTradingAction::CancelChase(&owned),
     );
 }
 
