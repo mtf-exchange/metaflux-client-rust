@@ -8,7 +8,7 @@
 //! REST layer's envelope-unwrap path.
 
 use metaflux_client::{
-    Client,
+    CandleType, Client,
     rest::info::{Abstraction, MarketKind, OrderSide, OrderStatus, Tier},
     wallet::Address,
 };
@@ -496,6 +496,16 @@ async fn l2_book_spot_pair_with_aggregation_params() {
     assert_eq!(book.bids[0].sz, "1.5");
 }
 
+fn price_bar(n: u64) -> Value {
+    json!({
+        "s": "BTC", "i": "1m",
+        "t": 1_700_000_040_000u64, "T": 1_700_000_099_999u64,
+        "o": "67000.0", "c": "67042.5",
+        "h": "67080.0", "l": "66990.0",
+        "v": "0", "q": "0", "n": n
+    })
+}
+
 #[tokio::test]
 async fn candle_snapshot_decodes_gateway_envelope() {
     let server = MockServer::start().await;
@@ -503,17 +513,7 @@ async fn candle_snapshot_decodes_gateway_envelope() {
         .and(path("/info"))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
             "candle_snapshot",
-            json!({
-                "candles": [
-                    {
-                        "s": "BTC", "i": "1m",
-                        "t": 1_700_000_040_000u64, "T": 1_700_000_099_999u64,
-                        "o": "67000.0", "c": "67042.5",
-                        "h": "67080.0", "l": "66990.0",
-                        "v": "12.5", "q": "838031.25", "n": 37
-                    }
-                ]
-            }),
+            json!({ "candles": [price_bar(12)] }),
         )))
         .mount(&server)
         .await;
@@ -522,14 +522,59 @@ async fn candle_snapshot_decodes_gateway_envelope() {
     let bars = client
         .rest()
         .info()
-        .candle_snapshot("BTC", "1m", 1_700_000_000_000, 1_700_000_100_000)
+        .candle_snapshot(
+            "BTC",
+            "1m",
+            CandleType::Mark,
+            1_700_000_000_000,
+            1_700_000_100_000,
+        )
         .await
         .unwrap();
     assert_eq!(bars.len(), 1);
     assert_eq!(bars[0].coin, "BTC");
     assert_eq!(bars[0].close, "67042.5");
-    assert_eq!(bars[0].quote_volume, "838031.25");
-    assert_eq!(bars[0].num_trades, 37);
+    // A price bar folds no trades.
+    assert_eq!(bars[0].volume, "0");
+    assert_eq!(bars[0].quote_volume, "0");
+    assert_eq!(bars[0].num_samples, 12);
+}
+
+/// The request carries `candle_type` inside `req`, spelled with the node's
+/// field name. Without it the node serves the DEFAULT series, so an oracle
+/// chart would silently render mark prices.
+#[tokio::test]
+async fn candle_snapshot_sends_the_requested_candle_type() {
+    for (ct, token) in [(CandleType::Mark, "mark"), (CandleType::Oracle, "oracle")] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/info"))
+            .and(body_json(json!({
+                "type": "candle_snapshot",
+                "req": {
+                    "coin": "BTC",
+                    "interval": "1m",
+                    "candle_type": token,
+                    "start_time": 0,
+                    "end_time": 1_700_000_100_000u64,
+                },
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+                "candle_snapshot",
+                json!({ "candles": [price_bar(3)] }),
+            )))
+            .mount(&server)
+            .await;
+
+        let client = Client::new(server.uri()).unwrap();
+        let bars = client
+            .rest()
+            .info()
+            .candle_snapshot("BTC", "1m", ct, 0, 1_700_000_100_000)
+            .await
+            .unwrap();
+        assert_eq!(bars.len(), 1, "{token} request body must match exactly");
+    }
 }
 
 #[tokio::test]

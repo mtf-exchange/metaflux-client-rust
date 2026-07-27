@@ -133,6 +133,8 @@ each market as `margin_tiers` (upper-bound bands; `max_open_interest = None` on
 the unbounded top tier).
 
 ```rust,ignore
+use metaflux_client::CandleType;
+
 // `client` as in the Quick start above.
 
 // All perp markets, with the inline margin-tier ladder.
@@ -142,6 +144,9 @@ for m in &markets {
 }
 
 // Depth, a bounded window of recent prints, and the single candle query.
+// A candle bar folds a PRICE series, never executions: pick `mark` (the node
+// default, perp + spot) or `oracle` (perp only). The trade candle is retired,
+// so read executions from the trade prints above.
 let book = client.rest().info().l2_book("BTC", 20).await?;
 let trades = client.rest().info().recent_trades("BTC").await?;
 let recent = client
@@ -152,7 +157,7 @@ let recent = client
 let bars = client
     .rest()
     .info()
-    .candle_snapshot("BTC", "1m", 0, u64::MAX)
+    .candle_snapshot("BTC", "1m", CandleType::Mark, 0, u64::MAX)
     .await?;
 
 // Predicted per-asset funding — the clamped rate charged at the next boundary.
@@ -214,7 +219,8 @@ client
 
 On the WebSocket `trades` / `candles` / `fills` channels, spot prints carry the
 **numeric pair id** as the `coin` label (e.g. `"101"`), not the display name —
-use `spot_meta()` to map `id` to its `"{base}/{quote}"` name.
+use `spot_meta()` to map `id` to its `"{base}/{quote}"` name. A spot pair has a
+`mark` candle series but no `oracle` one.
 
 ### Placing spot orders as an approved agent
 

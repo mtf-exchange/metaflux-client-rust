@@ -216,15 +216,30 @@ fn sdk_spot_owner_binds_the_digest_and_the_wire() {
         r#"{"cancel":{"oid":12345,"owner":"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","pair":3},"type":"spot_cancel"}"#
     );
 
-    for typed in [
-        TypedTradingAction::SpotOrder(&order),
-        TypedTradingAction::SpotCancel(&cancel),
+    let plain_order = SpotOrder::ioc_limit(3, Side::Bid, 1000, 5_000_000_000);
+    let plain_cancel = SpotCancel::new(3, 12345);
+    for (typed, plain) in [
+        (
+            TypedTradingAction::SpotOrder(&order),
+            TypedTradingAction::SpotOrder(&plain_order),
+        ),
+        (
+            TypedTradingAction::SpotCancel(&cancel),
+            TypedTradingAction::SpotCancel(&plain_cancel),
+        ),
     ] {
         let bound = _typed_trade_digest_for_test_as(typed, owner, 7);
         assert_ne!(
             bound,
-            _typed_trade_digest_for_test(typed, 7),
+            _typed_trade_digest_for_test(plain, 7),
             "the owner must be cryptographically bound, not advisory"
+        );
+        // The payload owner alone selects the `*_WITH_OWNER` digest: the plain
+        // constructor cannot sign the owner-less form for an owner-bearing body.
+        assert_eq!(
+            bound,
+            _typed_trade_digest_for_test(typed, 7),
+            "the payload owner binds the digest with no explicit owner"
         );
         let sig: Signature = agent.sign_digest(&bound).expect("sign");
         assert_eq!(

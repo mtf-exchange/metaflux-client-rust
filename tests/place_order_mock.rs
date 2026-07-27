@@ -435,7 +435,13 @@ async fn spot_owner_is_bound_into_the_posted_signature() {
         "the owner-bound digest must recover the AGENT"
     );
 
-    let unbound = _typed_trade_digest_for_test(TypedTradingAction::SpotOrder(&order), nonce);
+    // A relay that STRIPS the owner from the body makes the node compute the
+    // owner-less digest, which recovers a different address.
+    let stripped = SpotOrder {
+        owner: None,
+        ..order.clone()
+    };
+    let unbound = _typed_trade_digest_for_test(TypedTradingAction::SpotOrder(&stripped), nonce);
     assert_ne!(bound, unbound);
     assert_ne!(
         _recover_for_test(&unbound, &sig).unwrap(),

@@ -748,10 +748,14 @@ pub enum TypedAction {
     },
     /// `RfqRequest(string metafluxChain,uint32 market,uint8 side,uint64 size,bool hasLimitPx,uint64 limitPx,uint64 expiryMs,bool hasStpGroup,uint64 stpGroup,uint64 nonce)`
     ///
-    /// Sender-authorized RFQ taker request. `side` is a `uint8` (`0` = bid,
-    /// `1` = ask); numeric fields are the raw `uint64` wire form (fixed-point
-    /// lots / price, NOT decimal-scaled). The optional `limit_px` / `stp_group`
-    /// each flatten to a presence `bool` + value (`0` when absent).
+    /// RFQ taker request. `side` is a `uint8` (`0` = bid, `1` = ask); numeric
+    /// fields are the raw `uint64` wire form (fixed-point lots / price, NOT
+    /// decimal-scaled). The optional `limit_px` / `stp_group` each flatten to a
+    /// presence `bool` + value (`0` when absent).
+    ///
+    /// The node also accepts an agent-resolved `owner` here, with its own
+    /// `*_WITH_OWNER` type string. This variant signs the owner-less form, so
+    /// the signer is the taker.
     RfqRequest {
         /// Chain tag.
         metaflux_chain: String,
@@ -776,7 +780,8 @@ pub enum TypedAction {
     },
     /// `RfqAccept(string metafluxChain,uint64 rfqId,uint32 quoteIdx,uint64 size,uint64 nonce)`
     ///
-    /// Sender-authorized accept of a specific resting RFQ quote.
+    /// Accept of a specific resting RFQ quote. Like [`Self::RfqRequest`] the
+    /// node offers an owner-bound form; this variant signs the owner-less one.
     RfqAccept {
         /// Chain tag.
         metaflux_chain: String,
@@ -819,9 +824,13 @@ pub enum TypedAction {
     },
     /// `FbaSubmit(string metafluxChain,uint32 market,uint8 side,uint64 size,uint64 price,bool hasStpGroup,uint64 stpGroup,uint64 nonce)`
     ///
-    /// Sender-authorized submit into a market's frequent-batch-auction pool.
-    /// `side` is a `uint8`; `size` / `price` are the raw `uint64` wire form; the
-    /// optional `stp_group` flattens to a presence `bool` + value.
+    /// Submit into a market's frequent-batch-auction pool. `side` is a `uint8`;
+    /// `size` / `price` are the raw `uint64` wire form; the optional `stp_group`
+    /// flattens to a presence `bool` + value.
+    ///
+    /// The node accepts an agent-resolved `owner` on the wire. That owner routes
+    /// admission only; there is one frozen type string, so the digest stays
+    /// owner-less.
     FbaSubmit {
         /// Chain tag.
         metaflux_chain: String,

@@ -2,10 +2,13 @@
 //! typed-action support — the formerly-unsigned set.
 //!
 //! Split out of [`crate::wallet::typed`] to keep that file readable, mirroring
-//! [`crate::wallet::typed_orders`]. These are sender-authorized USER actions
-//! that previously had no structured signing form. The variants + dispatch live
-//! in the unified [`crate::wallet::TypedAction`] enum; the bulky frozen type
-//! strings and `encodeData` word builders live here as free functions.
+//! [`crate::wallet::typed_orders`]. These USER actions previously had no
+//! structured signing form. Most are sender-authorized — the recovered signer is
+//! the actor. `cancel_all_orders` and `rfq_quote` are not: each carries an
+//! agent-resolved `owner` and selects a `*_WITH_OWNER` type string when it is
+//! present. The variants + dispatch live in the unified
+//! [`crate::wallet::TypedAction`] enum; the bulky frozen type strings and
+//! `encodeData` word builders live here as free functions.
 //!
 //! Same frozen atomic encoding as the rest of the typed set: each field becomes
 //! one 32-byte word in declared order. Decimal fields (`amount` / `value`) are

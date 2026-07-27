@@ -265,7 +265,11 @@ pub struct CancelOrder {
 
 /// Action — amend a resting order's price and/or size in place.
 ///
-/// A `None` field leaves that attribute unchanged. Sender-authorized.
+/// A `None` field leaves that attribute unchanged. An approved agent amends AS
+/// an owner through [`Exchange::modify_as`]; that owner enters the EIP-712
+/// digest, so it rides the call, not this struct.
+///
+/// [`Exchange::modify_as`]: crate::rest::exchange::Exchange::modify_as
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Modify {

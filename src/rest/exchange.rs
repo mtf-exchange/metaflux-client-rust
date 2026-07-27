@@ -180,8 +180,8 @@ impl<'a> Exchange<'a> {
     /// `hedge = true` switches to two-way mode (independent long + short legs
     /// per market); `hedge = false` reverts to one-way. The node only accepts
     /// the switch while the account is **flat on every market** — otherwise it
-    /// rejects the action. The signer authorizes the change; the params carry
-    /// no address (the recovered signer is the target account).
+    /// rejects the action. The signer authorizes the change: this call sends no
+    /// `owner`, so the recovered signer is the target account.
     ///
     /// Once in hedge mode, every perp order MUST set
     /// [`crate::types::order::Order::position_side`].

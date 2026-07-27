@@ -357,6 +357,28 @@ impl TypedTradingAction<'_> {
         }
     }
 
+    /// The agent-resolved `owner` this action's OWN payload carries, if any.
+    ///
+    /// Six actions keep the owner INSIDE their wire struct — `spot_order`,
+    /// `spot_cancel`, `scale_order`, `cancel_scale`, `chase_order` and
+    /// `cancel_chase`. For those the payload is the single source of truth:
+    /// [`TypedTradingDigest`] binds this owner with no further caller action, so
+    /// the digest can never disagree with the posted bytes. The other
+    /// owner-carrying actions keep the owner outside the payload, so the caller
+    /// supplies it through [`TypedTradingDigest::new_with_owner`].
+    #[must_use]
+    pub fn payload_owner(&self) -> Option<Address> {
+        match self {
+            Self::SpotOrder(o) => o.owner,
+            Self::SpotCancel(c) => c.owner,
+            Self::ScaleOrder(p) => p.owner,
+            Self::CancelScale(p) => p.owner,
+            Self::ChaseOrder(p) => p.owner,
+            Self::CancelChase(p) => p.owner,
+            _ => None,
+        }
+    }
+
     /// Whether this action has an owner-carrying (`*_WITH_OWNER`) typed form,
     /// used for operator / vault trading where the agent-resolved params-level
     /// `owner` differs from the signer. `submit_order` / `cancel_order` /
@@ -563,6 +585,12 @@ impl TypedTradingAction<'_> {
 /// The digest is `keccak256(0x19 0x01 ‖ domainSeparator ‖ hashStruct)`. Use
 /// [`TypedTradingDigest::to_digest`] (panic-free encoding requires a valid
 /// action — build via [`TypedTradingDigest::digest`] for the fallible form).
+///
+/// The bound owner ALWAYS matches the owner the wire body carries. An action
+/// whose payload holds its own `owner` ([`TypedTradingAction::payload_owner`])
+/// binds that address with no caller action, so
+/// [`TypedTradingDigest::new`] cannot sign an owner-less digest for an
+/// owner-carrying body.
 #[derive(Clone, Copy, Debug)]
 pub struct TypedTradingDigest<'a> {
     action: TypedTradingAction<'a>,
@@ -573,8 +601,13 @@ pub struct TypedTradingDigest<'a> {
 }
 
 impl<'a> TypedTradingDigest<'a> {
-    /// Bind `action` to `chain_id` + `nonce` (no agent-resolved owner). The
-    /// digest is byte-identical to the pre-owner form.
+    /// Bind `action` to `chain_id` + `nonce`.
+    ///
+    /// The owner comes from the action's own payload
+    /// ([`TypedTradingAction::payload_owner`]). A payload with no owner signs
+    /// the base type string, byte-identical to the pre-owner form. For the
+    /// actions that keep the owner OUTSIDE the payload use
+    /// [`TypedTradingDigest::new_with_owner`].
     #[must_use]
     pub fn new(action: TypedTradingAction<'a>, chain_id: u64, nonce: u64) -> Self {
         Self {
@@ -599,12 +632,17 @@ impl<'a> TypedTradingDigest<'a> {
     /// Bind `action` to `chain_id` + `nonce` with an agent-resolved `owner`
     /// (operator / vault trading: the signer is an approved agent of `owner`).
     ///
-    /// The `owner` enters the digest right after `metafluxChain` for the
-    /// owner-carrying actions (`modify` / `batch_modify` / `batch_cancel` /
-    /// `cancel_by_cloid` / `twap_cancel` / `spot_order` / `spot_cancel`),
-    /// selecting the node's `*_WITH_OWNER` type string. For actions with no owner
-    /// form the `owner` is ignored, so the digest stays byte-identical to
+    /// Use this for the actions that keep the owner OUTSIDE the payload —
+    /// `modify` / `batch_modify` / `batch_cancel` / `cancel_by_cloid` /
+    /// `twap_cancel`. The `owner` enters the digest right after `metafluxChain`
+    /// and selects the node's `*_WITH_OWNER` type string. For actions with no
+    /// owner form the `owner` is ignored, so the digest stays byte-identical to
     /// [`TypedTradingDigest::new`].
+    ///
+    /// An action whose payload already carries an `owner` needs no explicit
+    /// owner: [`TypedTradingDigest::new`] binds it. Passing a DIFFERENT address
+    /// here makes [`TypedTradingDigest::digest`] fail, because the wire body
+    /// would carry one owner and the signature another.
     #[must_use]
     pub fn new_with_owner(
         action: TypedTradingAction<'a>,
@@ -621,15 +659,33 @@ impl<'a> TypedTradingDigest<'a> {
         }
     }
 
+    /// The owner the digest binds: the payload's own owner when it has one, the
+    /// explicitly bound owner otherwise.
+    fn effective_owner(&self) -> Result<Option<Address>, ClientError> {
+        match (self.action.payload_owner(), self.owner) {
+            (Some(payload), Some(bound)) if payload != bound => {
+                Err(ClientError::Validation(format!(
+                    "owner mismatch: the action payload carries {payload}, the digest binds \
+                     {bound}. The node reads the owner from the posted body, so a digest bound \
+                     to a different address never verifies."
+                )))
+            }
+            (Some(payload), _) => Ok(Some(payload)),
+            (None, bound) => Ok(bound),
+        }
+    }
+
     /// Fallible 32-byte digest — errors if the action has no typed form (e.g. a
-    /// cloid-only cancel). The infallible [`Eip712::to_digest`] returns a
-    /// zero-oid digest in that case, so prefer this for cancels.
+    /// cloid-only cancel), or if a bound owner contradicts the payload's own.
+    /// The infallible [`Eip712::to_digest`] returns a zero struct hash in those
+    /// cases, so prefer this.
     pub fn digest(&self) -> Result<[u8; 32], ClientError> {
         let domain = metaflux_domain_separator(self.chain_id);
+        let owner = self.effective_owner()?;
         let strukt = self.action.hash_struct(
             metaflux_chain_tag(self.chain_id),
             self.nonce,
-            self.owner.as_ref(),
+            owner.as_ref(),
             self.expires_after,
         )?;
         let mut h = Keccak::v256();
@@ -648,13 +704,15 @@ impl Eip712 for TypedTradingDigest<'_> {
     }
 
     fn struct_hash(&self) -> [u8; 32] {
-        self.action
-            .hash_struct(
-                metaflux_chain_tag(self.chain_id),
-                self.nonce,
-                self.owner.as_ref(),
-                self.expires_after,
-            )
+        self.effective_owner()
+            .and_then(|owner| {
+                self.action.hash_struct(
+                    metaflux_chain_tag(self.chain_id),
+                    self.nonce,
+                    owner.as_ref(),
+                    self.expires_after,
+                )
+            })
             .unwrap_or([0u8; 32])
     }
 }
@@ -1335,6 +1393,140 @@ mod tests {
         assert_eq!(
             TypedTradingAction::CancelChase(&c).type_string_for(Some(&owner())),
             b"MetaFluxTransaction:CancelChase(string metafluxChain,address owner,uint32 market,uint64 chaseOid,uint64 nonce)" as &[u8]
+        );
+    }
+
+    // ── the payload's own `owner` binds the digest ──
+    //
+    // Six actions carry the owner INSIDE their wire struct. The node reads the
+    // owner from the posted body and picks the `*_WITH_OWNER` type string from
+    // it, so a digest that ignored the payload owner would never verify. Each
+    // test below signs through the plain `TypedTradingDigest::new` and asserts
+    // the result equals the pinned `*_WITH_OWNER` vector from the golden tests
+    // above — and DIFFERS from the owner-less vector.
+
+    fn spot_order_with(owner: Option<Address>) -> SpotOrder {
+        SpotOrder {
+            owner,
+            pair: 3,
+            side: Side::Bid,
+            size: 50,
+            limit_px: 100_000_000,
+            tif: TimeInForce::Ioc,
+            stp_mode: StpMode::CancelOldest,
+            cloid: Some(cloid()),
+        }
+    }
+
+    #[test]
+    fn spot_payload_owner_binds_the_owner_digest() {
+        let o = spot_order_with(Some(owner_bind()));
+        assert_eq!(
+            hexd(TypedTradingAction::SpotOrder(&o)),
+            "974960f541953bf10ad3677c41ebfa9d8cbeb90868f74ccdf44590327e7163fc"
+        );
+        assert_ne!(
+            hexd(TypedTradingAction::SpotOrder(&o)),
+            hexd(TypedTradingAction::SpotOrder(&spot_order_with(None)))
+        );
+
+        let c = SpotCancel::new(3, 99).with_owner(owner_bind());
+        assert_eq!(
+            hexd(TypedTradingAction::SpotCancel(&c)),
+            "378a4b73e59a10e121c05f47c82f599147f66faf9ff6510d489d7baedfabb8f5"
+        );
+        assert_ne!(
+            hexd(TypedTradingAction::SpotCancel(&c)),
+            hexd(TypedTradingAction::SpotCancel(&SpotCancel::new(3, 99)))
+        );
+    }
+
+    #[test]
+    fn scale_payload_owner_binds_the_owner_digest() {
+        let p = ScaleParams {
+            owner: Some(owner()),
+            ..scale_params(ScaleDist::LinDesc, vec![])
+        };
+        assert_eq!(
+            hexd_scale(TypedTradingAction::ScaleOrder(&p)),
+            "7d52e8d5ddd55cdb59765dbaec525a68aa4b28eb60b71746fe13fcc0708aa5eb"
+        );
+
+        let c = CancelScaleParams {
+            market: MarketId(3),
+            cloid: scale_cloid(),
+            owner: Some(owner()),
+        };
+        assert_eq!(
+            hexd_scale(TypedTradingAction::CancelScale(&c)),
+            "e5f38a51f8c3b4b899af7b0d7bdabc0256fba80cd09d211881fc8a3bbdb9d5d0"
+        );
+    }
+
+    #[test]
+    fn chase_payload_owner_binds_the_owner_digest() {
+        let p = ChaseParams {
+            owner: Some(owner()),
+            ..chase_params(None, None)
+        };
+        assert_eq!(
+            hexd_chase(TypedTradingAction::ChaseOrder(&p)),
+            "744a740477c731f8892ef50dec7bbe2eedf90ae5be8b8b7b9ead18a72b0cf4ff"
+        );
+
+        let c = CancelChaseParams {
+            market: MarketId(3),
+            chase_oid: 12345,
+            owner: Some(owner()),
+        };
+        assert_eq!(
+            hexd_chase(TypedTradingAction::CancelChase(&c)),
+            "997fde389ac9ca5c32e28338211d678a40fcb24ac0f699252a59360539b4d82d"
+        );
+    }
+
+    #[test]
+    fn payload_owner_reports_the_wire_owner() {
+        let owned = spot_order_with(Some(owner_bind()));
+        assert_eq!(
+            TypedTradingAction::SpotOrder(&owned).payload_owner(),
+            Some(owner_bind())
+        );
+        let plain = spot_order_with(None);
+        assert_eq!(TypedTradingAction::SpotOrder(&plain).payload_owner(), None);
+        // The owner of a perp order is not an agent-resolved owner: the digest
+        // omits it, so the payload reports none.
+        let o = rich_order();
+        assert_eq!(TypedTradingAction::SubmitOrder(&o).payload_owner(), None);
+    }
+
+    #[test]
+    fn a_bound_owner_that_contradicts_the_payload_is_refused() {
+        let o = spot_order_with(Some(owner()));
+        let err = TypedTradingDigest::new_with_owner(
+            TypedTradingAction::SpotOrder(&o),
+            owner_bind(),
+            CHAIN,
+            NONCE,
+        )
+        .digest()
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("owner mismatch"), "names the fault: {msg}");
+        assert!(msg.contains(&owner().to_string()) && msg.contains(&owner_bind().to_string()));
+    }
+
+    #[test]
+    fn a_bound_owner_equal_to_the_payload_is_accepted() {
+        let o = spot_order_with(Some(owner_bind()));
+        let a = TypedTradingAction::SpotOrder(&o);
+        assert_eq!(
+            hex::encode(
+                TypedTradingDigest::new_with_owner(a, owner_bind(), CHAIN, NONCE)
+                    .digest()
+                    .unwrap()
+            ),
+            hexd(a)
         );
     }
 }

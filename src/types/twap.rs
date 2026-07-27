@@ -1,8 +1,17 @@
 //! TWAP (time-weighted average price) order types.
 //!
 //! A TWAP parent slices `total_size` into `slice_count` child orders spaced
-//! `delay_ms` apart. Sender-authorized (no `owner` field); `total_size` is in
-//! fixed-point tick units like a perp order's `size`.
+//! `delay_ms` apart. `total_size` is in fixed-point tick units like a perp
+//! order's `size`.
+//!
+//! ## Who owns the parent
+//!
+//! Both actions accept an agent-resolved `owner` on the wire, and this SDK does
+//! not yet build it. The signing wallet is therefore the trader. The two
+//! actions treat the owner differently, so a future port must keep them apart:
+//! `twap_cancel` binds it in the EIP-712 digest (the `*_WITH_OWNER` type
+//! string), while `twap_order` uses it only as an admission-routing hint and
+//! signs the base type string either way.
 
 use serde::{Deserialize, Serialize};
 

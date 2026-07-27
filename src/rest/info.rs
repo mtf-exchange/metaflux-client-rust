@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 
 use crate::error::ClientError;
 use crate::rest::RestClient;
+use crate::types::candle::CandleType;
 use crate::types::vault::VaultState;
 use crate::wallet::Address;
 
@@ -218,15 +219,23 @@ pub struct OpenOrders {
 /// One OHLCV bar from the `candle_snapshot` `/info` read.
 ///
 /// The REST companion to the live `candles` WS channel: the WS pushes the
-/// forming bar as trades land, this read returns the closed history. Bars are
+/// forming bar as price samples land, this read returns the history. Bars are
 /// oldest-first by `open_time`; the newest element is the still-forming bar.
+///
+/// A bar folds a PRICE series, never executions — see [`CandleType`]. A bar
+/// therefore needs no trade: a market that has never traded still has bars, and
+/// a window with no sample carries the previous close forward as a flat bar
+/// (`open == high == low == close`, `num_samples == 0`).
+///
+/// The bars come from a SAMPLED series, not the continuous price path.
+/// `open` / `close` are the first / last sample of the window, and
+/// `high` / `low` are the highest / lowest SAMPLE — not the true extremes. Do
+/// not build wick analysis or any "did the price touch X?" test on them.
 ///
 /// Wire fields use the compact single-letter keys the archive serves
 /// (`t`/`T`/`o`/`c`/`h`/`l`/`v`/`q`/`n`/`s`/`i`); this struct renames them to
 /// readable names. `open`/`close`/`high`/`low` are whole-USDC human-dollar
-/// decimal strings (`"61652.7"`), `volume` is base units (coin size),
-/// `quote_volume` is the quote-denominated notional, and `num_trades` is a fill
-/// count.
+/// decimal strings (`"61652.7"`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candle {
     /// Market symbol (e.g. `"BTC"`); wire key `s`.
@@ -253,15 +262,18 @@ pub struct Candle {
     /// Low price, whole-USDC decimal string; wire key `l`.
     #[serde(rename = "l")]
     pub low: String,
-    /// Traded base volume in the bar, decimal string (coin size); wire key `v`.
+    /// Always `"0"`; wire key `v`. A price bar folds no trades, so it carries
+    /// no base-asset volume.
     #[serde(rename = "v")]
     pub volume: String,
-    /// Quote-denominated notional traded in the bar, decimal string; wire key `q`.
+    /// Always `"0"`; wire key `q`. A price bar folds no trades, so it carries
+    /// no quote volume.
     #[serde(rename = "q", default)]
     pub quote_volume: String,
-    /// Fill count in the bar; wire key `n`.
+    /// How many price samples the bar folded; wire key `n`. It is NOT a trade
+    /// count. `0` on a carry-forward bar.
     #[serde(rename = "n")]
-    pub num_trades: u64,
+    pub num_samples: u64,
 }
 
 /// One public trade print from [`Info::recent_trades`] / [`Info::trades_by_time`].
@@ -1908,14 +1920,21 @@ impl<'a> Info<'a> {
             .await
     }
 
-    /// `candle_snapshot` — historical OHLCV bars for `(coin, interval)` over a
-    /// window. This is the single candle query: archive-first, with a fold
-    /// fallback derived from the public trade stream.
+    /// `candle_snapshot` — historical OHLCV bars for
+    /// `(coin, candle_type, interval)` over a window. This is the single candle
+    /// query: archive-first, with a fold of the live price stream as fallback.
     ///
-    /// `coin` is a market **symbol** (e.g. `"BTC"`). `start_time` / `end_time`
-    /// bound the window (unix ms). Bars come oldest-first; the newest is the
-    /// still-forming bar. An empty vec is the honest-empty answer for an
-    /// unsupported `interval` or a market with no indexed trades in the window.
+    /// `coin` is a market **symbol** (e.g. `"BTC"`). `interval` is one of
+    /// `1m` / `5m` / `15m` / `1h` / `4h` / `1d`. `candle_type` picks the price
+    /// series — [`CandleType::Mark`] is the node default and serves perp and
+    /// spot markets; [`CandleType::Oracle`] serves perp markets only, and a spot
+    /// pair asked for it always answers empty. The executed-trade candle is
+    /// RETIRED, so a bar carries a price series and never executions.
+    ///
+    /// `start_time` / `end_time` bound the window (unix ms) and filter on the
+    /// bar OPEN. Bars come oldest-first; the newest is the still-forming bar. An
+    /// empty vec is the honest-empty answer for a market with no history in that
+    /// series.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -1923,6 +1942,7 @@ impl<'a> Info<'a> {
         &self,
         coin: &str,
         interval: &str,
+        candle_type: CandleType,
         start_time: u64,
         end_time: u64,
     ) -> Result<Vec<Candle>, ClientError> {
@@ -1940,6 +1960,7 @@ impl<'a> Info<'a> {
                     "req": {
                         "coin": coin,
                         "interval": interval,
+                        "candle_type": candle_type,
                         "start_time": start_time,
                         "end_time": end_time,
                     },
@@ -2980,6 +3001,8 @@ mod tests {
     }
 
     /// Decode a `candle_snapshot` bar using the compact single-letter wire keys.
+    /// A price bar folds no trades: `v` and `q` are `"0"` and `n` counts price
+    /// SAMPLES.
     #[test]
     fn candle_snapshot_bar_decodes_compact_keys() {
         let data = serde_json::json!({
@@ -2991,9 +3014,9 @@ mod tests {
             "c": "67042.5",
             "h": "67080.0",
             "l": "66990.0",
-            "v": "12.5",
-            "q": "838031.25",
-            "n": 37
+            "v": "0",
+            "q": "0",
+            "n": 12
         });
         let bar: Candle = serde_json::from_value(data).unwrap();
         assert_eq!(bar.coin, "BTC");
@@ -3001,15 +3024,31 @@ mod tests {
         assert_eq!(bar.open_time, 1_700_000_040_000);
         assert_eq!(bar.close_time, 1_700_000_099_999);
         assert_eq!(bar.close, "67042.5");
-        assert_eq!(bar.volume, "12.5");
-        assert_eq!(bar.quote_volume, "838031.25");
-        assert_eq!(bar.num_trades, 37);
+        assert_eq!(bar.volume, "0");
+        assert_eq!(bar.quote_volume, "0");
+        assert_eq!(bar.num_samples, 12);
         // Round-trips back to the compact keys.
         let j = serde_json::to_value(&bar).unwrap();
         assert_eq!(j["s"], "BTC");
         assert!(j["o"].is_string());
         assert!(j["t"].is_number());
         assert!(j["n"].is_number());
+    }
+
+    /// A carry-forward bar: no sample in the window, so the previous close is
+    /// carried and `n` is `0`.
+    #[test]
+    fn candle_snapshot_bar_decodes_a_carry_forward_bar() {
+        let bar: Candle = serde_json::from_value(serde_json::json!({
+            "s": "BTC", "i": "1m",
+            "t": 1_700_000_100_000u64, "T": 1_700_000_159_999u64,
+            "o": "67042.5", "c": "67042.5", "h": "67042.5", "l": "67042.5",
+            "v": "0", "q": "0", "n": 0
+        }))
+        .unwrap();
+        assert_eq!(bar.num_samples, 0);
+        assert_eq!(bar.open, bar.close);
+        assert_eq!(bar.high, bar.low);
     }
 
     /// Decode a public `trades_by_time` / `recent_trades` print: symbol coin,
