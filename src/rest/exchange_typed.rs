@@ -651,14 +651,22 @@ impl<'a> Exchange<'a> {
         .await
     }
 
-    /// Post quote collateral to a spot-margin account under the typed scheme.
+    /// **DEPRECATED — the node REJECTS this action.** Post quote collateral to
+    /// a spot-margin account under the typed scheme.
     ///
-    /// `amount` is a canonical decimal string.
+    /// Dead surface. Spot margin is cross-collateralized against the one
+    /// unified USDC account, so there is no per-pair bucket to post into. The
+    /// node rejects the action whenever the cross-margin model is active, which
+    /// on the live chain is from genesis. Fund the unified USDC account and use
+    /// [`Self::spot_margin_open_typed`] / [`Self::spot_margin_close_typed`].
+    ///
+    /// Kept so old signatures stay verifiable. `amount` is a canonical decimal
+    /// string.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     #[deprecated(
-        note = "node rejects after spot_margin_cross activation (F=8416000); use spot_margin_open / spot_margin_close"
+        note = "the node rejects this action under cross-margin (live from genesis); fund the unified USDC account and use spot_margin_open / spot_margin_close"
     )]
     pub async fn spot_margin_deposit_typed(
         &self,
@@ -680,15 +688,23 @@ impl<'a> Exchange<'a> {
         .await
     }
 
-    /// Withdraw free collateral from a spot-margin account under the typed
-    /// scheme.
+    /// **DEPRECATED — the node REJECTS this action.** Withdraw free collateral
+    /// from a spot-margin account under the typed scheme.
     ///
-    /// `amount` is a canonical decimal string.
+    /// Dead surface, the twin of [`Self::spot_margin_deposit_typed`]. There is
+    /// no per-pair bucket to withdraw from under cross-margin. The node rejects
+    /// the action whenever the cross-margin model is active, which on the live
+    /// chain is from genesis. Close with [`Self::spot_margin_close_typed`],
+    /// then withdraw from the unified USDC account through the normal account
+    /// lane.
+    ///
+    /// Kept so old signatures stay verifiable. `amount` is a canonical decimal
+    /// string.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     #[deprecated(
-        note = "node rejects after spot_margin_cross activation (F=8416000); use spot_margin_open / spot_margin_close"
+        note = "the node rejects this action under cross-margin (live from genesis); close with spot_margin_close and withdraw from the unified USDC account"
     )]
     pub async fn spot_margin_withdraw_typed(
         &self,

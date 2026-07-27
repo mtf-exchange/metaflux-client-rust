@@ -228,21 +228,27 @@ impl<'a> Exchange<'a> {
             .await
     }
 
-    /// Post quote collateral into an isolated spot-margin account.
+    /// **DEPRECATED — the node REJECTS this action.** Post quote collateral
+    /// into an isolated spot-margin account.
     ///
-    /// Legacy path: spot margin now CROSSES the one unified USDC pool
-    /// (`spot_margin_cross`), and the node retired the isolated deposit / withdraw.
-    /// Prefer the cross-margin flow ([`Self::spot_margin_open`] /
-    /// [`Self::spot_margin_close`]), which draws directly against unified USDC.
+    /// Dead surface. Spot margin is CROSS-collateralized against the one
+    /// unified USDC account, so there is no per-pair collateral bucket to post
+    /// into. The node rejects the action whenever the cross-margin model is
+    /// active, which on the live chain is from genesis: `spot-margin is
+    /// cross-collateralized against your USDC account; no separate deposit`.
     ///
-    /// Sender-authorized: the recovered signer is the actor (no owner field).
-    /// Margin must be enabled for the pair, else the node rejects. Returns the
-    /// `202 Accepted` admission envelope — confirm via `/info` `spot_margin_state`.
+    /// Use the account-wide flow instead: fund the unified USDC account, then
+    /// open with [`Self::spot_margin_open`] and close with
+    /// [`Self::spot_margin_close`]. Both draw against unified USDC directly.
+    ///
+    /// The action stays on the wire so old signatures stay verifiable. The
+    /// [`SpotMarginDeposit`] type and its EIP-712 type string are kept for the
+    /// same reason.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     #[deprecated(
-        note = "node rejects after spot_margin_cross activation (F=8416000); use spot_margin_open / spot_margin_close"
+        note = "the node rejects this action under cross-margin (live from genesis); fund the unified USDC account and use spot_margin_open / spot_margin_close"
     )]
     #[allow(deprecated)]
     pub async fn spot_margin_deposit(
@@ -254,15 +260,27 @@ impl<'a> Exchange<'a> {
             .await
     }
 
-    /// Withdraw free collateral from a spot-margin account.
+    /// **DEPRECATED — the node REJECTS this action.** Withdraw free collateral
+    /// from an isolated spot-margin account.
     ///
-    /// Sender-authorized. Full collateral is withdrawable while flat; an open
-    /// position gates the withdraw at the initial-margin requirement.
+    /// Dead surface, the twin of [`Self::spot_margin_deposit`]. There is no
+    /// per-pair collateral bucket to withdraw from under cross-margin. The node
+    /// rejects the action whenever the cross-margin model is active, which on
+    /// the live chain is from genesis: `spot-margin is cross-collateralized;
+    /// withdraw USDC from your account directly`.
+    ///
+    /// Use the account-wide flow instead: close the position with
+    /// [`Self::spot_margin_close`], then withdraw from the unified USDC account
+    /// through the normal account lane ([`Self::mb_withdraw`]).
+    ///
+    /// The action stays on the wire so old signatures stay verifiable. The
+    /// [`SpotMarginWithdraw`] type and its EIP-712 type string are kept for the
+    /// same reason.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     #[deprecated(
-        note = "node rejects after spot_margin_cross activation (F=8416000); use spot_margin_open / spot_margin_close"
+        note = "the node rejects this action under cross-margin (live from genesis); close with spot_margin_close and withdraw from the unified USDC account"
     )]
     #[allow(deprecated)]
     pub async fn spot_margin_withdraw(
@@ -473,9 +491,15 @@ impl<'a> Exchange<'a> {
     /// per-order `owner`). For self-trading set `batch.owner = wallet.address()`.
     /// For operator-driven vault trading set `batch.owner` to the VAULT address;
     /// it may differ from the signer — the node authorizes the registered
-    /// operator, so the SDK does NOT enforce owner == signer here. Unlike
-    /// [`Exchange::submit_order`], a batch returns the admission envelope (not a
-    /// synchronous per-order status); observe fills via `/info` / WS.
+    /// operator, so the SDK does NOT enforce owner == signer here.
+    ///
+    /// A committed batch returns SYNCHRONOUS per-leg statuses, like
+    /// [`Exchange::submit_order`]: the node's order path covers `batch_order`
+    /// and emits one `statuses` entry per PLACED leg, each echoing its own
+    /// `cloid`. The return stays a raw [`Value`] for compatibility; for typed
+    /// per-leg statuses use [`Exchange::place_order`]. A batch that has not
+    /// committed inside the node's wait window returns one `pending` handle
+    /// instead — track it via `/info` / WS.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

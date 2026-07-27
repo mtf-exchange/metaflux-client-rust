@@ -89,6 +89,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Placing orders — one entry point
+
+The wire carries three order actions: `order` (one perp order), `batch_order` (N
+perp orders) and `spot_order` (one spot order, on its own id space).
+`place_order` is one entry point over all of them, so a caller does not pick the
+wire action. It is a convenience over the wire, never a replacement — every
+per-action method stays, and `place_order` posts the same bytes.
+
+| request | wire action | actions sent |
+|---|---|---|
+| perp, any count | `batch_order` | 1 |
+| spot, N orders | `spot_order` | N — **not atomic** |
+| mixed perp and spot | none — refused | 0 |
+
+```rust,ignore
+use metaflux_client::{PlaceRequest, Placement, types::order::OrderGrouping};
+
+// Any number of perp orders ride ONE batch_order action, so the node returns a
+// status per leg. `owner` is the params-level batch owner: the wallet for
+// self-trading, or a vault address for operator-driven vault trading.
+let req = PlaceRequest::perp(wallet.address(), vec![order_a, order_b])
+    .with_grouping(OrderGrouping::Na);
+match client.exchange().place_order(&wallet, &req).await? {
+    Placement::BatchAction(b) => println!("{} leg statuses", b.statuses.len()),
+    Placement::SeparateSpotActions(p) => println!("{} separate actions", p.sent.len()),
+}
+```
+
+The wire cannot batch spot orders, so a spot request sends one `spot_order`
+action per order. The result is `Placement::SeparateSpotActions`, which reports
+each action on its own — read it as N independent submissions, not one atomic
+one. A request that mixes perp and spot orders is refused, never split: build it
+with `PlaceRequest::from_legs` to get that refusal before any signing.
+
 ## Market data reads
 
 `/info` market reads are keyed by `coin` (the market symbol). Prices/sizes come
@@ -191,10 +225,15 @@ admission envelope, not a synchronous oid; observe committed state via `/info`
 `shares`) are passed as **strings**; `size` / `limit_px` are integers on the
 raw-lot / 1e8 planes.
 
+`spot_margin_deposit` and `spot_margin_withdraw` are **dead**. Collateral is the
+one unified USDC account, so there is no per-pair bucket to post into or
+withdraw from. The node rejects both actions whenever the cross-margin model is
+active, which on the live chain is from genesis. Both stay on the wire, and both
+types keep their EIP-712 type strings, only so old signatures stay verifiable.
+Fund the unified USDC account instead, then open and close.
+
 ```rust,ignore
-use metaflux_client::types::spot::{
-    EarnDeposit, SpotMarginClose, SpotMarginDeposit, SpotMarginOpen,
-};
+use metaflux_client::types::spot::{EarnDeposit, SpotMarginClose, SpotMarginOpen};
 
 // `client`, `wallet`, `pair` as above.
 
@@ -204,11 +243,8 @@ client
     .earn_deposit(&wallet, &EarnDeposit { asset: pair.quote, amount: "5000".into() })
     .await?;
 
-// Borrow side: post collateral, then open a leveraged long.
-client
-    .exchange()
-    .spot_margin_deposit(&wallet, &SpotMarginDeposit { pair: pair.id, amount: "100".into() })
-    .await?;
+// Borrow side: the margin is drawn from the unified USDC account — there is no
+// separate deposit step.
 client
     .exchange()
     .spot_margin_open(

@@ -97,10 +97,18 @@ pub struct SpotCancel {
 // fractional precision; `size` / `limit_px` are plain integers on the raw-lot /
 // 1e8 planes, like a [`SpotOrder`].
 
-/// Post quote (USDC) collateral into the `(account, pair)` margin account.
+/// **DEPRECATED — the node REJECTS this action.** Post quote (USDC) collateral
+/// into the `(account, pair)` margin account.
 ///
-/// Margin must be enabled for the pair (per-pair risk params present), else the
-/// node rejects with `spot margin not enabled for pair`.
+/// Spot margin is cross-collateralized against the one unified USDC account, so
+/// there is no per-pair collateral bucket to post into. The node rejects the
+/// action whenever the cross-margin model is active, which on the live chain is
+/// from genesis. Fund the unified USDC account instead, then use
+/// [`SpotMarginOpen`] / [`SpotMarginClose`].
+///
+/// The type and its EIP-712 type string stay so old signatures remain
+/// verifiable. See
+/// [`Exchange::spot_margin_deposit`](crate::rest::exchange::Exchange::spot_margin_deposit).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SpotMarginDeposit {
@@ -110,11 +118,18 @@ pub struct SpotMarginDeposit {
     pub amount: String,
 }
 
-/// Withdraw free collateral from the `(account, pair)` margin account back to
-/// the spendable quote balance.
+/// **DEPRECATED — the node REJECTS this action.** Withdraw free collateral from
+/// the `(account, pair)` margin account.
 ///
-/// Full collateral is withdrawable while flat; an open position gates the
-/// withdraw at the initial-margin requirement.
+/// The twin of [`SpotMarginDeposit`]: there is no per-pair collateral bucket to
+/// withdraw from under cross-margin. The node rejects the action whenever the
+/// cross-margin model is active, which on the live chain is from genesis. Close
+/// with [`SpotMarginClose`], then withdraw from the unified USDC account through
+/// the normal account lane.
+///
+/// The type and its EIP-712 type string stay so old signatures remain
+/// verifiable. See
+/// [`Exchange::spot_margin_withdraw`](crate::rest::exchange::Exchange::spot_margin_withdraw).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SpotMarginWithdraw {

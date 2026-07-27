@@ -5,6 +5,38 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
+## [Unreleased]
+
+### Added
+
+- `Exchange::place_order` — one entry point for perp and spot orders. It routes,
+  it does not reshape: a perp request (any count) becomes ONE `batch_order`
+  action; a spot request becomes ONE `spot_order` action PER order, because the
+  wire cannot batch spot. The posted `action` bytes are byte-identical to the
+  per-action methods, which a mock-server test asserts.
+- `PlaceRequest` / `OrderLeg` / `Placement` in `types::place`. The venue split
+  lives in the type: a perp leg and a spot leg are different structs.
+  `PlaceRequest::from_legs` REFUSES a mixed perp + spot request rather than
+  splitting it — two independent submissions would look like one atomic one.
+  `Placement::SeparateSpotActions` names its own non-atomicity and reports each
+  action separately.
+- `LegStatus` keeps an untyped status entry (for example a `pending` handle)
+  verbatim, so a new node status cannot fail the decode.
+
+### Changed
+
+- `spot_margin_deposit` / `spot_margin_withdraw` (and their `_typed` twins) are
+  documented as DEAD. The node rejects both whenever the cross-margin model is
+  active, which on the live chain is from genesis: collateral is the one unified
+  USDC account. Fund that account, then use `spot_margin_open` /
+  `spot_margin_close`. The actions, the types and the EIP-712 type strings stay
+  so old signatures remain verifiable. The old deprecation note pointed at a
+  future activation height, which was wrong for the live chain.
+- `batch_order` documentation corrected: a committed batch DOES return
+  synchronous per-leg statuses. The node's order path covers `batch_order` and
+  emits one entry per placed leg, each echoing its own `cloid`. Behaviour and
+  return type are unchanged.
+
 ## [0.15.0]
 
 Aligns the whole typed `/info` read layer and the WS channel set to the node's

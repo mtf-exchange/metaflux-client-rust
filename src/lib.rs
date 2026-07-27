@@ -51,6 +51,7 @@ pub use faucet::{FaucetResponse, request_faucet};
 pub use grid::{GridError, GridOrder, round_order_to_grid};
 pub use rest::RestClient;
 pub use types::chase::{CancelChaseParams, ChaseParams};
+pub use types::place::{OrderLeg, PlaceRequest, Placement};
 pub use types::scale::{CancelScaleParams, ScaleDist, ScaleParams};
 pub use types::{MarketId, OrderId, VaultId};
 pub use wallet::Wallet;
