@@ -5,7 +5,7 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
-## [0.16.0]
+## [0.15.0]
 
 Aligns the whole typed `/info` read layer and the WS channel set to the node's
 **wire-v2** read surface. Wire-v2 reshaped `account_state`, enriched
@@ -133,9 +133,7 @@ serializer that emits the field.
   that matched no node response. The write actions (`RfqRequest`, `RfqAccept`,
   `CoreSide`, `RfqId`) are unchanged.
 
-## [0.15.0]
-
-### Added
+### Added — chase orders
 
 - Chase order support: the `chase_order` / `cancel_chase` `Exchange` methods
   (plus the operator / vault `chase_order_as` / `cancel_chase_as`), the
