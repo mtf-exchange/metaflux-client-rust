@@ -561,7 +561,7 @@ pub struct DexPositions {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TokenBalance {
-    /// Token asset id (USDC = 0).
+    /// Token asset id (USDC = 100).
     pub asset: u32,
     /// Token symbol (e.g. `"USDC"`), else `asset:<id>`.
     pub name: String,
@@ -580,6 +580,10 @@ pub struct TokenBalance {
 /// is ALWAYS present, and a MIP-3 deployer dex keys on the deployer's lowercase
 /// 0x-hex address. `height` / `time` stamp the committed block the snapshot was
 /// read at, so a client can reject a stale snapshot.
+///
+/// Only `health_deferred` is optional. Every other field is one the node always
+/// emits, so decoding FAILS if the server drops or renames one. A missing money
+/// field must never read as an empty account.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct AccountState {
@@ -595,18 +599,20 @@ pub struct AccountState {
     pub health: String,
     /// Liquidation tier.
     pub tier: Tier,
-    /// Margin abstraction class (`"unified"` / `"portfolio"`).
+    /// `true` when the risk engine DEFERS on this account: it holds a leg no
+    /// risk path can price. `tier` and `health` are then NOT solvency
+    /// statements, and the maintenance margin reads 0 for want of a price.
+    /// The node emits the key only when it is true, so absent means `false`.
     #[serde(default)]
+    pub health_deferred: bool,
+    /// Margin abstraction class (`"unified"` / `"portfolio"`).
     pub abstraction: Abstraction,
     /// Position mode (one-way / hedge).
-    #[serde(default)]
     pub position_mode: PositionMode,
     /// Open positions grouped by dex key. `BTreeMap` for deterministic key
     /// ordering.
-    #[serde(default)]
     pub clearinghouse_state: std::collections::BTreeMap<String, DexPositions>,
     /// Token balances; the USDC row is first.
-    #[serde(default)]
     pub balances: Vec<TokenBalance>,
     /// Portfolio-margin maintenance margin, whole-USDC decimal string. Always
     /// present; `"0"` when the account is not enrolled.
@@ -2462,7 +2468,7 @@ mod tests {
                 }] }
             },
             "balances": [
-                { "asset": 0, "name": "USDC", "total": "100000000", "hold": "0" },
+                { "asset": 100, "name": "USDC", "total": "100000000", "hold": "0" },
                 { "asset": 102, "name": "ETH", "total": "5000000000", "hold": "1" }
             ],
             "pm_maint_margin": "0",
@@ -2502,7 +2508,7 @@ mod tests {
 
         // Balances are an ARRAY of token rows; USDC is first.
         assert_eq!(a.balances[0].name, "USDC");
-        assert_eq!(a.balances[0].asset, 0);
+        assert_eq!(a.balances[0].asset, 100);
         assert_eq!(a.balances[1].name, "ETH");
         assert_eq!(a.balances[1].hold, "1");
 
@@ -2531,6 +2537,67 @@ mod tests {
                 .get("asset")
                 .is_none()
         );
+    }
+
+    /// The node emits `health_deferred` ONLY when the risk engine defers, so
+    /// absent must read `false` and present must read `true`.
+    #[test]
+    fn account_state_reads_the_conditional_health_deferred_flag() {
+        let body = account_state_fixture();
+        assert!(body.get("health_deferred").is_none());
+        let a: AccountState = serde_json::from_value(body.clone()).unwrap();
+        assert!(!a.health_deferred);
+
+        let mut deferred = body;
+        deferred["health_deferred"] = serde_json::json!(true);
+        let d: AccountState = serde_json::from_value(deferred).unwrap();
+        assert!(d.health_deferred);
+    }
+
+    /// A dropped or renamed field on the money path must FAIL the decode. With
+    /// `#[serde(default)]` a rename decoded fine and reported an account that
+    /// holds nothing.
+    #[test]
+    fn account_state_rejects_a_dropped_or_renamed_field() {
+        for key in [
+            "clearinghouse_state",
+            "balances",
+            "abstraction",
+            "position_mode",
+            "account_value",
+            "free_collateral",
+            "init_margin",
+            "health",
+            "tier",
+            "pm_maint_margin",
+            "pm_net_value",
+            "pm_concentration_penalty",
+            "height",
+            "time",
+            "address",
+        ] {
+            let mut absent = account_state_fixture();
+            absent.as_object_mut().unwrap().remove(key);
+            assert!(
+                serde_json::from_value::<AccountState>(absent).is_err(),
+                "a missing `{key}` must fail the decode"
+            );
+
+            let mut renamed = account_state_fixture();
+            let v = renamed.as_object_mut().unwrap().remove(key).unwrap();
+            renamed[format!("{key}_v3")] = v;
+            assert!(
+                serde_json::from_value::<AccountState>(renamed).is_err(),
+                "a renamed `{key}` must fail the decode"
+            );
+        }
+    }
+
+    /// The rename guard above must not be satisfied by an unrelated failure:
+    /// the untouched fixture still decodes.
+    #[test]
+    fn account_state_fixture_still_decodes_unmodified() {
+        assert!(serde_json::from_value::<AccountState>(account_state_fixture()).is_ok());
     }
 
     #[test]

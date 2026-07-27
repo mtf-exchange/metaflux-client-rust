@@ -5,7 +5,7 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
-## [0.16.0]
+## [0.15.0]
 
 Aligns the whole typed `/info` read layer and the WS channel set to the node's
 **wire-v2** read surface. Wire-v2 reshaped `account_state`, enriched
@@ -17,6 +17,17 @@ serializer that emits the field.
 
 ### Changed
 
+- **BREAKING** `AccountState` drops `#[serde(default)]` from
+  `clearinghouse_state`, `balances`, `abstraction` and `position_mode`. The node
+  always emits all four, so a default let a server-side rename decode into an
+  account that holds nothing — a silent zero on the money path. A dropped or
+  renamed field now fails the decode.
+- `order_updates` documentation corrected: `order.sz` is the REMAINING size, not
+  the filled size. The executed size and its average price ride the record's own
+  `filled_sz` and `avg_px` fields.
+- WS `coin` documentation corrected: the node canonicalizes a market SYMBOL
+  (`"BTC"`) or a spot pair name (`"BTC/USDC"`) through the committed universe. A
+  numeric asset-id string still works, but is no longer required.
 - **BREAKING** `AccountState` is reshaped. The flat `positions` array is now
   `clearinghouse_state`, a map of dex key to `{positions:[…]}`; the core dex key
   is the empty string `""` and is always present, and a MIP-3 deployer dex keys
@@ -92,6 +103,17 @@ serializer that emits the field.
 - `OrderTrigger` (the repurposed `FrontendTrigger`), `Abstraction`,
   `PositionSide`, `DexPositions`, `TokenBalance`, `RfqOpen`, `RfqUser`,
   `RfqSession` and `RfqQuote`.
+- `WsMessage::as_account_state()`, `WsMessage::as_open_orders()` and
+  `WsMessage::as_order_updates()` — typed decoders for the account WS channels.
+  The raw `serde_json::Value` payload stays on every variant, so this is
+  additive. `WsMessage::channel()` returns the frame's wire channel name.
+- `OrderUpdate` and `WsOrderRow` — the `order_updates` record and its inner
+  order row. The row keeps every field optional: a `canceled` /
+  `cancel_rejected` / `rejected` record carries `null` for the fields the book
+  no longer holds, which `OpenOrder` rejects.
+- `AccountState.health_deferred` — `true` when the risk engine cannot price a
+  leg the account holds. `tier` and `health` are then not solvency statements.
+  The node emits the key only when true, so absent reads `false`.
 
 ### Removed
 
@@ -111,9 +133,7 @@ serializer that emits the field.
   that matched no node response. The write actions (`RfqRequest`, `RfqAccept`,
   `CoreSide`, `RfqId`) are unchanged.
 
-## [0.15.0]
-
-### Added
+### Added — chase orders
 
 - Chase order support: the `chase_order` / `cancel_chase` `Exchange` methods
   (plus the operator / vault `chase_order_as` / `cancel_chase_as`), the

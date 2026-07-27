@@ -7,10 +7,13 @@
 //! Wire contract (MTF-native, snake_case `type`), mirroring the node's WS
 //! `subscribe` parser and verified against `wss://api.devnet.mtf.exchange`:
 //!
-//! - **Per-market** channels carry `coin` — a **decimal asset-id string**
-//!   (`"1"`). The node resolves it via `str::parse::<u32>`, so it must be a
-//!   quoted integer, not a JSON number; symbol resolution (e.g. `"BTC"`) is not
-//!   wired yet.
+//! - **Per-market** channels carry `coin` — a **JSON string**, never a bare
+//!   number. The node canonicalizes it through the committed universe: a
+//!   decimal asset id (`"1"`) first, then a perp market symbol (`"BTC"`), then
+//!   a spot pair name (`"BTC/USDC"`). Prefer the symbol — it stays stable when
+//!   asset ids shift. An unknown coin routes to a bucket that never publishes.
+//!   Subscribe de-duplication keys on the RAW string, so `"BTC"` and `"0"`
+//!   count as two subscriptions to the same market.
 //! - **Per-account** channels carry `user` — a `0x`-hex address. (The node also
 //!   accepts the legacy alias `address`.)
 //! - `active_asset_data` carries both `coin` and `user`. `all_mids` is global
@@ -26,8 +29,9 @@ use crate::wallet::Address;
 /// One subscription request body — sent inside the
 /// `{"method":"subscribe","subscription": ...}` envelope.
 ///
-/// Per-market variants carry `coin` as a decimal asset-id string (`"1"`);
-/// per-account variants carry `user` as a `0x`-hex address. Prefer the
+/// Per-market variants carry `coin` as a market symbol (`"BTC"`), a spot pair
+/// name (`"BTC/USDC"`), or a decimal asset-id string (`"1"`); per-account
+/// variants carry `user` as a `0x`-hex address. Prefer the
 /// [`crate::ws::WsClient`] `subscribe_*` helpers, which format a typed
 /// [`crate::types::MarketId`] / [`Address`] into the right wire shape.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,8 +39,8 @@ use crate::wallet::Address;
 pub enum Subscription {
     /// L2 order-book updates for one market or spot pair.
     ///
-    /// `coin` is a perp market asset-id string (`"1"`) or a spot pair (name
-    /// `"BTC/USDC"` or the pair-id string). The three optional aggregation
+    /// `coin` is a perp market symbol (`"BTC"`) or asset-id string (`"1"`), or
+    /// a spot pair (name `"BTC/USDC"` or the pair-id string). The three optional aggregation
     /// params request deterministic away-from-spread grouping (snake_case on the
     /// native `/ws` dialect); they are OMITTED from the frame when `None`.
     ///
@@ -46,7 +50,8 @@ pub enum Subscription {
     /// echo that omits the params still decode back into this variant. The ack
     /// echoes `n_sig_figs` and `n_levels`, and `mantissa` only when it is not 1.
     L2Book {
-        /// Market asset-id string (`"1"`) or spot pair (`"BTC/USDC"` / pair id).
+        /// Market symbol (`"BTC"`), asset-id string (`"1"`), or spot pair
+        /// (`"BTC/USDC"` / pair id).
         coin: String,
         /// Significant-figure grouping (`2..=5`). Omitted from the frame when `None`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,23 +67,23 @@ pub enum Subscription {
     /// NON-EMPTY snapshot of the bounded recent tape (snapshot rows carry
     /// `users: null`); subsequent frames are live prints.
     Trades {
-        /// Market asset-id as a decimal string.
+        /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
         coin: String,
     },
     /// Best-bid-best-offer ticks for one market.
     Bbo {
-        /// Market asset-id as a decimal string.
+        /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
         coin: String,
     },
     /// Per-market mark/oracle/funding/open-interest context, one per commit
     /// (replaces the old `mark` + funding channels).
     ActiveAssetCtx {
-        /// Market asset-id as a decimal string.
+        /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
         coin: String,
     },
     /// OHLCV bar updates for one market + interval (`1m`/`5m`/`15m`/`1h`/…).
     Candles {
-        /// Market asset-id as a decimal string.
+        /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
         coin: String,
         /// Bar interval token.
         interval: String,
@@ -95,9 +100,15 @@ pub enum Subscription {
         /// User `0x` address.
         user: Address,
     },
-    /// Per-account order lifecycle (open/filled/canceled/rejected) — replaces
-    /// the old `order_events`. On a filled status the record carries `sz` (the
-    /// FILLED size) and `orig_sz` (the original order size).
+    /// Per-account order lifecycle — replaces the old `order_events`. `status`
+    /// is `open` / `filled` / `rejected` / `canceled` / `cancel_rejected`.
+    ///
+    /// The record wraps the canonical order row under `order` and carries
+    /// `filled_sz`, `avg_px`, `reason` and `time` as its OWN top-level fields.
+    /// `order.sz` is the REMAINING size, NOT the filled size: a fully filled
+    /// order reports `order.sz` `"0"` and the executed size in `filled_sz`.
+    /// `order.orig_sz` is the original submitted size. Decode with
+    /// [`crate::ws::WsMessage::as_order_updates`].
     OrderUpdates {
         /// User `0x` address.
         user: Address,
@@ -150,7 +161,7 @@ pub enum Subscription {
     },
     /// Per-(user, market) leverage / margin-mode / max-trade context.
     ActiveAssetData {
-        /// Market asset-id as a decimal string.
+        /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
         coin: String,
         /// User `0x` address.
         user: Address,
@@ -178,6 +189,12 @@ pub enum Subscription {
 /// Servers tag frames with `channel`; the SDK decodes only the variants it
 /// knows about. Unknown channels surface as [`WsMessage::Unknown`] so user
 /// code can choose to ignore or log.
+///
+/// A payload stays a raw [`serde_json::Value`] so a new server field never
+/// breaks an old client. The account channels also offer typed accessors —
+/// [`WsMessage::as_account_state`], [`WsMessage::as_open_orders`] and
+/// [`WsMessage::as_order_updates`] — which decode the payload into the same
+/// DTOs the REST reads return.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "channel", content = "data", rename_all = "snake_case")]
 pub enum WsMessage {
@@ -212,7 +229,8 @@ pub enum WsMessage {
     Fills(serde_json::Value),
     /// Per-account events.
     UserEvents(serde_json::Value),
-    /// Per-account order lifecycle.
+    /// Per-account order lifecycle — an ARRAY of records. Decode with
+    /// [`WsMessage::as_order_updates`].
     OrderUpdates(serde_json::Value),
     /// Per-account notifications.
     Notifications(serde_json::Value),
@@ -224,7 +242,9 @@ pub enum WsMessage {
     UserTwapSliceFills(serde_json::Value),
     /// Per-account TWAP history.
     UserTwapHistory(serde_json::Value),
-    /// Per-account live PERP account state.
+    /// Per-account live PERP account state — the SAME object the REST
+    /// `account_state` read returns. Decode with
+    /// [`WsMessage::as_account_state`].
     AccountState(serde_json::Value),
     /// Per-account consolidated snapshot (vaults / staking / sub-accounts /
     /// multisig / agents).
@@ -238,7 +258,9 @@ pub enum WsMessage {
     /// Committed explorer transaction rows (each row carries a 0x action `hash`,
     /// empty for systemic transactions).
     ExplorerTxs(serde_json::Value),
-    /// Per-account resting-order snapshot frame.
+    /// Per-account resting-order snapshot frame — a bare ARRAY of order rows,
+    /// NOT the `{address, orders}` object the REST read returns. Decode with
+    /// [`WsMessage::as_open_orders`].
     OpenOrders(serde_json::Value),
     /// Global per-market dynamic-state tape frame.
     Markets(serde_json::Value),
