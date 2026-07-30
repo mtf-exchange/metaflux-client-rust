@@ -7,6 +7,21 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING** The `explorer` REST namespace is gone: `RestClient::explorer`,
+  `Explorer`, `Explorer::block_by_height`, `Explorer::tx_by_hash`, and the
+  `Block` and `Transaction` types. **The server never served these endpoints.**
+  They were not deprecated and they did not stop working — no MetaFlux server
+  ever answered them, so every call returned a not-found error. You lose no
+  working capability by upgrading.
+- There is no replacement, because the capability does not exist server-side. No
+  MetaFlux endpoint looks up a block by height or a transaction by hash. To
+  follow committed blocks and transactions, subscribe to the WebSocket
+  `explorer_block` and `explorer_txs` streams — those ARE served, and they stay.
+  They deliver each block and transaction as it commits; they do not answer a
+  query about a past one.
+
 ### Changed
 
 - **BREAKING** `FeeSchedule::builder_rebate_bps` is now `Option<String>` and

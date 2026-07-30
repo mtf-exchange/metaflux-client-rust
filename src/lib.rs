@@ -13,7 +13,7 @@
 //! ## Modules
 //!
 //! - [`wallet`] — secp256k1 keypair + EIP-712 signer (deterministic nonces).
-//! - [`rest`]   — `/info`, `/exchange`, `/explorer` HTTP endpoints.
+//! - [`rest`]   — `/info` and `/exchange` HTTP endpoints.
 //! - [`ws`]     — WebSocket subscriptions, reconnect + heartbeat.
 //! - [`types`]  — domain types shared by all transports.
 //! - [`grid`]   — snap an order price / size onto a market's tick / lot grid.

@@ -1,14 +1,13 @@
-//! REST client — `/info`, `/exchange`, `/explorer` MTF-native endpoints.
+//! REST client — `/info` and `/exchange` MTF-native endpoints.
 //!
 //! The [`RestClient`] is constructed via [`Client::new`] (in the crate root)
 //! or built directly with [`RestClient::new`]. It holds a long-lived
 //! `reqwest::Client` so connection pooling is reused across calls.
 //!
-//! Three sub-namespaces:
+//! Two sub-namespaces:
 //!
 //! - [`info`]      — read-only queries (no signing required).
 //! - [`exchange`]  — write actions (EIP-712 signed; takes `&Wallet`).
-//! - [`explorer`]  — block / tx lookups.
 //!
 //! Every method returns [`Result<T, crate::ClientError>`].
 //!
@@ -24,7 +23,6 @@ use crate::error::ClientError;
 
 pub mod exchange;
 pub mod exchange_typed;
-pub mod explorer;
 pub mod info;
 pub mod place;
 
@@ -80,12 +78,6 @@ impl RestClient {
             client: self,
             expires_after_ms: 0,
         }
-    }
-
-    /// Access the explorer (block / tx lookup) namespace.
-    #[must_use]
-    pub fn explorer(&self) -> explorer::Explorer<'_> {
-        explorer::Explorer { client: self }
     }
 
     /// Base URL this client targets (without trailing slash).
@@ -149,9 +141,9 @@ impl RestClient {
 ///
 /// Every `/info` and `/exchange` success response is wrapped. We unwrap on the
 /// canonical shape — an object carrying a `data`
-/// key alongside `type`. Anything else (a bare object, the `/exchange` 202
-/// `{accepted,...}` admission ack, `/explorer` replies which are not
-/// enveloped) is returned verbatim so the typed decode still applies. This
+/// key alongside `type`. Anything else — a bare object, or the `/exchange` 202
+/// `{accepted,...}` admission ack, which is not enveloped — is returned
+/// verbatim so the typed decode still applies. This
 /// keeps the peel a no-op for non-enveloped endpoints rather than a hard
 /// requirement, which matters while the node rolls the envelope out per-path.
 fn peel_envelope(value: Value) -> Value {

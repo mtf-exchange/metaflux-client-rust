@@ -24,7 +24,7 @@ the entire API — `metaflux = "0.10"` and `use metaflux::...` work identically.
 
 ## What it does
 
-- **REST** `/info` / `/exchange` / `/explorer` — snake_case JSON. `/info` reads
+- **REST** `/info` / `/exchange` — snake_case JSON. `/info` reads
   are keyed by `coin` (the market symbol, e.g. `"BTC"`) and `address` (0x hex);
   responses render coin symbols everywhere.
 - **WebSocket** subscriptions — reconnect with backoff + heartbeat.
@@ -307,7 +307,7 @@ borrowed / idle / share_value, plus your shares when `user` is supplied).
 | Module | Purpose |
 |--------|---------|
 | [`wallet`] | secp256k1 keypair management + EIP-712 signing (RFC-6979 deterministic nonces) |
-| [`rest`]   | `RestClient` — `/info`, `/exchange`, `/explorer` endpoints |
+| [`rest`]   | `RestClient` — `/info` and `/exchange` endpoints |
 | [`ws`]     | `WsClient` — subscriptions with reconnect-with-backoff |
 | [`types`]  | Domain types: orders, TWAP, margin, vaults, staking, spot / Earn |
 
