@@ -774,6 +774,51 @@ async fn historical_orders_posts_address_and_limit() {
     assert_eq!(h.orders[0].oid, 9);
     assert_eq!(h.orders[0].filled_sz, "112.2");
     assert_eq!(h.orders[0].block, Some(2));
+    assert_eq!(h.orders[0].px.as_deref(), Some("194.78000000"));
+}
+
+/// `historical_orders` decodes a row that carries no price. A market order that
+/// never rested has no average fill price and no limit price, so the server sends
+/// no `px` key. A row that reports the price sources sends them as `null`. Both
+/// shapes must decode, and one such row must not fail the whole response.
+#[tokio::test]
+async fn historical_orders_decodes_rows_with_no_price() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_partial_json(json!({
+            "type": "historical_orders", "address": ADDR
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "historical_orders",
+            json!({
+                "address": ADDR,
+                "orders": [
+                    { "oid": 11u64, "coin": "MTF", "side": "B", "status": "error",
+                      "time": 30u64, "filled_sz": "0", "hash": "" },
+                    { "oid": 12u64, "coin": "MTF", "side": "B", "status": "resting",
+                      "time": 31u64, "filled_sz": "0", "hash": "", "px": null,
+                      "limit_px": null, "avg_px": null },
+                    { "oid": 13u64, "coin": "MTF", "side": "A", "status": "filled",
+                      "time": 32u64, "filled_sz": "1.5", "hash": "",
+                      "px": "194.78000000" }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let h = client
+        .rest()
+        .info()
+        .historical_orders(test_addr(), None)
+        .await
+        .unwrap();
+    assert_eq!(h.orders.len(), 3);
+    assert_eq!(h.orders[0].px, None);
+    assert_eq!(h.orders[1].px, None);
+    assert_eq!(h.orders[2].px.as_deref(), Some("194.78000000"));
 }
 
 /// `user_funding` omits the window keys when both bounds are `None` (exact body

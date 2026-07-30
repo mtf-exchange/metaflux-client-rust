@@ -16,6 +16,17 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   both shapes. `None` means "the server sent no value". The SDK does NOT
   substitute `"0"`, because a fabricated zero is indistinguishable from a real
   rebate. Read the field with `as_deref()` and handle `None`.
+- **BREAKING** `HistoricalOrder::px` is now `Option<String>` and defaults to
+  absent. A `historical_orders` row carries no `px` when the order has neither an
+  average fill price nor a limit price — a market order that never rested. The
+  previous required field failed the WHOLE response with a missing-field error,
+  so one such order in an account's history broke the read. Ordinary user data
+  triggers this. This version decodes an absent `px` and a `null` `px` to `None`.
+  The SDK does NOT substitute `"0"`, because a fabricated zero reads as a real
+  price. Read the field with `as_deref()` and handle `None`.
+- The `HistoricalOrder` documentation no longer claims `status` is always
+  `"filled"`. A deep-history read also returns non-executed rows, which is the
+  same case that carries no `px`.
 
 ## [0.16.0]
 

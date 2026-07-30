@@ -1038,11 +1038,15 @@ pub enum OrderStatus {
 
 /// One record inside a [`HistoricalOrders`] response.
 ///
-/// The node fold emits the 8 Always fields per executed order; a gateway-archive
-/// row adds the optional converted superset (`limit_px` / `avg_px` / `sz` /
+/// A row always carries `oid`, `coin`, `side`, `status`, `filled_sz` and `time`.
+/// A deep-history row adds the optional superset (`limit_px` / `avg_px` / `sz` /
 /// `orig_sz` / `total_sz` / `tif` / `reduce_only` / `cloid` / `cancel_reason` /
-/// `error`) and `block`. `status` is `"filled"` only today (the committed ring
-/// carries executed legs). `side` is the aggressor code (`"B"` / `"A"`).
+/// `error`) and sends no `block`. `side` is the aggressor code (`"B"` / `"A"`).
+///
+/// `status` is a lifecycle label. `"filled"` is the common value, but a
+/// deep-history read also returns non-executed rows, so do not assume `"filled"`.
+/// `px` is absent on a row that has neither an average fill price nor a limit
+/// price.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct HistoricalOrder {
@@ -1052,19 +1056,22 @@ pub struct HistoricalOrder {
     pub coin: String,
     /// Aggressor side code (`"B"` / `"A"`).
     pub side: String,
-    /// Lifecycle status (`"filled"` today).
+    /// Lifecycle status. `"filled"` is the common value; a deep-history read
+    /// also returns non-executed rows.
     pub status: String,
-    /// Fill price, 8-dp tape decimal string.
-    pub px: String,
+    /// Fill price, 8-dp tape decimal string. Absent when the order has neither
+    /// an average fill price nor a limit price — a market order that never
+    /// rested. `None` means "the server sent no price"; do not read it as zero.
+    #[serde(default)]
+    pub px: Option<String>,
     /// Total filled size, normalized decimal string.
     pub filled_sz: String,
-    /// Timestamp of the most recent fill (unix ms).
+    /// Row timestamp (unix ms) — the most recent fill on a filled row.
     pub time: u64,
     /// Trace hash of the most recent fill; empty for a systemic fill.
     #[serde(default)]
     pub hash: String,
-    /// Committed block height. Present on a node fold row; absent on an archive
-    /// row.
+    /// Committed block height. A deep-history row sends no block height.
     #[serde(default)]
     pub block: Option<u64>,
     /// Limit price (archive superset), decimal string.
@@ -3272,7 +3279,7 @@ mod tests {
         // Archive superset row.
         let a = &h.orders[0];
         assert_eq!(a.oid, 9);
-        assert_eq!(a.px, "194.78000000");
+        assert_eq!(a.px.as_deref(), Some("194.78000000"));
         assert_eq!(a.filled_sz, "112.2");
         assert_eq!(a.avg_px.as_deref(), Some("194.78000000"));
         assert_eq!(a.tif.as_deref(), Some("Gtc"));
@@ -3285,6 +3292,39 @@ mod tests {
         assert_eq!(b.avg_px, None);
         assert_eq!(b.tif, None);
         assert_eq!(b.reduce_only, None);
+    }
+
+    /// A `historical_orders` row can carry NO price: an order with neither an
+    /// average fill price nor a limit price sends no `px` key, and a row that
+    /// reports the price sources sends them as JSON `null`. Both shapes decode to
+    /// `None`, and neither fails the response.
+    #[test]
+    fn historical_orders_decodes_rows_with_no_price() {
+        let data = serde_json::json!({
+            "address": "0x4242424242424242424242424242424242424242",
+            "orders": [
+                {
+                    "oid": 11u64, "coin": "MTF", "side": "B", "status": "error",
+                    "time": 30u64, "filled_sz": "0", "hash": ""
+                },
+                {
+                    "oid": 12u64, "coin": "MTF", "side": "B", "status": "resting",
+                    "time": 31u64, "filled_sz": "0", "hash": "", "px": null,
+                    "limit_px": null, "avg_px": null, "total_sz": null
+                }
+            ]
+        });
+        let h: HistoricalOrders = serde_json::from_value(data).unwrap();
+        assert_eq!(h.orders.len(), 2);
+        // Key absent.
+        assert_eq!(h.orders[0].px, None);
+        assert_eq!(h.orders[0].oid, 11);
+        assert_eq!(h.orders[0].filled_sz, "0");
+        // Key present, value null.
+        assert_eq!(h.orders[1].px, None);
+        assert_eq!(h.orders[1].limit_px, None);
+        assert_eq!(h.orders[1].avg_px, None);
+        assert_eq!(h.orders[1].total_sz, None);
     }
 
     /// `user_funding`: the 28-significant-digit `usdc` survives verbatim as a
