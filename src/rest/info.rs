@@ -371,8 +371,11 @@ pub struct FeeSchedule {
     pub taker_bps: Option<String>,
     /// Referrer share of the base taker take, bps decimal string (e.g. `"5.0"`).
     pub referrer_share_bps: String,
-    /// Max additional builder-code rebate, bps decimal string (e.g. `"0"`).
-    pub builder_rebate_bps: String,
+    /// Max additional builder-code rebate, bps decimal string. A current server
+    /// omits the field, so `None` is the normal case. `None` means "no value
+    /// sent" — do not read it as `"0"`.
+    #[serde(default)]
+    pub builder_rebate_bps: Option<String>,
     /// Burn fraction of the non-referrer remainder, fraction in `[0, 1]`
     /// (e.g. `"0.8"`). NOT bps.
     pub burn_ratio: String,
@@ -2898,7 +2901,7 @@ mod tests {
         let f: FeeSchedule = serde_json::from_value(data).unwrap();
         assert_eq!(f.maker_bps.as_deref(), Some("1.0"));
         assert_eq!(f.referrer_share_bps, "5.0");
-        assert_eq!(f.builder_rebate_bps, "0");
+        assert_eq!(f.builder_rebate_bps.as_deref(), Some("0"));
         assert_eq!(f.burn_ratio, "0.8");
         assert_eq!(f.tiers.len(), 1);
         assert_eq!(f.tiers[0].taker_bps, "5.0");
@@ -2915,6 +2918,35 @@ mod tests {
         });
         let f2: FeeSchedule = serde_json::from_value(data2).unwrap();
         assert!(f2.maker_bps.is_none() && f2.taker_bps.is_none());
+    }
+
+    /// A current server sends NO `builder_rebate_bps`. The response still
+    /// decodes, and the absent field stays distinct from a real `"0"`.
+    #[test]
+    fn fee_schedule_decodes_without_builder_rebate() {
+        let data = serde_json::json!({
+            "maker_bps": "1.0",
+            "taker_bps": "5.0",
+            "referrer_share_bps": "5.0",
+            "burn_ratio": "0.8",
+            "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
+        });
+        let f: FeeSchedule = serde_json::from_value(data).unwrap();
+        assert!(f.builder_rebate_bps.is_none());
+        assert_eq!(f.referrer_share_bps, "5.0");
+        assert_eq!(f.tiers.len(), 1);
+
+        let with_key = serde_json::json!({
+            "maker_bps": "1.0",
+            "taker_bps": "5.0",
+            "referrer_share_bps": "5.0",
+            "builder_rebate_bps": "0",
+            "burn_ratio": "0.8",
+            "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
+        });
+        let g: FeeSchedule = serde_json::from_value(with_key).unwrap();
+        assert_eq!(g.builder_rebate_bps.as_deref(), Some("0"));
+        assert_ne!(f.builder_rebate_bps, g.builder_rebate_bps);
     }
 
     /// Decode the node `open_orders.data`. One canonical row serves the REST

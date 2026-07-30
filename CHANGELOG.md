@@ -5,6 +5,18 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING** `FeeSchedule::builder_rebate_bps` is now `Option<String>` and
+  defaults to absent. A current server sends no `builder_rebate_bps` in
+  `fee_schedule`. The previous required field failed the WHOLE response with a
+  missing-field error, so every caller of the read broke. This version decodes
+  both shapes. `None` means "the server sent no value". The SDK does NOT
+  substitute `"0"`, because a fabricated zero is indistinguishable from a real
+  rebate. Read the field with `as_deref()` and handle `None`.
+
 ## [0.16.0]
 
 Lands the unified `place_order` entry point, the agent-resolved spot `owner`, an

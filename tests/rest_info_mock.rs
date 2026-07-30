@@ -150,6 +150,33 @@ async fn fee_schedule_decodes_gateway_shape() {
     assert_eq!(f.burn_ratio, "0.8");
     assert_eq!(f.tiers.len(), 1);
     assert_eq!(f.tiers[0].volume_30d, "0");
+    assert_eq!(f.builder_rebate_bps.as_deref(), Some("0"));
+}
+
+/// A current server sends no `builder_rebate_bps`. The read must still succeed.
+#[tokio::test]
+async fn fee_schedule_decodes_without_builder_rebate() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "fee_schedule",
+            json!({
+                "maker_bps": "1.0",
+                "taker_bps": "5.0",
+                "referrer_share_bps": "5.0",
+                "burn_ratio": "0.8",
+                "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let f = client.rest().info().fee_schedule().await.unwrap();
+    assert!(f.builder_rebate_bps.is_none());
+    assert_eq!(f.referrer_share_bps, "5.0");
+    assert_eq!(f.tiers.len(), 1);
 }
 
 #[tokio::test]
