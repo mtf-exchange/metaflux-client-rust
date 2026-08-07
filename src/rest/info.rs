@@ -1043,6 +1043,10 @@ pub struct TriggerOrderStatus {
 /// then the most recent matching fill, else unknown. Tagged by the wire `status`
 /// field. A cloid-only query resolves resting / triggered hits only — the fill
 /// ring is oid-keyed.
+// The filled variant carries a whole `Fill`, which the attribution fields made
+// much larger than its siblings. The shape mirrors the wire, so boxing it would
+// buy a smaller enum at the cost of an allocation on the common path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum OrderStatus {

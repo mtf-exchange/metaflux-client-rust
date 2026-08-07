@@ -12,3 +12,6 @@
 
 # macOS
 .DS_Store
+
+# Local build config (sccache etc). Never committed — CI runners lack the wrapper.
+.cargo/

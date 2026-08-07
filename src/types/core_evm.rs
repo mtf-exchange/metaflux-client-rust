@@ -102,7 +102,7 @@ mod tests {
 
         let zero_chain = CoreEvmTransfer {
             destination_chain_id: Some(0),
-            ..base.clone()
+            ..base
         };
         assert!(zero_chain.is_v2(), "a chain id of 0 is still present");
     }

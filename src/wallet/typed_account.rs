@@ -125,6 +125,9 @@ pub(crate) fn core_evm_transfer_words(
 
 /// `CoreEvmTransferV2` words. Field order copies the retired transfer-and-call
 /// action: the chain id precedes the payload.
+// One argument per signed field, in the frozen order. Collapsing them into a
+// struct would hide the order the digest depends on.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn core_evm_transfer_v2_words(
     chain: &str,
     amount: &str,
