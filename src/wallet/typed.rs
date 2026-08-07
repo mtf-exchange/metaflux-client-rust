@@ -619,6 +619,32 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `CoreEvmTransferV2(string metafluxChain,string amount,bool toEvm,address destination,uint32 asset,uint32 destinationChainId,bytes data,uint64 nonce)`
+    ///
+    /// The payload-carrying form. Build this ONLY when the envelope carries
+    /// `data` or `destination_chain_id` — presence is the selector, so an empty
+    /// payload and a chain id of `0` both belong here. An envelope with neither
+    /// key uses [`TypedAction::CoreEvmTransfer`] and digests byte-identically to
+    /// one built before those fields existed.
+    CoreEvmTransferV2 {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Amount as a canonical decimal string (whole-token plane).
+        amount: String,
+        /// Direction: `true` = Core → MetaFluxEVM.
+        to_evm: bool,
+        /// MetaFluxEVM-side recipient, and the target of `data`.
+        destination: Address,
+        /// MTF asset id to move (0 = USDC).
+        asset: u32,
+        /// Delivery chain. `0` or the local EVM chain id; anything else is
+        /// rejected on arrival.
+        destination_chain_id: u32,
+        /// EVM calldata run against `destination` after the credit.
+        data: Vec<u8>,
+        /// Envelope nonce.
+        nonce: u64,
+    },
     /// `CreateSubAccount(string metafluxChain,string name,bool hasExplicitIndex,uint32 explicitIndex,bool sharedStpGroup,uint64 nonce)`
     ///
     /// The optional explicit index flattens to a presence `bool` + value (`0`
@@ -885,6 +911,7 @@ impl TypedAction {
             TypedAction::AgentSetAbstraction { .. } => AGENT_SET_ABSTRACTION_TYPE,
             TypedAction::MbWithdraw { .. } => MB_WITHDRAW_TYPE,
             TypedAction::CoreEvmTransfer { .. } => account::CORE_EVM_TRANSFER_TYPE,
+            TypedAction::CoreEvmTransferV2 { .. } => account::CORE_EVM_TRANSFER_V2_TYPE,
             TypedAction::CreateSubAccount { .. } => account::CREATE_SUB_ACCOUNT_TYPE,
             TypedAction::SubAccountTransfer { .. } => account::SUB_ACCOUNT_TRANSFER_TYPE,
             TypedAction::SubAccountSpotTransfer { .. } => account::SUB_ACCOUNT_SPOT_TRANSFER_TYPE,
@@ -1263,6 +1290,25 @@ impl TypedAction {
                 enc_string(dst_addr),
                 enc_u64(*nonce),
             ],
+            TypedAction::CoreEvmTransferV2 {
+                metaflux_chain,
+                amount,
+                to_evm,
+                destination,
+                asset,
+                destination_chain_id,
+                data,
+                nonce,
+            } => account::core_evm_transfer_v2_words(
+                metaflux_chain,
+                amount,
+                *to_evm,
+                destination,
+                *asset,
+                *destination_chain_id,
+                data,
+                *nonce,
+            ),
             TypedAction::CoreEvmTransfer {
                 metaflux_chain,
                 amount,

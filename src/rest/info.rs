@@ -447,6 +447,9 @@ pub struct PendingUnstake {
 
 /// `node_info` response — static node identity + protocol version.
 ///
+/// **Operator lane only.** A public gateway REFUSES this query with the same
+/// error an unknown type gets. It answers when you talk to a node directly.
+///
 /// Per the `/info` contract (`node_info`). No request parameters.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -952,6 +955,32 @@ pub struct Fill {
     /// maker-leg fill with no signed taker action.
     #[serde(default)]
     pub hash: String,
+    /// Why this leg executed when the party did NOT cross by its own order:
+    /// `"forced_close_partial"` / `"forced_close_full"` (the liquidation
+    /// ladder), `"forced_close_isolated"`, `"trigger"`, or `"twap"`.
+    ///
+    /// Absent on an ordinary fill and on EVERY maker leg — a counterparty that
+    /// was merely hit is not itself forced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
+    /// The account whose position was closed. Present on a forced-close leg, on
+    /// BOTH sides of the print, so a taker can see whose liquidation it took on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub liquidated_user: Option<String>,
+    /// The mark the liquidation ladder priced from when it classified — NOT the
+    /// fill price. Present with `liquidated_user`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mark_px: Option<String>,
+    /// The broker that routed the order. Taker leg only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broker: Option<String>,
+    /// The broker carve charged on this fill, whole-USDC decimal string. `"0"`
+    /// is legal — a zero-rate broker is still attributed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broker_fee: Option<String>,
+    /// The parent TWAP this slice belongs to. Present when `cause` is `"twap"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twap_id: Option<u64>,
 }
 
 /// One resting order inside an [`OrderStatus::Resting`] result.

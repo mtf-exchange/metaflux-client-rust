@@ -31,6 +31,12 @@ use crate::wallet::typed::{
 /// `MetaFluxTransaction:CoreEvmTransfer` // CONSENSUS-FROZEN
 pub(crate) const CORE_EVM_TRANSFER_TYPE: &[u8] =
     b"MetaFluxTransaction:CoreEvmTransfer(string metafluxChain,string amount,bool toEvm,address destination,uint32 asset,uint64 nonce)";
+
+/// `CoreEvmTransferV2` — the payload-carrying form. Selected when the envelope
+/// carries `data` or `destination_chain_id`; PRESENCE is the selector, so an
+/// empty payload and a chain id of `0` both choose this string.
+pub(crate) const CORE_EVM_TRANSFER_V2_TYPE: &[u8] =
+    b"MetaFluxTransaction:CoreEvmTransferV2(string metafluxChain,string amount,bool toEvm,address destination,uint32 asset,uint32 destinationChainId,bytes data,uint64 nonce)";
 /// `MetaFluxTransaction:CreateSubAccount` // CONSENSUS-FROZEN. The optional
 /// `explicitIndex` flattens to a presence `bool` + value (`0` when absent).
 pub(crate) const CREATE_SUB_ACCOUNT_TYPE: &[u8] =
@@ -113,6 +119,30 @@ pub(crate) fn core_evm_transfer_words(
         enc_bool(to_evm),
         enc_addr(destination),
         enc_u32(asset),
+        enc_u64(nonce),
+    ]
+}
+
+/// `CoreEvmTransferV2` words. Field order copies the retired transfer-and-call
+/// action: the chain id precedes the payload.
+pub(crate) fn core_evm_transfer_v2_words(
+    chain: &str,
+    amount: &str,
+    to_evm: bool,
+    destination: &crate::wallet::Address,
+    asset: u32,
+    destination_chain_id: u32,
+    data: &[u8],
+    nonce: u64,
+) -> Vec<[u8; 32]> {
+    vec![
+        enc_string(chain),
+        enc_string(amount),
+        enc_bool(to_evm),
+        enc_addr(destination),
+        enc_u32(asset),
+        enc_u32(destination_chain_id),
+        enc_bytes(data),
         enc_u64(nonce),
     ]
 }

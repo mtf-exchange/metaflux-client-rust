@@ -123,3 +123,9 @@ mod tests {
         assert_eq!(cloid, dec);
     }
 }
+
+/// `skip_serializing_if` helper for a defaulted `u32` wire field.
+#[allow(clippy::trivially_copy_pass_by_ref)]
+pub(crate) fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}

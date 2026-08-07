@@ -1,13 +1,17 @@
-//! The candle price-series selector.
+//! The candle series selector.
 //!
-//! A candle bar folds a PRICE series, never executions. The node serves two
-//! series — the mark price and the oracle index price — and `mark` is the
-//! default. The executed-trade candle is RETIRED: `trade` is not a valid
-//! `candle_type` and the node rejects it like any other unknown token, on both
-//! the REST `candle_snapshot` read and the `candles` WS channel.
+//! Three series are served on both the REST `candle_snapshot` read and the
+//! `candles` WS channel: the mark price, the oracle index price, and executed
+//! trades. `mark` is the default.
 //!
-//! An unknown token is never served as the other series. A chart drawn from the
-//! wrong price is a trading hazard, so the node fails the request instead.
+//! An unknown token is never served as another series. A chart drawn from the
+//! wrong price is a trading hazard, so the request fails instead.
+//!
+//! A PRICE series and the TRADE series differ in more than price. A price series
+//! has a bar in every window its samples cover. The trade series is SPARSE: a
+//! window with no fill has NO bar, never a carried-forward one. Volume and count
+//! also differ — a price bar reports zero volume and a SAMPLE count, a trade bar
+//! reports real volume and a real trade count.
 
 use serde::{Deserialize, Serialize};
 
@@ -30,11 +34,15 @@ pub enum CandleType {
     /// Oracle index price. Perp markets ONLY — a spot pair has no oracle price,
     /// so it answers empty.
     Oracle,
+    /// Executed-trade OHLCV, folded from prints. Perp and spot markets.
+    ///
+    /// SPARSE: a window with no fill produces no bar at all.
+    Trade,
 }
 
 impl CandleType {
     /// Every series, in wire order.
-    pub const ALL: [CandleType; 2] = [Self::Mark, Self::Oracle];
+    pub const ALL: [CandleType; 3] = [Self::Mark, Self::Oracle, Self::Trade];
 
     /// The wire token.
     #[must_use]
@@ -42,11 +50,11 @@ impl CandleType {
         match self {
             Self::Mark => "mark",
             Self::Oracle => "oracle",
+            Self::Trade => "trade",
         }
     }
 
-    /// Parse a wire token. `None` for any other value, including the retired
-    /// `trade`.
+    /// Parse a wire token. `None` for anything that is not one of the three.
     #[must_use]
     pub fn from_token(s: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|c| c.token() == s)
@@ -68,7 +76,10 @@ mod tests {
         for c in CandleType::ALL {
             assert_eq!(CandleType::from_token(c.token()), Some(c));
         }
-        assert_eq!(CandleType::ALL.map(CandleType::token), ["mark", "oracle"]);
+        assert_eq!(
+            CandleType::ALL.map(CandleType::token),
+            ["mark", "oracle", "trade"]
+        );
     }
 
     #[test]
@@ -76,11 +87,11 @@ mod tests {
         assert_eq!(CandleType::default(), CandleType::Mark);
     }
 
-    /// The trade candle is RETIRED. It must not parse, and it must not resolve
-    /// to the other series.
+    /// An unknown token must not parse, and must never resolve to another
+    /// series. Case matters: the wire tokens are lowercase.
     #[test]
-    fn retired_and_unknown_tokens_do_not_parse() {
-        for bad in ["trade", "TRADE", "Mark", "", "index"] {
+    fn unknown_tokens_do_not_parse() {
+        for bad in ["TRADE", "Mark", "", "index", "last"] {
             assert!(
                 CandleType::from_token(bad).is_none(),
                 "{bad} must not parse"
@@ -102,7 +113,11 @@ mod tests {
             serde_json::from_str::<CandleType>("\"oracle\"").unwrap(),
             CandleType::Oracle
         );
-        assert!(serde_json::from_str::<CandleType>("\"trade\"").is_err());
+        assert_eq!(
+            serde_json::from_str::<CandleType>("\"trade\"").unwrap(),
+            CandleType::Trade
+        );
+        assert!(serde_json::from_str::<CandleType>("\"last\"").is_err());
     }
 
     #[test]
