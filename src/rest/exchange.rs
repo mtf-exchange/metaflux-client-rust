@@ -32,9 +32,9 @@ use crate::error::ClientError;
 use crate::rest::RestClient;
 use crate::types::{
     account::{
-        AgentSetAbstraction, ApproveAgent, ApproveBuilderFee, ConvertToMultiSigUser, PriorityBid,
-        SetDisplayName, SetReferrer, TopUpIsolatedOnlyMargin, UpdateIsolatedMargin, UpdateLeverage,
-        UserPortfolioMargin, UserSetAbstraction,
+        AgentSetAbstraction, ApproveAgent, ApproveBrokerFee, ApproveBuilderFee,
+        ConvertToMultiSigUser, PriorityBid, SetDisplayName, SetReferrer, TopUpIsolatedOnlyMargin,
+        UpdateIsolatedMargin, UpdateLeverage, UserPortfolioMargin, UserSetAbstraction,
     },
     chase::{CancelChaseParams, ChaseParams},
     encrypted::SubmitEncryptedOrder,
@@ -956,8 +956,21 @@ impl<'a> Exchange<'a> {
         .await
     }
 
-    /// Approve a builder to charge a fee (up to `max_bps`) on this account's
+    /// Approve a broker to charge a fee (up to `max_bps`) on this account's
     /// orders. `max_bps = 0` revokes.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn approve_broker_fee(
+        &self,
+        wallet: &Wallet,
+        params: &ApproveBrokerFee,
+    ) -> Result<Value, ClientError> {
+        self.approve_broker_fee_typed(wallet, params.builder, params.max_bps)
+            .await
+    }
+
+    /// Old name for [`Self::approve_broker_fee`].
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -966,8 +979,7 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &ApproveBuilderFee,
     ) -> Result<Value, ClientError> {
-        self.approve_builder_fee_typed(wallet, params.builder, params.max_bps)
-            .await
+        self.approve_broker_fee(wallet, params).await
     }
 
     /// Convert the account to an M-of-N multisig.

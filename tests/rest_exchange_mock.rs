@@ -13,7 +13,7 @@ use metaflux_client::{
     rest::exchange_typed::{_typed_digest_for_test, _typed_trade_digest_for_test},
     types::{
         Cloid, MarketId, OrderId,
-        account::UpdateLeverage,
+        account::{ApproveBrokerFee, UpdateLeverage},
         chase::{CancelChaseParams, ChaseParams},
         order::{
             BatchCancel, BatchModify, BatchOrder, CancelByCloid, CancelOrder, Modify, Order,
@@ -383,6 +383,58 @@ async fn update_leverage_posts_sender_authorized_envelope() {
     let digest = _typed_digest_for_test(&reconstructed);
     let sig = decode_sig(body["signature"].as_str().unwrap());
     assert_eq!(_recover_for_test(&digest, &sig).unwrap(), wallet.address());
+}
+
+/// The action tag moved to `approve_broker_fee`; the EIP-712 type string stays
+/// `ApproveBuilderFee`. The recovery below proves the digest did not move with
+/// the tag.
+#[tokio::test]
+async fn approve_broker_fee_posts_the_broker_tag_under_the_old_typed_digest() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let broker = Address([0x20; 20]);
+    let params = ApproveBrokerFee {
+        builder: broker,
+        max_bps: 7,
+    };
+    let resp: Value = client
+        .exchange()
+        .approve_broker_fee(&wallet, &params)
+        .await
+        .unwrap();
+    assert_eq!(resp["accepted"], true);
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("approve_broker_fee"));
+    assert_eq!(action["params"]["max_bps"], json!(7));
+    assert!(
+        action["params"].get("builder").is_some(),
+        "the wire key stays `builder`"
+    );
+
+    let nonce = body["nonce"].as_u64().unwrap();
+    let reconstructed = TypedAction::ApproveBuilderFee {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        builder: broker,
+        max_fee_bps: 7,
+        nonce,
+    };
+    let digest = _typed_digest_for_test(&reconstructed);
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(_recover_for_test(&digest, &sig).unwrap(), wallet.address());
+}
+
+/// The old method name must keep compiling and must emit the SAME new tag.
+#[tokio::test]
+async fn the_old_approve_builder_fee_method_emits_the_new_tag() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let _: Value = client
+        .exchange()
+        .approve_builder_fee_typed(&wallet, Address([0x20; 20]), 7)
+        .await
+        .unwrap();
+    let body = captor.last.lock().await.clone().expect("body captured");
+    assert_eq!(body["action"]["type"].as_str(), Some("approve_broker_fee"));
 }
 
 #[tokio::test]

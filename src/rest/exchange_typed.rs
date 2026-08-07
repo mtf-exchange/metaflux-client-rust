@@ -234,7 +234,34 @@ impl<'a> Exchange<'a> {
         .await
     }
 
-    /// Approve a builder fee under the typed scheme.
+    /// Approve a broker fee under the typed scheme.
+    ///
+    /// The POSTed action tag is `approve_broker_fee`. The EIP-712 type string
+    /// stays `ApproveBuilderFee`: it is consensus-frozen, so the two names
+    /// differ on purpose.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn approve_broker_fee_typed(
+        &self,
+        wallet: &Wallet,
+        broker: crate::wallet::Address,
+        max_fee_bps: u16,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::ApproveBuilderFee {
+                metaflux_chain: chain,
+                builder: broker,
+                max_fee_bps,
+                nonce,
+            };
+            let params = json!({ "builder": broker, "max_bps": max_fee_bps });
+            (action, "approve_broker_fee", params)
+        })
+        .await
+    }
+
+    /// Old name for [`Self::approve_broker_fee_typed`].
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -244,17 +271,8 @@ impl<'a> Exchange<'a> {
         builder: crate::wallet::Address,
         max_fee_bps: u16,
     ) -> Result<Value, ClientError> {
-        self.post_signed_typed(wallet, |chain, nonce| {
-            let action = TypedAction::ApproveBuilderFee {
-                metaflux_chain: chain,
-                builder,
-                max_fee_bps,
-                nonce,
-            };
-            let params = json!({ "builder": builder, "max_bps": max_fee_bps });
-            (action, "approve_builder_fee", params)
-        })
-        .await
+        self.approve_broker_fee_typed(wallet, builder, max_fee_bps)
+            .await
     }
 
     /// Set the account display name under the typed scheme.

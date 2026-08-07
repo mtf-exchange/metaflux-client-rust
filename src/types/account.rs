@@ -84,16 +84,22 @@ pub struct ApproveAgent {
     pub expires_at_ms: Option<u64>,
 }
 
-/// Action — approve a builder to charge a fee up to `max_bps` on this account's
+/// Action — approve a broker to charge a fee up to `max_bps` on this account's
 /// orders. `max_bps = 0` revokes the approval.
+///
+/// The wire key stays `builder`; only the action tag moved to
+/// `approve_broker_fee`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ApproveBuilderFee {
-    /// Builder address being approved.
+    /// Broker address being approved.
     pub builder: Address,
     /// Maximum approved fee in basis points (the node caps the effective fee).
     pub max_bps: u16,
 }
+
+/// Canonical name for [`ApproveBuilderFee`].
+pub type ApproveBrokerFee = ApproveBuilderFee;
 
 /// Action — convert the account to an M-of-N multisig.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

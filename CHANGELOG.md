@@ -24,6 +24,17 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Changed
 
+- The `/exchange` action tag is now `approve_broker_fee`, not
+  `approve_builder_fee`. The node accepts BOTH names, so an old client keeps
+  working; this SDK emits the new one. `Exchange::approve_broker_fee` and
+  `Exchange::approve_broker_fee_typed` are the canonical methods.
+  `approve_builder_fee` and `approve_builder_fee_typed` stay as old names and
+  now emit the new tag. `ApproveBrokerFee` is an alias of `ApproveBuilderFee`.
+  **The node must run a binary that knows the new tag before you upgrade.**
+  The EIP-712 type string stays
+  `MetaFluxTransaction:ApproveBuilderFee(...)`. It is consensus-frozen: one
+  changed byte breaks verification of every historical signature. The wire tag
+  and the signing string therefore differ on purpose.
 - **BREAKING** `FeeSchedule::builder_rebate_bps` is now `Option<String>` and
   defaults to absent. A current server sends no `builder_rebate_bps` in
   `fee_schedule`. The previous required field failed the WHOLE response with a
