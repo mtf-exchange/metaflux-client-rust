@@ -137,10 +137,18 @@ use metaflux_client::CandleType;
 
 // `client` as in the Quick start above.
 
-// All perp markets, with the inline margin-tier ladder.
+// Live price / funding / OI for every perp. `markets` is the DYNAMIC half:
+// it carries no precision grid and no margin-tier ladder.
 let markets = client.rest().info().markets().await?;
 for m in &markets {
-    println!("{}: mark {} tiers {}", m.coin, m.mark_px, m.margin_tiers.len());
+    println!("{}: mark {} oi {}", m.coin, m.mark_px, m.open_interest);
+}
+
+// The STATIC half — precision grids, leverage, the margin-tier ladder and the
+// open/close trade-control flags. Cache it and merge by `coin`.
+let meta = client.rest().info().markets_meta().await?;
+for m in &meta {
+    println!("{}: tiers {} tick {}", m.coin, m.margin_tiers.len(), m.tick_size);
 }
 
 // Depth, a bounded window of recent prints, and the single candle query.

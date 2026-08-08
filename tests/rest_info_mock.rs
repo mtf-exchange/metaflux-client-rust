@@ -29,7 +29,7 @@ fn envelope(ty: &str, data: Value) -> Value {
 }
 
 #[tokio::test]
-async fn markets_decodes_array_of_market_info() {
+async fn markets_meta_decodes_array_of_market_info() {
     let server = MockServer::start().await;
     let market = |asset_id: u32, coin: &str, max_lev: u32| {
         json!({
@@ -63,7 +63,7 @@ async fn markets_decodes_array_of_market_info() {
     Mock::given(method("POST"))
         .and(path("/info"))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "markets",
+            "markets_meta",
             json!({
                 "perp": [market(0, "BTC", 50), market(1, "ETH", 40)],
                 "spot": { "pairs": [], "tokens": [] }
@@ -73,7 +73,7 @@ async fn markets_decodes_array_of_market_info() {
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let markets = client.rest().info().markets().await.unwrap();
+    let markets = client.rest().info().markets_meta().await.unwrap();
     assert_eq!(markets.len(), 2);
     assert_eq!(markets[0].coin, "BTC");
     assert_eq!(markets[0].asset_id, 0);
@@ -82,6 +82,122 @@ async fn markets_decodes_array_of_market_info() {
     assert!(markets[0].margin_tiers[1].max_open_interest.is_none());
     assert_eq!(markets[1].coin, "ETH");
     assert_eq!(markets[1].max_leverage, 40);
+}
+
+/// The DYNAMIC `markets` read, shaped as chain 114514 served it on 2026-08-08.
+/// It carries no precision grid and no leverage ladder, so it decodes into
+/// `MarketDynamic`, not `MarketInfo`.
+#[tokio::test]
+async fn markets_decodes_the_dynamic_row() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_partial_json(json!({ "type": "markets" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "markets",
+            json!({
+                "perp": [{
+                    "change_24h": "0.01186283", "coin": "BTC", "day_ntl_vlm": "0",
+                    "funding": { "cap_per_hr": "400", "interval_ms": 3_600_000u64,
+                                 "next_payment_ts": 1_786_165_200_000u64,
+                                 "rate_per_hr": "-3" },
+                    "halted": false, "impact_pxs": ["64998", "65030.7"],
+                    "kind": "perp", "mark_px": "65013.3", "mid_px": "65014.4",
+                    "open_interest": "0.7895", "oracle_px": "65033.7",
+                    "premium": "-0.00029993", "prev_day_px": "64251.1"
+                }],
+                "spot": { "pairs": [], "tokens": [] }
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let markets = client.rest().info().markets().await.unwrap();
+    assert_eq!(markets.len(), 1);
+    assert_eq!(markets[0].coin, "BTC");
+    assert_eq!(markets[0].kind, MarketKind::Perp);
+    assert_eq!(markets[0].mark_px, "65013.3");
+    assert_eq!(markets[0].open_interest, "0.7895");
+    assert!(!markets[0].halted);
+}
+
+/// `user_position_history` is keyed by `address` and answers with the fills-style
+/// envelope: the echoed address and the rows, nothing else.
+#[tokio::test]
+async fn user_position_history_decodes_the_fills_style_envelope() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(json!({
+            "type": "user_position_history", "address": ADDR, "limit": 2
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "user_position_history",
+            json!({
+                "address": ADDR,
+                "positions": [{
+                    "avg_close_px": "74.75000000", "avg_entry_px": null,
+                    "close_block": 6_831_775u64, "close_complete": false,
+                    "closed_at": 1_786_162_051_867u64, "closed_pnl": "0.8960000000",
+                    "closed_sz": "0.80", "coin": "SOL", "entry_complete": false,
+                    "fee_paid": "0.001794", "funding_complete": false,
+                    "funding_paid": "0", "max_sz": null, "net_pnl": "0.8942060000",
+                    "open_block": 6_831_775u64, "opened_at": 1_786_162_051_867u64,
+                    "realized_pnl": "0.8942060000", "side": "long"
+                }]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let h = client
+        .rest()
+        .info()
+        .user_position_history(test_addr(), Some(2))
+        .await
+        .unwrap();
+    assert_eq!(h.address, test_addr());
+    let p = &h.positions[0];
+    assert_eq!(p.coin, "SOL");
+    assert_eq!(p.closed_sz, "0.80");
+    // A degraded row reports itself and nulls the numbers it cannot stand behind.
+    assert!(!p.entry_complete);
+    assert!(p.avg_entry_px.is_none());
+    assert!(p.max_sz.is_none());
+}
+
+/// `user_position_history_by_time` sends the window and does NOT get it echoed
+/// back — unlike `user_fills_by_time`, whose reply carries the bounds.
+#[tokio::test]
+async fn user_position_history_by_time_sends_the_window() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(json!({
+            "type": "user_position_history_by_time", "address": ADDR,
+            "start_time": 1_786_000_000_000u64, "end_time": 1_786_200_000_000u64
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "user_position_history_by_time",
+            json!({ "address": ADDR, "positions": [] }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let h = client
+        .rest()
+        .info()
+        .user_position_history_by_time(
+            test_addr(),
+            Some(1_786_000_000_000),
+            Some(1_786_200_000_000),
+        )
+        .await
+        .unwrap();
+    assert!(h.positions.is_empty());
 }
 
 #[tokio::test]
@@ -1067,8 +1183,8 @@ async fn pm_summary_posts_address_key() {
             json!({
                 "address": ADDR, "enrolled": true,
                 "enrolled_at": 1_700_000_000_000u64, "last_computed_block": 8_416_000u64,
-                "pm_maint_margin_cents": "123456", "net_value_cents": "10000000",
-                "concentration_penalty_cents": "250"
+                "pm_maint_margin": "1234.56", "pm_net_value": "100000",
+                "pm_concentration_penalty": "2.5"
             }),
         )))
         .mount(&server)
@@ -1079,9 +1195,11 @@ async fn pm_summary_posts_address_key() {
     assert!(p.enrolled);
     assert_eq!(p.address, test_addr());
     assert_eq!(p.enrolled_at, 1_700_000_000_000);
-    // The standalone pm_summary KEEPS its `*_cents` integer-string fields; only
-    // the folded account_state figures moved to the whole-USDC plane.
-    assert_eq!(p.pm_maint_margin_cents, "123456");
+    // pm_summary and account_state render the SAME three figures on the SAME
+    // whole-USDC plane. The `*_cents` names this read once used are gone.
+    assert_eq!(p.pm_maint_margin, "1234.56");
+    assert_eq!(p.pm_net_value, "100000");
+    assert_eq!(p.pm_concentration_penalty, "2.5");
 }
 
 /// `encode_action` posts `{type, action}` and returns the `action_json` STRING.

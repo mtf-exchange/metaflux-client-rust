@@ -174,6 +174,19 @@ mod tests {
             fba_enabled: false,
             open_interest: "0".into(),
             token: None,
+            open: Some(true),
+            close: Some(true),
+            strict_isolated: Some(false),
+            oi_cap: None,
+            halted: Some(false),
+            mid_px: None,
+            impact_pxs: None,
+            px_stale: None,
+            premium: None,
+            prev_day_px: None,
+            change_24h: None,
+            day_ntl_vlm: None,
+            day_ntl_vlm_lower_bound_from: None,
         }
     }
 

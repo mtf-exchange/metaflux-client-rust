@@ -17,7 +17,8 @@
 //!   [`Info::staking_state`], [`Info::pm_summary`], [`Info::order_status_by_oid`],
 //!   [`Info::historical_orders`], [`Info::user_funding`],
 //!   [`Info::spot_margin_state`], [`Info::earn_state`], [`Info::user_fills`],
-//!   [`Info::user_fills_by_time`], [`Info::rfq_user`],
+//!   [`Info::user_fills_by_time`], [`Info::user_position_history`],
+//!   [`Info::user_position_history_by_time`], [`Info::rfq_user`],
 //!   [`Info::active_asset_data`], [`Info::agents`], [`Info::sub_accounts`].
 //! - **Static / misc** — [`Info::node_info`], [`Info::spot_meta`],
 //!   [`Info::fee_schedule`], [`Info::vault_state`], [`Info::rfq_open`],
@@ -790,6 +791,115 @@ pub struct MarketInfo {
     /// EVM binding + `circulating_supply`.
     #[serde(default)]
     pub token: Option<PerpUnderlyingToken>,
+    /// Whether OPENING a position is PERMITTED. `None` = the read did not serve
+    /// the flag (the dynamic `markets` read omits it), NOT "blocked": the wire
+    /// says what is ALLOWED, so a `false` here really does block opening.
+    #[serde(default)]
+    pub open: Option<bool>,
+    /// Whether CLOSING a position is PERMITTED. Same presence rule as
+    /// [`MarketInfo::open`].
+    #[serde(default)]
+    pub close: Option<bool>,
+    /// Whether the market is mode-2 only (cross opens rejected).
+    #[serde(default)]
+    pub strict_isolated: Option<bool>,
+    /// Governance open-interest cap in whole base units. OMITTED (→ `None`)
+    /// when the market is uncapped — an absent cap is not a cap of `0`.
+    #[serde(default)]
+    pub oi_cap: Option<String>,
+    /// Whether the market is halted. `None` on the static `markets_meta` read.
+    #[serde(default)]
+    pub halted: Option<bool>,
+    /// Order-book mid price, whole-USDC decimal string; `None` when the book is
+    /// one-sided or the read is static.
+    #[serde(default)]
+    pub mid_px: Option<String>,
+    /// `[bid, ask]` impact prices. OMITTED (→ `None`) when the impact notional
+    /// cannot fill against the current book.
+    #[serde(default)]
+    pub impact_pxs: Option<Vec<String>>,
+    /// Present and `true` ONLY when the oracle index is stale. The market still
+    /// advertises a `mark_px`, but no aggregation pass sourced it and every risk
+    /// path defers on it. A healthy market omits the key.
+    #[serde(default)]
+    pub px_stale: Option<bool>,
+    /// Mark-vs-oracle premium, signed decimal fraction string; `None` when the
+    /// read is static or no premium is computable.
+    #[serde(default)]
+    pub premium: Option<String>,
+    /// Previous-day oracle price, whole-USDC decimal string; `None` when no
+    /// 24h-ago snapshot exists.
+    #[serde(default)]
+    pub prev_day_px: Option<String>,
+    /// Signed 24h change fraction; `None` when there is no 24h-ago price.
+    #[serde(default)]
+    pub change_24h: Option<String>,
+    /// 24h notional volume, whole-USDC decimal string; `None` on a static read.
+    #[serde(default)]
+    pub day_ntl_vlm: Option<String>,
+    /// Oldest consensus ms that `day_ntl_vlm` speaks for. Present ⇒ the volume
+    /// is a LOWER BOUND; absent ⇒ the figure covers the whole 24h window.
+    #[serde(default)]
+    pub day_ntl_vlm_lower_bound_from: Option<u64>,
+}
+
+/// One perp row of the DYNAMIC `markets` read.
+///
+/// This is NOT [`MarketInfo`]. The node splits the market surface in two:
+/// `markets` serves `dynamic_record` (live price / funding / OI / 24h ticker),
+/// `markets_meta` serves `static_record` (precision grids, leverage ladder,
+/// trade-control flags), and only `market_info` serves the union. Decoding a
+/// `markets` row into [`MarketInfo`] fails outright — `sz_decimals`,
+/// `tick_size`, `step_size`, `min_order`, `max_leverage`, the margin ratios,
+/// `mark_source` and `fba_enabled` are all absent from it. Merge by `coin` when
+/// a view needs both halves.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct MarketDynamic {
+    /// Market symbol (e.g. `"BTC"`) — the join key onto [`MarketInfo`].
+    pub coin: String,
+    /// Market kind (`"perp"`).
+    pub kind: MarketKind,
+    /// Mark price, whole-USDC decimal string (tick-snapped; `"0"` fallback).
+    pub mark_px: String,
+    /// Oracle / index price, whole-USDC decimal string.
+    pub oracle_px: String,
+    /// Present and `true` ONLY when the oracle index is stale — the market still
+    /// advertises a `mark_px` that no aggregation pass sourced. A healthy market
+    /// omits the key.
+    #[serde(default)]
+    pub px_stale: Option<bool>,
+    /// Order-book mid price; `None` when the book is one-sided.
+    #[serde(default)]
+    pub mid_px: Option<String>,
+    /// `[bid, ask]` impact prices; `None` when the impact notional is unfillable.
+    #[serde(default)]
+    pub impact_pxs: Option<Vec<String>>,
+    /// Mark-vs-oracle premium, signed decimal fraction; `null` when uncomputable.
+    #[serde(default)]
+    pub premium: Option<String>,
+    /// Funding parameters.
+    #[serde(default)]
+    pub funding: Funding,
+    /// Open interest, whole base units as a decimal string.
+    #[serde(default)]
+    pub open_interest: String,
+    /// 24h notional volume, whole-USDC decimal string.
+    #[serde(default)]
+    pub day_ntl_vlm: String,
+    /// Oldest consensus ms that `day_ntl_vlm` speaks for. Present ⇒ the volume
+    /// is a LOWER BOUND; absent ⇒ the figure covers the whole 24h window.
+    #[serde(default)]
+    pub day_ntl_vlm_lower_bound_from: Option<u64>,
+    /// Previous-day oracle price; `null` when no 24h-ago snapshot exists.
+    #[serde(default)]
+    pub prev_day_px: Option<String>,
+    /// Signed 24h change fraction; `null` when there is no 24h-ago price.
+    #[serde(default)]
+    pub change_24h: Option<String>,
+    /// Whether the market is halted.
+    #[serde(default)]
+    pub halted: bool,
 }
 
 /// One spot pair inside a [`SpotMeta`].
@@ -816,6 +926,11 @@ pub struct SpotPair {
     pub min_notional: String,
     /// Whether the pair is active for trading.
     pub active: bool,
+    /// Size precision of the pair's BASE token: a spot order `size` is
+    /// `whole_units × 10^sz_decimals`. Load-bearing — do not derive it from the
+    /// quote token or from a perp of the same symbol.
+    #[serde(default)]
+    pub sz_decimals: u8,
     /// Mark price, whole-USDC decimal string. Absent on some reads → empty.
     #[serde(default)]
     pub mark_px: String,
@@ -892,6 +1007,21 @@ pub struct SpotBalance {
     pub total: String,
     /// Amount held in escrow by resting orders, decimal string.
     pub hold: String,
+    /// Weighted-average acquisition cost, whole USDC PER WHOLE TOKEN. A price,
+    /// not a total: `(mark_px - avg_entry_px) * total` is the unrealized spot
+    /// PnL. `total` includes the part held behind resting orders, so multiply
+    /// by the quantity you mean rather than one the server picked for you.
+    ///
+    /// `None` means UNKNOWN, never zero. The chain rolls the basis on spot BUYS
+    /// only — a sell keeps the standing per-unit average, and a deposit (bridge
+    /// credit, Core⇄EVM credit, spot transfer, governance adjustment) writes no
+    /// basis at all. A holding that arrived by any of those paths therefore has
+    /// no entry, and the wire says `null` rather than a plausible wrong number.
+    /// Served on `spot_clearinghouse_state` rows only: `account_state.balances`
+    /// carries the unified USDC pool, where a basis on the quote asset has no
+    /// meaning.
+    #[serde(default)]
+    pub avg_entry_px: Option<String>,
 }
 
 /// `spot_clearinghouse_state` response — per-account spot token balances.
@@ -1367,9 +1497,16 @@ pub struct EarnState {
 
 /// `pm_summary` response — portfolio-margin enrollment + last-computed figures.
 ///
-/// The request key is `address` (0x hex; an internal account id is rejected). The
-/// cents fields are USD-CENTS-plane integer strings, NOT whole USDC. An unknown
-/// address answers 200 with `enrolled:false` and zeroed figures.
+/// The request key is `address` (0x hex; an internal account id is rejected). An
+/// unknown address answers 200 with `enrolled: false` and zeroed figures.
+///
+/// PLANE: the three money figures are WHOLE-USDC decimal strings, the same
+/// plane `account_state` serves. They were once USD-CENTS integers under the
+/// names `pm_maint_margin_cents` / `net_value_cents` /
+/// `concentration_penalty_cents`. The node serves NEITHER those names NOR that
+/// plane now. The old names are deliberately NOT aliased onto the new fields:
+/// the rename carried a 100× plane change with it, so a silent alias would
+/// decode a cents-era caller's number one hundred times too large.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PmSummary {
@@ -1381,12 +1518,12 @@ pub struct PmSummary {
     pub enrolled_at: u64,
     /// Block height of the last PM computation.
     pub last_computed_block: u64,
-    /// Maintenance-margin requirement, USD-CENTS integer string.
-    pub pm_maint_margin_cents: String,
-    /// Net account value, USD-CENTS integer string.
-    pub net_value_cents: String,
-    /// Concentration penalty, USD-CENTS integer string.
-    pub concentration_penalty_cents: String,
+    /// Maintenance-margin requirement, WHOLE-USDC decimal string.
+    pub pm_maint_margin: String,
+    /// Net account value, WHOLE-USDC decimal string.
+    pub pm_net_value: String,
+    /// Concentration penalty, WHOLE-USDC decimal string.
+    pub pm_concentration_penalty: String,
 }
 
 /// `user_fills` response — account-scoped fill history, newest first.
@@ -1424,6 +1561,104 @@ pub struct UserFillsByTime {
     /// In-window fills, oldest first.
     #[serde(default)]
     pub fills: Vec<Fill>,
+}
+
+/// One CLOSED position lifecycle inside a [`UserPositionHistory`] response.
+///
+/// A position that is still OPEN is never in this history. Read the live
+/// position from the clearinghouse state instead; the archive emits a row only
+/// once the lifecycle closes.
+///
+/// DERIVED, never stored: `realized_pnl = closed_pnl − fee_paid` and
+/// `net_pnl = realized_pnl + funding_paid`. `closed_pnl` is the chain's own
+/// lot-matched number — it is NOT `(avg_close_px − avg_entry_px) × closed_sz`
+/// and must not be checked that way.
+///
+/// THE THREE COMPLETENESS FLAGS ARE THE HONESTY MECHANISM. The archive can be
+/// cut by a recorded gap or a retention floor, and a cut row still has to be
+/// served. Each flag says whether the numbers on that side of the life cover
+/// the WHOLE life:
+///   * `entry_complete = false` ⇒ the open side is partial, and `max_sz` /
+///     `avg_entry_px` come back `None` rather than wrong.
+///   * `close_complete = false` ⇒ every close-side number covers part of the
+///     life. It follows `entry_complete`: the cut that hid the open can hide a
+///     close too.
+///   * `funding_complete = false` ⇒ `funding_paid` is UNKNOWN, not zero. The
+///     row still reads `"0"`, and `net_pnl` then equals `realized_pnl` and
+///     excludes funding.
+///
+/// Test the flag before you trust the number. A row is not rejected for being
+/// degraded — it is served degraded on purpose.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PositionHistoryRow {
+    /// Market symbol (`"BTC"`) or spot pair name. The gateway resolves the
+    /// archive's numeric market id to this symbol.
+    pub coin: String,
+    /// Position direction over the life: `"long"` or `"short"`.
+    pub side: String,
+    /// Largest size the position ever held, decimal string on the size plane.
+    /// `None` exactly when `entry_complete` is `false`.
+    #[serde(default)]
+    pub max_sz: Option<String>,
+    /// Size closed over the life, decimal string on the size plane.
+    #[serde(alias = "closed_qty")]
+    pub closed_sz: String,
+    /// Weighted average entry price, whole-USDC decimal string. `None` exactly
+    /// when `entry_complete` is `false`.
+    #[serde(default)]
+    pub avg_entry_px: Option<String>,
+    /// Weighted average close price, whole-USDC decimal string; `None` when the
+    /// archive holds no priced close side.
+    #[serde(default)]
+    pub avg_close_px: Option<String>,
+    /// Lot-matched realized PnL before fees, whole-USDC decimal string.
+    pub closed_pnl: String,
+    /// Fees paid over the life, whole-USDC decimal string.
+    pub fee_paid: String,
+    /// `closed_pnl − fee_paid`, whole-USDC decimal string.
+    pub realized_pnl: String,
+    /// Funding paid over the life, whole-USDC decimal string. `"0"` with
+    /// `funding_complete = false` means UNKNOWN, not "no funding was paid".
+    pub funding_paid: String,
+    /// `realized_pnl + funding_paid`, whole-USDC decimal string.
+    pub net_pnl: String,
+    /// Consensus ms the position opened.
+    pub opened_at: u64,
+    /// Consensus ms the position closed.
+    pub closed_at: u64,
+    /// Committed height the position opened at.
+    pub open_block: u64,
+    /// Committed height the position closed at.
+    pub close_block: u64,
+    /// Whether the open side covers the whole life.
+    pub entry_complete: bool,
+    /// Whether the close side covers the whole life.
+    pub close_complete: bool,
+    /// Whether `funding_paid` covers the whole life.
+    pub funding_complete: bool,
+}
+
+/// `user_position_history` / `user_position_history_by_time` response — one row
+/// per CLOSED position lifecycle.
+///
+/// The envelope is the SAME shape `user_fills` uses: the echoed address and the
+/// rows, nothing else. Neither variant echoes the request window, and neither
+/// carries an account-wide coverage or completeness object — per-row
+/// [`PositionHistoryRow`] flags are the only completeness report.
+///
+/// WINDOW: `_by_time` filters on `closed_at`. A lifecycle is a point event at
+/// its close, so a position OPENED before the window but CLOSED inside it IS
+/// returned. `user_position_history` pages newest-first; `_by_time` reads
+/// oldest-first inside the window.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct UserPositionHistory {
+    /// Echo of the resolved account address.
+    pub address: Address,
+    /// Closed position lifecycles.
+    #[serde(default)]
+    pub positions: Vec<PositionHistoryRow>,
 }
 
 /// One funding-premium sample inside a [`FundingHistory`] response.
@@ -1734,23 +1969,27 @@ fn insert_time_window(body: &mut Value, start_time: Option<u64>, end_time: Optio
 }
 
 impl<'a> Info<'a> {
-    /// List all markets and their rich metadata.
+    /// List the DYNAMIC per-market state (`markets`).
     ///
-    /// Returns the perp [`MarketInfo`] records.
+    /// Returns the perp [`MarketDynamic`] records — live price, funding, open
+    /// interest and the 24h ticker. This read carries NO precision grid, NO
+    /// leverage ladder and NO trade-control flag; read [`Info::markets_meta`]
+    /// for those and merge by `coin`, or read [`Info::market_info`] for the
+    /// union on one market.
     ///
     /// The deployed gateway serves `markets.data` as an OBJECT
-    /// `{ "perp": [MarketInfo...], "spot": { pairs, tokens } }`, NOT a flat
-    /// array. We decode that wrapper and return the `perp` markets (use
+    /// `{ "perp": [...], "spot": { pairs, tokens } }`, NOT a flat array. We
+    /// decode that wrapper and return the `perp` markets (use
     /// [`Info::spot_meta`] for spot). Decoding `data` straight into a sequence
     /// (the old behaviour) failed with `invalid type: map, expected a sequence`.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn markets(&self) -> Result<Vec<MarketInfo>, ClientError> {
+    pub async fn markets(&self) -> Result<Vec<MarketDynamic>, ClientError> {
         #[derive(serde::Deserialize)]
         struct MarketsResp {
             #[serde(default)]
-            perp: Vec<MarketInfo>,
+            perp: Vec<MarketDynamic>,
         }
         let resp: MarketsResp = self
             .client
@@ -2320,6 +2559,49 @@ impl<'a> Info<'a> {
         self.client.post_json("/info", &body).await
     }
 
+    /// `user_position_history` — one row per CLOSED position lifecycle, keyed by
+    /// `address`, newest first.
+    ///
+    /// A position still OPEN is never returned; read the live position from the
+    /// clearinghouse state. Check each row's `entry_complete` / `close_complete`
+    /// / `funding_complete` before trusting its numbers — see
+    /// [`PositionHistoryRow`].
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn user_position_history(
+        &self,
+        addr: Address,
+        limit: Option<u32>,
+    ) -> Result<UserPositionHistory, ClientError> {
+        let mut body = json!({ "type": "user_position_history", "address": addr });
+        if let Some(l) = limit {
+            let obj = body.as_object_mut().expect("json! produced an object");
+            obj.insert("limit".into(), json!(l));
+        }
+        self.client.post_json("/info", &body).await
+    }
+
+    /// `user_position_history_by_time` — closed position lifecycles filtered to
+    /// an inclusive `[start_time, end_time]` window, oldest first.
+    ///
+    /// The window filters on `closed_at`, so a position OPENED before the window
+    /// but CLOSED inside it IS returned. Each bound is inserted only when
+    /// `Some`; an absent bound is open. The reply does NOT echo the window.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn user_position_history_by_time(
+        &self,
+        addr: Address,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> Result<UserPositionHistory, ClientError> {
+        let mut body = json!({ "type": "user_position_history_by_time", "address": addr });
+        insert_time_window(&mut body, start_time, end_time);
+        self.client.post_json("/info", &body).await
+    }
+
     /// `funding_history` — market-scoped funding-premium samples, keyed by
     /// `coin` (the market symbol; the only market selector).
     ///
@@ -2678,7 +2960,7 @@ mod tests {
     /// `{ "perp": [...], "spot": {...} }`, not a flat array. markets() must
     /// return the perp records (pre-fix: `invalid type: map, expected sequence`).
     #[test]
-    fn markets_decodes_perp_spot_object() {
+    fn markets_meta_decodes_perp_spot_object() {
         #[derive(serde::Deserialize)]
         struct MarketsResp {
             #[serde(default)]
@@ -2731,6 +3013,152 @@ mod tests {
         assert!(tok.is_canonical);
         // The second perp omits `token` entirely -> None.
         assert!(resp.perp[1].token.is_none());
+    }
+
+    /// The DYNAMIC `markets` row, byte-for-byte from chain 114514 on 2026-08-08.
+    ///
+    /// It carries no `sz_decimals` / `tick_size` / `step_size` / `min_order` /
+    /// `max_leverage` / margin ratios / `mark_source` / `fba_enabled`, so
+    /// [`MarketInfo`] cannot decode it. The old hand-written fixture above did
+    /// carry them, which is why the mismatch went unseen — pin the real reply.
+    #[test]
+    fn markets_dynamic_row_decodes_live_reply() {
+        let row = serde_json::json!({
+            "change_24h": "0.01186283",
+            "coin": "BTC",
+            "day_ntl_vlm": "0",
+            "funding": { "cap_per_hr": "400", "interval_ms": 3_600_000u64,
+                         "next_payment_ts": 1_786_165_200_000u64, "rate_per_hr": "-3" },
+            "halted": false,
+            "impact_pxs": ["64998", "65030.7"],
+            "kind": "perp",
+            "mark_px": "65013.3",
+            "mid_px": "65014.4",
+            "open_interest": "0.7895",
+            "oracle_px": "65033.7",
+            "premium": "-0.00029993",
+            "prev_day_px": "64251.1"
+        });
+        assert!(
+            serde_json::from_value::<MarketInfo>(row.clone()).is_err(),
+            "the static type must not silently accept a dynamic row"
+        );
+
+        let m: MarketDynamic = serde_json::from_value(row).unwrap();
+        assert_eq!(m.coin, "BTC");
+        assert_eq!(m.mark_px, "65013.3");
+        assert_eq!(m.mid_px.as_deref(), Some("65014.4"));
+        assert_eq!(m.impact_pxs.unwrap(), vec!["64998", "65030.7"]);
+        assert_eq!(m.funding.cap_per_hr, "400");
+        assert!(!m.halted);
+        // A healthy market omits both markers; neither may read as a value.
+        assert!(m.px_stale.is_none());
+        assert!(m.day_ntl_vlm_lower_bound_from.is_none());
+    }
+
+    /// The `market_info` union row from chain 114514 on 2026-08-08. It serves
+    /// `open` / `close` / `halted` / `impact_pxs` / `strict_isolated`, all of
+    /// which the type used to drop.
+    #[test]
+    fn market_info_decodes_live_reply() {
+        let data = serde_json::json!({
+            "asset_id": 0, "change_24h": "0.01186438", "close": true, "coin": "BTC",
+            "day_ntl_vlm": "0", "fba_enabled": false,
+            "funding": { "cap_per_hr": "400", "interval_ms": 3_600_000u64,
+                         "next_payment_ts": 1_786_165_200_000u64, "rate_per_hr": "-3" },
+            "halted": false, "impact_pxs": ["64998", "65030.7"],
+            "init_margin_ratio": "500", "kind": "perp", "maint_margin_ratio": "300",
+            "margin_tiers": [{ "maint_margin_ratio": "300", "max_leverage": 20,
+                               "max_open_interest": null }],
+            "mark_px": "65013.4", "mark_source": "oracle_median", "max_leverage": 20,
+            "mid_px": "65014.4", "min_order": "0.00001", "open": true,
+            "open_interest": "0.7895", "oracle_px": "65033.7", "premium": "-0.00031233",
+            "prev_day_px": "64251.1", "step_size": "0.00001", "strict_isolated": false,
+            "sz_decimals": 5, "tick_size": "0.1"
+        });
+        let m: MarketInfo = serde_json::from_value(data).unwrap();
+        assert_eq!(m.open, Some(true));
+        assert_eq!(m.close, Some(true));
+        assert_eq!(m.halted, Some(false));
+        assert_eq!(m.strict_isolated, Some(false));
+        assert_eq!(m.impact_pxs.unwrap(), vec!["64998", "65030.7"]);
+        // Uncapped OI omits the key; an absent cap is not a cap of zero.
+        assert!(m.oi_cap.is_none());
+    }
+
+    /// `user_position_history`: the envelope is address + rows, and a degraded
+    /// row keeps its numbers null rather than plausible.
+    #[test]
+    fn user_position_history_decodes_degraded_row() {
+        let data = serde_json::json!({
+            "address": "0x0c4ec1cba7310669b08145f17a29b1048d9196ab",
+            "positions": [{
+                "avg_close_px": "74.75000000", "avg_entry_px": null,
+                "close_block": 6_831_775u64, "close_complete": false,
+                "closed_at": 1_786_162_051_867u64, "closed_pnl": "0.8960000000",
+                "closed_sz": "0.80", "coin": "SOL", "entry_complete": false,
+                "fee_paid": "0.001794", "funding_complete": false, "funding_paid": "0",
+                "max_sz": null, "net_pnl": "0.8942060000", "open_block": 6_831_775u64,
+                "opened_at": 1_786_162_051_867u64, "realized_pnl": "0.8942060000",
+                "side": "long"
+            }]
+        });
+        let h: UserPositionHistory = serde_json::from_value(data).unwrap();
+        let p = &h.positions[0];
+        assert_eq!(p.coin, "SOL");
+        assert_eq!(p.side, "long");
+        assert_eq!(p.closed_sz, "0.80");
+        assert!(!p.entry_complete);
+        assert!(p.avg_entry_px.is_none());
+        assert!(p.max_sz.is_none());
+        // funding_paid reads "0" while funding_complete is false: UNKNOWN, not zero.
+        assert_eq!(p.funding_paid, "0");
+        assert!(!p.funding_complete);
+    }
+
+    /// TODAY'S live reply must decode, not just tomorrow's. Chain 114514 on
+    /// 2026-08-08 still serves `closed_qty` AND the `coverage` envelope that the
+    /// batch deletes. The gateway carries both size keys across the deploy
+    /// window, so the client reads either into the one approved name, and the
+    /// retired envelope must pass through as an ignored key rather than a
+    /// decode error.
+    #[test]
+    fn position_history_accepts_the_old_size_key() {
+        let data = serde_json::json!({
+            "address": "0x0c4ec1cba7310669b08145f17a29b1048d9196ab",
+            "coverage": { "fills_gaps": [{ "from": 336_421u64, "to": 336_421u64 }],
+                          "truncated": false, "complete": false },
+            "positions": [{
+                "coin": "SOL", "side": "long", "max_sz": "1", "closed_qty": "0.80",
+                "avg_entry_px": "70", "avg_close_px": "74.75", "closed_pnl": "3.8",
+                "fee_paid": "0.001794", "realized_pnl": "3.798206",
+                "funding_paid": "0", "net_pnl": "3.798206",
+                "opened_at": 1u64, "closed_at": 2u64, "open_block": 1u64,
+                "close_block": 2u64, "entry_complete": true, "close_complete": true,
+                "funding_complete": true
+            }]
+        });
+        let h: UserPositionHistory = serde_json::from_value(data).unwrap();
+        assert_eq!(h.positions[0].closed_sz, "0.80");
+    }
+
+    /// `spot_clearinghouse_state`: a row with no recorded basis says `null`, and
+    /// a bought row carries the whole-row cost.
+    #[test]
+    fn spot_balance_carries_optional_avg_entry_px() {
+        let data = serde_json::json!({
+            "address": "0x0c4ec1cba7310669b08145f17a29b1048d9196ab",
+            "balances": [
+                { "asset": 100, "name": "USDC", "total": "390548", "hold": "390548" },
+                { "asset": 104, "name": "MTF", "total": "10000039.5196599",
+                  "hold": "3000000", "avg_entry_px": "412.5" }
+            ],
+            "height": 6_845_318u64, "time": 1_786_164_224_330u64
+        });
+        let s: SpotClearinghouseState = serde_json::from_value(data).unwrap();
+        // Deposited / pre-basis holdings carry no entry — never a zero.
+        assert!(s.balances[0].avg_entry_px.is_none());
+        assert_eq!(s.balances[1].avg_entry_px.as_deref(), Some("412.5"));
     }
 
     /// Decode the exact `l2_book.data` payload from the `/info` contract.
@@ -3516,30 +3944,45 @@ mod tests {
     }
 
     /// `pm_summary`: an enrolled account and the zeroed unknown-address shape.
+    ///
+    /// The keys are the WHOLE-USDC ones chain 114514 served on 2026-08-08. The
+    /// cents-plane names are gone from the node; a reply that still carries them
+    /// must NOT decode, or a cents number would be read as whole USDC.
     #[test]
     fn pm_summary_decodes_enrolled_and_zeroed() {
         let enrolled = serde_json::json!({
             "address": "0x4242424242424242424242424242424242424242",
             "enrolled": true, "enrolled_at": 1_700_000_000_000u64,
             "last_computed_block": 8_416_000u64,
-            "pm_maint_margin_cents": "123456", "net_value_cents": "10000000",
-            "concentration_penalty_cents": "250"
+            "pm_maint_margin": "1234.56", "pm_net_value": "100000",
+            "pm_concentration_penalty": "2.5"
         });
         let p: PmSummary = serde_json::from_value(enrolled).unwrap();
         assert!(p.enrolled);
         assert_eq!(p.enrolled_at, 1_700_000_000_000);
-        assert_eq!(p.pm_maint_margin_cents, "123456");
-        assert_eq!(p.net_value_cents, "10000000");
+        assert_eq!(p.pm_maint_margin, "1234.56");
+        assert_eq!(p.pm_net_value, "100000");
+        assert_eq!(p.pm_concentration_penalty, "2.5");
         // Zeroed unknown address.
         let zeroed = serde_json::json!({
             "address": "0x0000000000000000000000000000000000000000",
             "enrolled": false, "enrolled_at": 0u64, "last_computed_block": 0u64,
-            "pm_maint_margin_cents": "0", "net_value_cents": "0",
-            "concentration_penalty_cents": "0"
+            "pm_maint_margin": "0", "pm_net_value": "0",
+            "pm_concentration_penalty": "0"
         });
         let z: PmSummary = serde_json::from_value(zeroed).unwrap();
         assert!(!z.enrolled);
-        assert_eq!(z.pm_maint_margin_cents, "0");
+        assert_eq!(z.pm_maint_margin, "0");
+
+        // The retired cents plane is not aliased back in: the rename carried a
+        // 100x plane change, so accepting it would decode a 100x-wrong number.
+        let cents = serde_json::json!({
+            "address": "0x4242424242424242424242424242424242424242",
+            "enrolled": true, "enrolled_at": 0u64, "last_computed_block": 0u64,
+            "pm_maint_margin_cents": "123456", "net_value_cents": "10000000",
+            "concentration_penalty_cents": "250"
+        });
+        assert!(serde_json::from_value::<PmSummary>(cents).is_err());
     }
 
     /// `user_fills`: a node-ring perp fill WITH `block` + `0x` hash, and a spot
