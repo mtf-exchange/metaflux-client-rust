@@ -189,12 +189,21 @@ async fn cancel_order_round_trips_through_exchange() {
     assert_eq!(recovered, wallet.address());
 }
 
+/// The vault-operator lane: the operator holds the key, the VAULT owns the
+/// order. The SDK used to recover the signer and reject the mismatch, which made
+/// the lane unreachable. The node authorizes the signer — the account itself, an
+/// approved agent, or a registered metaliquidity operator — so the order must go
+/// out on the wire carrying the OTHER account's address.
 #[tokio::test]
-async fn submit_order_rejects_mismatched_owner_locally() {
+async fn submit_order_sends_an_order_whose_owner_is_not_the_signer() {
     let server = MockServer::start().await;
+    let captor = CapturingResponder {
+        last: Arc::new(Mutex::new(None)),
+        response: json!({ "statuses": [] }),
+    };
     Mock::given(method("POST"))
         .and(path("/exchange"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+        .respond_with(captor.clone())
         .mount(&server)
         .await;
 
@@ -218,12 +227,17 @@ async fn submit_order_rejects_mismatched_owner_locally() {
         position_side: None,
         trigger: None,
     };
-    let err = client
+    client
         .exchange()
         .submit_order(&wallet, &order)
         .await
-        .unwrap_err();
-    assert!(matches!(err, metaflux_client::ClientError::Validation(_)));
+        .expect("an order owned by another account must reach the node");
+    let body = captor.last.lock().await.clone().expect("a request body");
+    assert_eq!(
+        body["action"]["order"]["owner"],
+        json!(format!("{}", other.address())),
+        "the wire must carry the OWNER, not the signer"
+    );
 }
 
 #[tokio::test]

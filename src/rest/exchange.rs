@@ -119,11 +119,14 @@ struct SignedEnvelope<'a> {
 impl<'a> Exchange<'a> {
     /// Submit a limit / market / trigger order.
     ///
-    /// The order's `owner` field MUST equal the wallet's address; the server
-    /// verifies this against the recovered signer.
+    /// `order.owner` is the ACCOUNT the order belongs to, which is not always the
+    /// signer. Set it to `wallet.address()` for self-trading, or to the VAULT
+    /// address for operator-driven vault trading. The node authorizes the signer
+    /// — the account itself, or an approved agent / registered vault operator —
+    /// so the SDK does not enforce owner == signer, exactly like
+    /// [`Exchange::batch_order`].
     ///
     /// # Errors
-    /// - [`ClientError::Validation`] if `order.owner != wallet.address()`.
     /// - [`ClientError::Http`] / [`ClientError::ProtocolError`] on transport.
     /// - [`ClientError::Signature`] on signing failure (extremely rare).
     pub async fn submit_order(
@@ -131,13 +134,6 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         order: &Order,
     ) -> Result<OrderResponse, ClientError> {
-        if order.owner != wallet.address() {
-            return Err(ClientError::Validation(format!(
-                "order.owner {} != wallet address {}",
-                order.owner,
-                wallet.address()
-            )));
-        }
         // A TP/SL-LIMIT trigger leg (`is_market = false`) fires a reduce-only GTC
         // at the order's `limit_px`; reject a zero price / non-GTC tif loud, not
         // as a silent market stop. No wire/digest change — both fields were always
@@ -156,6 +152,9 @@ impl<'a> Exchange<'a> {
 
     /// Cancel an order by `oid` or by `cloid`.
     ///
+    /// `cancel.owner` follows [`Exchange::submit_order`]: it is the account that
+    /// owns the resting order, and it may differ from the signer.
+    ///
     /// # Errors
     /// See [`Exchange::submit_order`].
     pub async fn cancel_order(
@@ -163,13 +162,6 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         cancel: &CancelOrder,
     ) -> Result<Value, ClientError> {
-        if cancel.owner != wallet.address() {
-            return Err(ClientError::Validation(format!(
-                "cancel.owner {} != wallet address {}",
-                cancel.owner,
-                wallet.address()
-            )));
-        }
         let action = json!({ "type": "cancel_order", "cancel": cancel });
         self.post_typed_trade(wallet, action, TypedTradingAction::CancelOrder(cancel))
             .await
@@ -541,26 +533,18 @@ impl<'a> Exchange<'a> {
             .await
     }
 
-    /// Apply N cancels under one signature. Each cancel's `owner` MUST equal the
-    /// wallet address.
+    /// Apply N cancels under one signature.
+    ///
+    /// Each cancel's `owner` follows [`Exchange::submit_order`]: it is the account
+    /// that owns the resting order, and it may differ from the signer.
     ///
     /// # Errors
-    /// - [`ClientError::Validation`] if any cancel's `owner != wallet.address()`.
-    /// - HTTP / decode / protocol errors per [`crate::ClientError`].
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn batch_cancel(
         &self,
         wallet: &Wallet,
         batch: &BatchCancel,
     ) -> Result<Value, ClientError> {
-        for (i, c) in batch.cancels.iter().enumerate() {
-            if c.owner != wallet.address() {
-                return Err(ClientError::Validation(format!(
-                    "batch cancel[{i}].owner {} != wallet address {}",
-                    c.owner,
-                    wallet.address()
-                )));
-            }
-        }
         let action = json!({ "type": "batch_cancel", "params": batch });
         self.post_typed_trade(wallet, action, TypedTradingAction::BatchCancel(batch))
             .await

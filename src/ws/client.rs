@@ -479,10 +479,11 @@ impl WsClient {
     ///
     /// Signs the SAME typed EIP-712 digest as REST
     /// [`crate::rest::exchange::Exchange::submit_order`] and posts it over the WS
-    /// `post` lane. The order's `owner` MUST equal the wallet address.
+    /// `post` lane, and it follows that method's ownership rule: `order.owner` is
+    /// the ACCOUNT the order belongs to and may differ from the signer, so an
+    /// approved agent or a registered vault operator can act for it.
     ///
     /// # Errors
-    /// - [`ClientError::Validation`] if `order.owner != wallet.address()`.
     /// - [`ClientError::Decode`] if the response payload is not an
     ///   [`OrderResponse`].
     /// - WebSocket / signature errors per the WS `post` path.
@@ -491,13 +492,6 @@ impl WsClient {
         wallet: &Wallet,
         order: &Order,
     ) -> Result<OrderResponse, ClientError> {
-        if order.owner != wallet.address() {
-            return Err(ClientError::Validation(format!(
-                "order.owner {} != wallet address {}",
-                order.owner,
-                wallet.address()
-            )));
-        }
         // Coerce a Market order's tif to IOC before signing (a Market+Gtc/Alo
         // would silently REST on the book); see `Order::coerce_market_tif`.
         let order = order.market_tif_coerced();
@@ -512,23 +506,16 @@ impl WsClient {
     ///
     /// Signs the SAME typed EIP-712 digest as REST
     /// [`crate::rest::exchange::Exchange::cancel_order`] and posts it over the WS
-    /// `post` lane.
+    /// `post` lane. `cancel.owner` is the account that owns the resting order and
+    /// may differ from the signer, per [`Self::submit_order`].
     ///
     /// # Errors
-    /// - [`ClientError::Validation`] if `cancel.owner != wallet.address()`.
-    /// - WebSocket / signature errors per the WS `post` path.
+    /// WebSocket / signature errors per the WS `post` path.
     pub async fn cancel_order(
         &self,
         wallet: &Wallet,
         cancel: &CancelOrder,
     ) -> Result<Value, ClientError> {
-        if cancel.owner != wallet.address() {
-            return Err(ClientError::Validation(format!(
-                "cancel.owner {} != wallet address {}",
-                cancel.owner,
-                wallet.address()
-            )));
-        }
         let action = json!({ "type": "cancel_order", "cancel": cancel });
         self.post_typed_trade(wallet, action, TypedTradingAction::CancelOrder(cancel))
             .await
