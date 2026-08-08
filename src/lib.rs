@@ -42,6 +42,7 @@ pub mod faucet;
 pub mod grid;
 pub mod mip3;
 pub mod rest;
+pub mod twap_plan;
 pub mod types;
 pub mod wallet;
 pub mod ws;
@@ -50,6 +51,10 @@ pub use error::ClientError;
 pub use faucet::{FaucetResponse, request_faucet};
 pub use grid::{GridError, GridOrder, round_order_to_grid};
 pub use rest::RestClient;
+pub use twap_plan::{
+    DEFAULT_TWAP_MAX_SLICES, DEFAULT_TWAP_MIN_DELAY_MS, DEFAULT_TWAP_TARGET_SLICE_MS,
+    TwapDurationRequest, TwapPlan, TwapPlanError, twap_from_duration, usd_to_wire_size,
+};
 pub use types::candle::CandleType;
 pub use types::chase::{CancelChaseParams, ChaseParams};
 pub use types::place::{OrderLeg, PlaceRequest, Placement};

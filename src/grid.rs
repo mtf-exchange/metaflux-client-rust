@@ -107,7 +107,7 @@ pub fn round_order_to_grid(
 /// `floor(value × 10^scale)` as an integer, with no floating point. Fractional
 /// digits beyond `scale` are truncated toward zero. Returns `None` on a sign, an
 /// empty string, a non-digit, or `u128` overflow.
-fn decimal_to_scaled(s: &str, scale: u32) -> Option<u128> {
+pub(crate) fn decimal_to_scaled(s: &str, scale: u32) -> Option<u128> {
     let s = s.trim();
     if s.is_empty() || s.starts_with('-') {
         return None;
