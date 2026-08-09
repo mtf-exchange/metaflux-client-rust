@@ -462,7 +462,7 @@ async fn account_state_decodes_rich_shape_by_address() {
             json!({
                 "address": "0x000000000000000000000000000000000000beef",
                 "account_value": "100000000",
-                "free_collateral": "80000000",
+                "withdrawable": "80000000",
                 "init_margin": "20000000",
                 "health": "10000000",
                 "tier": "Safe",
@@ -494,7 +494,7 @@ async fn account_state_decodes_rich_shape_by_address() {
     let addr = Address::from_hex("0x000000000000000000000000000000000000beef").unwrap();
     let a = client.rest().info().account_state(addr).await.unwrap();
     assert_eq!(a.account_value, "100000000");
-    assert_eq!(a.free_collateral, "80000000");
+    assert_eq!(a.withdrawable, "80000000");
     assert_eq!(a.tier, Tier::Safe);
     assert_eq!(a.abstraction, Abstraction::Unified);
     // Positions live under the core dex key `""`.

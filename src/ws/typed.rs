@@ -217,7 +217,7 @@ mod tests {
                     "maint_margin": "480",
                     "notional": "96000"
                 }] } },
-                "free_collateral": "1000",
+                "withdrawable": "1000",
                 "health": "770.5",
                 "height": 318_172u64,
                 "init_margin": "250",

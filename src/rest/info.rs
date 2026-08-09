@@ -543,9 +543,13 @@ pub struct AccountPosition {
     /// Chosen leverage multiple.
     #[serde(rename = "lev")]
     pub leverage: u32,
-    /// Liquidation price, whole-USDC decimal string.
-    #[serde(rename = "liq")]
-    pub liquidation_px: String,
+    /// Liquidation price as a whole-USDC decimal string, or `None` when the
+    /// position has none. An isolated leg whose bucket no non-negative price can
+    /// breach reads `None`, NEVER `"0"` — a zero is a price, and reading one as
+    /// the other says "liquidates immediately" about a position that cannot be
+    /// price-liquidated.
+    #[serde(rename = "liq", default)]
+    pub liquidation_px: Option<String>,
     /// Return on equity, decimal-fraction string.
     pub roe: String,
     /// Cumulative funding paid (positive) / received (negative) over the
@@ -610,8 +614,14 @@ pub struct AccountState {
     pub address: Address,
     /// Equity including unrealised PnL, whole-USDC decimal string.
     pub account_value: String,
-    /// Equity minus initial margin held by open positions, decimal string.
-    pub free_collateral: String,
+    /// Cash the account can take out, decimal string, CLAMPED at zero.
+    ///
+    /// Settled cash minus funding owed minus `init_margin`. It does NOT count
+    /// unrealised profit, so a healthy account whose margin is funded by open
+    /// profit reads `"0"` — that means "nothing to withdraw", not "broke". The
+    /// chain's admission gate uses the raw signed figure, which can go
+    /// negative; this read never does.
+    pub withdrawable: String,
     /// Initial margin requirement, decimal string.
     pub init_margin: String,
     /// `account_value - maint_margin`, decimal string; can be negative.
@@ -1697,7 +1707,7 @@ pub struct FundingHistory {
 /// tradeable-size view, keyed by `(address, coin)`.
 ///
 /// The `[buy, sell]` pairs: `available_to_trade` is the per-side notional still
-/// openable (`free_collateral × leverage`, plus the existing position's notional
+/// openable (`withdrawable × leverage`, plus the existing position's notional
 /// on the reducing side), whole-USDC decimal strings; `max_trade_szs` is the
 /// same budget converted to base-unit size at the mark (round toward zero). The
 /// node marks-to-market with `mark_px`.
@@ -1718,8 +1728,13 @@ pub struct ActiveAssetData {
     pub available_to_trade: [String; 2],
     /// `[buy, sell]` max order size, base-unit decimal strings.
     pub max_trade_szs: [String; 2],
-    /// OI-cap-derived market-order size ceiling, decimal string.
-    pub max_trade_size: String,
+    /// Remaining market-wide OI headroom in size units, or `None` when the
+    /// market is UNCAPPED. It is shared headroom other traders consume, not a
+    /// per-user guarantee. The retired `"0"` sentinel meant uncapped, so a client
+    /// that clamped order size to it refused to trade on exactly the markets that
+    /// had no cap.
+    #[serde(default)]
+    pub max_trade_size: Option<String>,
     /// Whether the user holds a non-zero position on the asset.
     pub has_position: bool,
 }
@@ -2776,7 +2791,7 @@ mod tests {
         serde_json::json!({
             "address": "0x000000000000000000000000000000000000beef",
             "account_value": "100000000",
-            "free_collateral": "80000000",
+            "withdrawable": "80000000",
             "init_margin": "20000000",
             "health": "10000000",
             "tier": "Safe",
@@ -2911,7 +2926,7 @@ mod tests {
             "abstraction",
             "position_mode",
             "account_value",
-            "free_collateral",
+            "withdrawable",
             "init_margin",
             "health",
             "tier",
@@ -4151,7 +4166,7 @@ mod tests {
             ["100000".to_string(), "150000".to_string()]
         );
         assert_eq!(a.max_trade_szs, ["1.6".to_string(), "2.4".to_string()]);
-        assert_eq!(a.max_trade_size, "500");
+        assert_eq!(a.max_trade_size.as_deref(), Some("500"));
         assert!(a.has_position);
     }
 
