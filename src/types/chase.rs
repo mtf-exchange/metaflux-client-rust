@@ -22,10 +22,17 @@
 //! until one of three limits ends it: the order fills, `ttl_ms` elapses
 //! (consensus time), or `max_reprices` executed reprices is reached.
 //!
-//! `size` is a raw-lot size on the market's `10^sz_decimals` plane. Chase is
-//! perp markets only in v1; `market` is a perp market id. There is no chase WS
-//! channel — correlate the leg placements and the fills by `cloid` on the
-//! existing `order_updates` / `open_orders` / `fills` feeds.
+//! `size` is a raw-lot size on the market's `10^sz_decimals` plane. There is no
+//! chase WS channel — correlate the leg placements and the fills by `cloid` on
+//! the existing `order_updates` / `open_orders` / `fills` feeds.
+//!
+//! PERP MARKETS ONLY TODAY. A spot pair id in `market` is refused at commit with
+//! `chase market has no tick/lot grid`. The spot lane is built and waits for an
+//! activation height: above it the leg pegs inside the SPOT touch,
+//! `position_side` is refused, a reprice that needs more free quote than the
+//! owner holds is SKIPPED without cancelling the current leg, and a failed
+//! re-place RETIRES the chase. The wire shape does not change, so these types
+//! need no new field.
 
 use serde::{Deserialize, Serialize};
 
@@ -51,7 +58,8 @@ pub const CHASE_MAX_REPRICES_RANGE: std::ops::RangeInclusive<u32> = 1..=100_000;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ChaseParams {
-    /// Target perp market id.
+    /// Target market id — a PERP market today. A spot pair id is refused until
+    /// the spot lane activates (see the module doc).
     pub market: MarketId,
     /// Leg side (`bid` = buy chase, `ask` = sell chase).
     pub side: Side,

@@ -789,6 +789,11 @@ impl<'a> Exchange<'a> {
 
     /// Submit a sliced (TWAP) order.
     ///
+    /// A HEDGE account MUST set [`TwapOrder::position_side`] and a one-way
+    /// account MUST NOT: the wrong one is admitted and then rejected at commit,
+    /// reported on no channel. `params.market` is a PERP market today — see
+    /// [`crate::types::twap`] for the spot lane, which is not live yet.
+    ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn twap_order(

@@ -180,6 +180,12 @@ const TY_BATCH_MODIFY: &[u8] =
 const TY_SCHEDULE_CANCEL: &[u8] =
     b"MetaFluxTransaction:ScheduleCancel(string metafluxChain,uint64 cancelAtBlock,uint64 nonce)";
 const TY_TWAP_ORDER: &[u8] = b"MetaFluxTransaction:TwapOrder(string metafluxChain,uint32 market,string side,uint64 totalSize,uint32 sliceCount,uint64 delayMs,bool reduceOnly,uint64 nonce)";
+// V2 binds the child leg after `reduceOnly`; V3 binds the schedule flag after
+// `positionSide`. ONE selection rule, byte-identical to the node's: `randomize`
+// outranks the leg, so a randomized one-way parent signs V3 with an EMPTY
+// `positionSide` rather than needing a fourth string.
+const TY_TWAP_ORDER_V2: &[u8] = b"MetaFluxTransaction:TwapOrder(string metafluxChain,uint32 market,string side,uint64 totalSize,uint32 sliceCount,uint64 delayMs,bool reduceOnly,string positionSide,uint64 nonce)";
+const TY_TWAP_ORDER_V3: &[u8] = b"MetaFluxTransaction:TwapOrder(string metafluxChain,uint32 market,string side,uint64 totalSize,uint32 sliceCount,uint64 delayMs,bool reduceOnly,string positionSide,bool randomize,uint64 nonce)";
 const TY_TWAP_CANCEL: &[u8] =
     b"MetaFluxTransaction:TwapCancel(string metafluxChain,uint64 twapId,uint64 nonce)";
 const TY_BATCH_ORDER: &[u8] = b"MetaFluxTransaction:BatchOrder(string metafluxChain,address owner,bytes32 orders,string grouping,uint64 nonce)";
@@ -345,6 +351,8 @@ impl TypedTradingAction<'_> {
             Self::Modify(_) => TY_MODIFY,
             Self::BatchModify(_) => TY_BATCH_MODIFY,
             Self::ScheduleCancel(_) => TY_SCHEDULE_CANCEL,
+            Self::TwapOrder(p) if p.randomize => TY_TWAP_ORDER_V3,
+            Self::TwapOrder(p) if p.position_side.is_some() => TY_TWAP_ORDER_V2,
             Self::TwapOrder(_) => TY_TWAP_ORDER,
             Self::TwapCancel(_) => TY_TWAP_CANCEL,
             Self::BatchOrder(_) => TY_BATCH_ORDER,
@@ -480,6 +488,12 @@ impl TypedTradingAction<'_> {
                 words.push(enc_u32(p.slice_count));
                 words.push(enc_u64(p.delay_ms));
                 words.push(enc_bool(p.reduce_only));
+                if p.randomize {
+                    words.push(enc_string(p.position_side.map_or("", position_side_str)));
+                    words.push(enc_bool(true));
+                } else if let Some(ps) = p.position_side {
+                    words.push(enc_string(position_side_str(ps)));
+                }
             }
             Self::TwapCancel(p) => words.push(enc_u64(p.twap_id)),
             Self::BatchOrder(p) => {
@@ -904,10 +918,91 @@ mod tests {
             slice_count: 5,
             delay_ms: 30_000,
             reduce_only: false,
+            position_side: None,
+            randomize: false,
         };
         assert_eq!(
             hexd(TypedTradingAction::TwapOrder(&p)),
             "3614120f4a58c58df65f36065ceb891646444e1e91ef26a78f4584a31e187638"
+        );
+    }
+
+    // The three TWAP signing strings, pinned by the NODE's own cross-language
+    // vectors, which the TypeScript SDK carries too. They are not computed by
+    // this SDK, so a fixture cannot agree with a bug in our own encoder. Chain
+    // 114514 (`"Testnet"`), nonce 48.
+    #[test]
+    fn twap_order_signing_string_kats() {
+        fn hexd48(p: &TwapOrder) -> String {
+            hex::encode(
+                TypedTradingDigest::new(TypedTradingAction::TwapOrder(p), CHAIN, 48)
+                    .digest()
+                    .unwrap(),
+            )
+        }
+        let base = TwapOrder {
+            market: MarketId(4),
+            side: Side::Ask,
+            total_size: 1_000,
+            slice_count: 10,
+            delay_ms: 500,
+            reduce_only: true,
+            position_side: None,
+            randomize: false,
+        };
+
+        assert_eq!(
+            hexd48(&base),
+            "057ba67d71d21a2b32ef060cdaf0eadc1b736524209eb38b285d4be712625714",
+            "v1: neither field set"
+        );
+
+        let hedge = TwapOrder {
+            position_side: Some(PositionSide::Long),
+            ..base
+        };
+        assert_eq!(
+            hexd48(&hedge),
+            "066a16f20ed5edc16d3e2a165321a45f3aaacd67ef7dbad637f453c4ce1f087e",
+            "v2: the leg alone"
+        );
+
+        let random_one_way = TwapOrder {
+            randomize: true,
+            ..base
+        };
+        assert_eq!(
+            hexd48(&random_one_way),
+            "7c20f4608b60fa7716d4895639847e7be6af0bedddc5a4926b2495ddb16866d5",
+            "v3: randomize outranks the leg, so a one-way parent signs an EMPTY leg word"
+        );
+
+        let random_hedge = TwapOrder {
+            position_side: Some(PositionSide::Short),
+            randomize: true,
+            ..base
+        };
+        assert_eq!(
+            hexd48(&random_hedge),
+            "9f982c8f8403e119b224bb52f2f72367074839ca7b07d8679740975ff175da78",
+            "v3: both set"
+        );
+
+        assert_eq!(
+            TypedTradingAction::TwapOrder(&base).type_string(),
+            TY_TWAP_ORDER
+        );
+        assert_eq!(
+            TypedTradingAction::TwapOrder(&hedge).type_string(),
+            TY_TWAP_ORDER_V2
+        );
+        assert_eq!(
+            TypedTradingAction::TwapOrder(&random_one_way).type_string(),
+            TY_TWAP_ORDER_V3
+        );
+        assert_eq!(
+            TypedTradingAction::TwapOrder(&random_hedge).type_string(),
+            TY_TWAP_ORDER_V3
         );
     }
     #[test]

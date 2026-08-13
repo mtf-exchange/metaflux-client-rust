@@ -4,6 +4,35 @@
 //! `delay_ms` apart. `total_size` is in fixed-point tick units like a perp
 //! order's `size`.
 //!
+//! ## Two optional fields select the signing string
+//!
+//! [`TwapOrder::position_side`] and [`TwapOrder::randomize`] each move the
+//! EIP-712 type string, so the payload and the signature must agree. The node's
+//! rule, mirrored by this SDK's typed-order signer: `randomize == true` selects
+//! the V3 string WHATEVER the leg (a one-way randomized parent signs an EMPTY
+//! `positionSide`); else a present `position_side` selects V2; else the base
+//! string. A one-way, non-randomized parent therefore signs the same bytes an
+//! older SDK signed.
+//!
+//! A HEDGE account MUST send `position_side` and a one-way account MUST NOT: the
+//! wrong one is admitted to the mempool and rejected at commit, on no channel.
+//!
+//! ## Perp markets only today
+//!
+//! A spot pair id in `market` is refused at commit with `no perp market for
+//! asset`. The spot lane is built and waits for an activation height. Above it
+//! each slice is an IOC through the spot order path, priced off the base token's
+//! oracle mark rather than off the touch, and three fields are REFUSED rather
+//! than dropped — the whole action is rejected:
+//!
+//! - `reduce_only: true` — `spot has no position to reduce: reduce_only is not supported`
+//! - `position_side` — `spot has no position side`
+//! - `randomize: true` — `spot twap does not support randomize`
+//!
+//! One live-parent budget covers perp and spot parents together, and
+//! [`TwapCancel`] takes a spot parent's id unchanged. The wire shape does not
+//! change, so these types need no new field for the spot lane.
+//!
 //! ## Who owns the parent
 //!
 //! Both actions accept an agent-resolved `owner` on the wire, and this SDK does
@@ -16,7 +45,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::MarketId;
-use crate::types::order::Side;
+use crate::types::order::{PositionSide, Side};
 
 /// Action — submit a sliced (TWAP) order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +63,20 @@ pub struct TwapOrder {
     pub delay_ms: u64,
     /// Reduce-only flag (each slice may only reduce an existing position).
     pub reduce_only: bool,
+    /// The leg every child slice carries. REQUIRED on a hedge account, REFUSED
+    /// on a one-way one. `None` omits the field on the wire and keeps the base
+    /// signing string, so a one-way payload stays byte-identical to an older
+    /// SDK.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position_side: Option<PositionSide>,
+    /// Randomized schedule: the chain draws each slice size and each
+    /// inter-slice delay from a digest over committed inputs, so the schedule is
+    /// harder to front-run. Deterministic — every validator draws the same
+    /// numbers, and the sizes still sum to `total_size`.
+    ///
+    /// `false` omits the field on the wire and keeps the older signing strings.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub randomize: bool,
 }
 
 /// Action — cancel a running TWAP parent by id.
@@ -48,21 +91,45 @@ pub struct TwapCancel {
 mod tests {
     use super::*;
 
-    #[test]
-    fn twap_order_serializes_snake_case() {
-        let a = TwapOrder {
+    fn one_way() -> TwapOrder {
+        TwapOrder {
             market: MarketId(4),
             side: Side::Ask,
             total_size: 1_000,
             slice_count: 10,
             delay_ms: 500,
             reduce_only: true,
-        };
-        let j = serde_json::to_value(a).unwrap();
+            position_side: None,
+            randomize: false,
+        }
+    }
+
+    #[test]
+    fn twap_order_serializes_snake_case() {
+        let j = serde_json::to_value(one_way()).unwrap();
         assert_eq!(j["side"], serde_json::json!("ask"));
         assert_eq!(j["total_size"], serde_json::json!(1_000));
         assert_eq!(j["slice_count"], serde_json::json!(10));
         assert!(j.get("totalSize").is_none(), "no camelCase leak");
+    }
+
+    /// A one-way, non-randomized parent must serialize the pre-hedge field set,
+    /// or an older payload stops matching its own signing string.
+    #[test]
+    fn one_way_parent_omits_both_optional_fields() {
+        let j = serde_json::to_value(one_way()).unwrap();
+        assert!(j.get("position_side").is_none());
+        assert!(j.get("randomize").is_none());
+    }
+
+    #[test]
+    fn hedge_and_randomized_parents_serialize_their_fields() {
+        let mut a = one_way();
+        a.position_side = Some(PositionSide::Long);
+        a.randomize = true;
+        let j = serde_json::to_value(a).unwrap();
+        assert_eq!(j["position_side"], serde_json::json!("long"));
+        assert_eq!(j["randomize"], serde_json::json!(true));
     }
 
     #[test]

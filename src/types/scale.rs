@@ -25,6 +25,13 @@
 //! order MUST carry an empty array — the node rejects a non-empty one). The
 //! EIP-712 digest binds `weights` as a `bytes32`: `keccak256(concat(per-weight
 //! 32-byte-big-endian words))` for `custom`, the 32-byte ZERO hash otherwise.
+//!
+//! PERP MARKETS ONLY TODAY. A spot pair id in `market` is refused at commit —
+//! every rung is refused in its own slot and nothing rests. The spot lane is
+//! built and waits for an activation height: above it the rungs floor onto the
+//! PAIR's tick/lot grid and run the spot admission, and `reduce_only` /
+//! `position_side` are refused. The wire shape does not change, so these types
+//! need no new field.
 
 use serde::{Deserialize, Serialize};
 

@@ -54,6 +54,29 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   `"filled"`. A deep-history read also returns non-executed rows, which is the
   same case that carries no `px`.
 
+### Added
+
+- **BREAKING** `TwapOrder` carries two new fields, `position_side:
+  Option<PositionSide>` and `randomize: bool`. Every struct literal must add
+  them; `TwapOrder { position_side: None, randomize: false, ..}` reproduces the
+  old behaviour and the old signed bytes exactly. **Without them a hedge account
+  could not place a TWAP at all**: the node REQUIRES the leg on a hedge account
+  and refuses it on a one-way one, and the field is bound in the signature, so a
+  client that cannot express it cannot sign a valid parent.
+- `TwapOrder` now selects one of the three consensus-frozen TWAP signing
+  strings, matching the node: `randomize: true` selects the V3 string WHATEVER
+  the leg — a randomized one-way parent signs an EMPTY `positionSide` — else a
+  present `position_side` selects V2, else the base string. Both new fields are
+  omitted from the wire at their defaults, so a one-way, non-randomized payload
+  is byte-identical to the one an older SDK sent. The four digests are pinned by
+  the node's own cross-language vectors.
+
+### Fixed
+
+- `facade/Cargo.toml` pinned `metaflux-client` at `version = "0.18.0"` while both
+  packages are `0.19.0`, so cargo could not resolve the workspace and NO build,
+  test or lint ran. The pin now tracks the package version.
+
 ## [0.16.0]
 
 Lands the unified `place_order` entry point, the agent-resolved spot `owner`, an
