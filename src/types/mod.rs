@@ -1,17 +1,18 @@
 //! Domain types shared by all transports.
 //!
 //! Types use `#[serde(rename_all = "snake_case")]` to match the wire
-//! convention. Sizes / prices / ids are plain-integer fields on fixed-point
-//! planes; fractional magnitudes (margin deltas, stake, vault amounts) ride the
-//! wire as decimal **strings** to preserve precision.
+//! convention. An `/exchange` WRITE carries sizes / prices / ids as plain
+//! integers on fixed-point planes; every fractional magnitude — margin deltas,
+//! stake, vault amounts, and every `/info` READ value — rides the wire as a
+//! decimal **string**, because a decimal amount does not survive an `f64`.
 //!
-//! ## ID newtypes
-//!
-//! Three identifier newtypes are re-exported from this module:
+//! ## Newtypes
 //!
 //! - [`OrderId`] — server-assigned order identifier (`u64`).
 //! - [`MarketId`] — internal market id (`u32`), sequentially allocated.
 //! - [`VaultId`] — vault id (`u64`), assigned at vault creation.
+//! - [`WholeShares`] — a vault share count on the whole-share plane, as a
+//!   decimal string.
 
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +63,49 @@ pub struct MarketId(pub u32);
 )]
 #[serde(transparent)]
 pub struct VaultId(pub u64);
+
+/// A vault share count on the WHOLE-share plane, as the exact decimal string the
+/// node serves and accepts.
+///
+/// Committed state keeps shares as a raw integer on a 10^18 scale.
+/// `user_vault_equities` divides by that scale before it answers, and
+/// `vault_withdraw` reads the same whole-share plane. So the one correct
+/// operation on a share string is to pass it through unchanged — scaling it by
+/// 10^18 asks to burn 10^18 times too many shares.
+///
+/// It stays a string because it is exact. A share count carries up to 18
+/// fraction digits, past what an `f64` holds, so parsing it as a float and
+/// printing it back changes the number while it still looks plausible.
+///
+/// The wire shape is the bare JSON string, so this is interchangeable with the
+/// `String` share fields on the read types.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WholeShares(pub String);
+
+impl std::fmt::Display for WholeShares {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<String> for WholeShares {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for WholeShares {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl From<WholeShares> for String {
+    fn from(s: WholeShares) -> Self {
+        s.0
+    }
+}
 
 /// Client-supplied order identifier (16 bytes / 128 bits) for idempotency.
 ///

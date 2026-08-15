@@ -2,8 +2,22 @@
 //!
 //! A typed client for the MetaFlux (MTF) derivatives L1. Every type, request
 //! shape, and channel discriminator follows the wire convention: snake_case
-//! JSON, plain-integer numerics (sizes / prices on fixed-point planes), and
-//! `market_id` rather than `coin`.
+//! JSON, and a market named by its `coin` symbol.
+//!
+//! ## Two numeric planes, decided by direction
+//!
+//! A `/info` READ answers in canonical decimal STRINGS — a price in whole USDC
+//! snapped to the market tick, a size on the market's own `sz_decimals` plane.
+//! They are strings because they are exact: a decimal amount does not survive a
+//! float, and several of them carry more digits than an `f64` holds. Keep them
+//! as strings, or parse them with a decimal type.
+//!
+//! An `/exchange` WRITE takes plain integers on fixed-point planes — an order
+//! `limit_px` in 1e8 units, a `size` in raw lots. So a price read from `/info`
+//! is not a price you can post back unconverted. [`grid`] does that conversion.
+//!
+//! Reads are keyed by `coin` (the market symbol, e.g. `"BTC"`) and accounts by
+//! `address`. The numeric `market_id` / `asset_id` request params are gone.
 //!
 //! The SDK signs and submits the node's full signed-action surface — perp and
 //! spot orders, TWAP, modify / batch, leverage and margin, vaults, staking,
@@ -59,7 +73,7 @@ pub use types::candle::CandleType;
 pub use types::chase::{CancelChaseParams, ChaseParams};
 pub use types::place::{OrderLeg, PlaceRequest, Placement};
 pub use types::scale::{CancelScaleParams, ScaleDist, ScaleParams};
-pub use types::{MarketId, OrderId, VaultId};
+pub use types::{MarketId, OrderId, VaultId, WholeShares};
 pub use wallet::Wallet;
 
 /// Top-level convenience bundle.

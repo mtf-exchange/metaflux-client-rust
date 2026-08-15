@@ -392,14 +392,99 @@ pub struct FeeSchedule {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct StakingSnapshot {
-    /// Total MTF staked across all delegations, canonical decimal string.
+    /// DELEGATED stake only, canonical decimal string — the sum of
+    /// [`Delegation::amount`]. It is NOT the account's whole staked balance;
+    /// add [`Self::undelegated_pool_balance`].
     pub total_staked: String,
+    /// Stake deposited but NOT delegated, on the same plane as
+    /// [`Self::total_staked`].
+    ///
+    /// `stakingDeposit` credits this free pool and `stakingWithdraw` debits it,
+    /// so stake can rest here undelegated indefinitely. A caller that reads only
+    /// `total_staked` reports less than the account holds.
+    ///
+    /// This is not [`Self::pending_unstakes`]: the free pool is already free,
+    /// while a pending unstake is locked until it matures.
+    ///
+    /// `None` on a node that predates the field. Absent means unknown, never a
+    /// zero balance.
+    #[serde(default)]
+    pub undelegated_pool_balance: Option<String>,
     /// Active delegations (unclaimed rewards live per-delegation).
     #[serde(default)]
     pub delegations: Vec<Delegation>,
     /// Queued undelegations awaiting maturity.
     #[serde(default)]
     pub pending_unstakes: Vec<PendingUnstake>,
+}
+
+/// A per-asset amount row inside [`ProtocolMetrics`].
+///
+/// These rows arrive as a JSON ARRAY in ascending `asset`, not as an object: a
+/// JSON object carries no ordering guarantee across clients, and the rows must
+/// stay ordered.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AssetAmount {
+    /// Asset id.
+    pub asset: u32,
+    /// The amount for this asset, decimal string.
+    pub amount: String,
+}
+
+/// A per-asset signed-position-sum row inside [`ProtocolMetrics`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AssetSignedSum {
+    /// Asset id.
+    pub asset: u32,
+    /// Sum of `size_signed` over every position row on this market, a signed
+    /// decimal string on the market's own raw committed lot plane.
+    pub sum_signed: String,
+}
+
+/// Native MTF held on the EVM side, inside [`ProtocolMetrics`].
+///
+/// This mirrors the Core-side view only. The authoritative EVM state root is
+/// separate.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ProtocolMetricsEvm {
+    /// Total native balance in WEI, decimal string.
+    pub native_balance_wei: String,
+    /// EVM accounts holding a non-zero native balance.
+    pub n_nonzero_holders: u64,
+    /// EVM accounts with any committed state.
+    pub n_accounts: u64,
+}
+
+/// `protocol_metrics` — protocol-wide committed accumulators.
+///
+/// Only the fields this SDK types are listed; the read serves more. Unknown keys
+/// are ignored, so a newer node stays decodable.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ProtocolMetrics {
+    /// Native-MTF-on-EVM mirror.
+    #[serde(default)]
+    pub evm: Option<ProtocolMetricsEvm>,
+    /// Per-market open interest as a whole-unit size string on that market's own
+    /// size plane, ascending `asset`.
+    ///
+    /// There is deliberately no cross-market total. Each market keeps its own
+    /// `sz_decimals` lot plane, so summing raw lots across markets adds
+    /// quantities with no common unit. Convert each market to notional first.
+    ///
+    /// `None` on a node that predates the field.
+    #[serde(default)]
+    pub open_interest_by_asset: Option<Vec<AssetAmount>>,
+    /// Per market, the sum of `size_signed` over EVERY position row.
+    ///
+    /// Every long leg has a short leg, so the honest value is `"0"` on each
+    /// asset. A non-zero entry marks a committed one-sided write to a position
+    /// row, which the open-interest figure cannot show.
+    #[serde(default)]
+    pub position_size_signed_sum_by_asset: Option<Vec<AssetSignedSum>>,
 }
 
 /// `staking_state` response.
@@ -2170,6 +2255,16 @@ impl<'a> Info<'a> {
             .await
     }
 
+    /// `protocol_metrics` — protocol-wide committed accumulators. No parameters.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn protocol_metrics(&self) -> Result<ProtocolMetrics, ClientError> {
+        self.client
+            .post_json("/info", &json!({ "type": "protocol_metrics" }))
+            .await
+    }
+
     // ── node-native queries (keyed by internal numeric ids) ──
 
     /// `node_info` — chain identity + sync state. No parameters.
@@ -2704,6 +2799,100 @@ impl<'a> Info<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Vault shares ride ONE plane on both the read and the write, so a
+    /// redemption sends back the exact string the read gave.
+    ///
+    /// The pairs are the node's own: the raw share counts its share-rendering
+    /// test sweeps, converted at the 10^18 share scale. The largest is the
+    /// 96-bit decimal-mantissa ceiling, 2^96-1, where the conversion is still
+    /// exact.
+    #[test]
+    fn vault_shares_read_then_withdraw_that_exact_string() {
+        const GOLDENS: &[(u128, &str)] = &[
+            (0, "0"),
+            (1, "0.000000000000000001"),
+            (1_000_000_000_000_000_000, "1"),
+            (12_345_000_000_000_000_000_000, "12345"),
+            (
+                79_228_162_514_264_337_593_543_950_335,
+                "79228162514.264337593543950335",
+            ),
+        ];
+
+        for (raw, whole) in GOLDENS {
+            let served = serde_json::json!({
+                "vault_id": 7u64,
+                "vault_address": "0x000000000000000000000000000000000000dead",
+                "shares": whole,
+                "equity": "5000000000",
+            });
+            let eq: VaultEquity = serde_json::from_value(served).unwrap();
+            assert_eq!(eq.shares, *whole, "the read plane is whole shares");
+
+            // The withdraw carries the read string unchanged.
+            let shares = crate::types::WholeShares::from(eq.shares.as_str());
+            assert_eq!(shares.to_string(), *whole);
+            assert_eq!(
+                serde_json::to_value(&shares).unwrap(),
+                serde_json::json!(whole),
+                "the newtype is transparent on the wire"
+            );
+
+            // A caller that believed the old "18-dec" claim would send this.
+            if *raw != 0 {
+                assert_ne!(
+                    shares.to_string(),
+                    raw.to_string(),
+                    "raw={raw} must never ride the wire rescaled by 10^18"
+                );
+            }
+        }
+    }
+
+    /// `undelegated_pool_balance` is absent on an older node. Absent must decode
+    /// as unknown, never as a zero balance.
+    #[test]
+    fn staking_snapshot_absent_free_pool_is_none_not_zero() {
+        let without = serde_json::json!({ "total_staked": "1000" });
+        let s: StakingSnapshot = serde_json::from_value(without).unwrap();
+        assert_eq!(s.undelegated_pool_balance, None);
+
+        let with = serde_json::json!({
+            "total_staked": "1000",
+            "undelegated_pool_balance": "250",
+        });
+        let s: StakingSnapshot = serde_json::from_value(with).unwrap();
+        assert_eq!(s.undelegated_pool_balance.as_deref(), Some("250"));
+    }
+
+    /// `open_interest_by_asset` is a per-asset ARRAY of whole-unit size strings.
+    /// A node that predates it answers neither key.
+    #[test]
+    fn protocol_metrics_decodes_open_interest_by_asset() {
+        let data = serde_json::json!({
+            "open_interest_by_asset": [
+                { "asset": 0, "amount": "0.015" },
+                { "asset": 3, "amount": "1200" },
+            ],
+            "position_size_signed_sum_by_asset": [ { "asset": 0, "sum_signed": "0" } ],
+            "evm": {
+                "native_balance_wei": "12000000000000000000",
+                "n_nonzero_holders": 3u64,
+                "n_accounts": 11u64,
+            },
+        });
+        let m: ProtocolMetrics = serde_json::from_value(data).unwrap();
+        let oi = m.open_interest_by_asset.as_ref().unwrap();
+        assert_eq!(oi.len(), 2);
+        assert_eq!(oi[0].asset, 0);
+        assert_eq!(oi[0].amount, "0.015");
+        assert_eq!(oi[1].asset, 3, "rows stay in ascending asset order");
+        assert_eq!(m.evm.as_ref().unwrap().n_accounts, 11);
+
+        let older: ProtocolMetrics = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert_eq!(older.open_interest_by_asset, None);
+    }
 
     /// Decode the exact `node_info.data` payload from the `/info` contract.
     #[test]
