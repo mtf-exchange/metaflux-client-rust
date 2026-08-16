@@ -7,15 +7,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Destination chain for a MetaBridge withdrawal. Serializes in PascalCase to
-/// match the node's chain enum (`"Base"` / `"Arbitrum"` / `"Solana"`).
+/// match the node's chain enum (`"Base"` / `"Arbitrum"`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MbChain {
     /// Base.
     Base,
     /// Arbitrum.
     Arbitrum,
-    /// Solana.
-    Solana,
 }
 
 /// Action — withdraw cross-collateral to a destination chain.
@@ -28,8 +26,7 @@ pub struct MbWithdraw {
     pub asset: u32,
     /// Amount in base units.
     pub amount: u64,
-    /// Destination address as `0x`-hex: a 20-byte EVM address (Base / Arbitrum)
-    /// or a 32-byte recipient (Solana).
+    /// Destination address as `0x`-hex: a 20-byte EVM address.
     pub dst_addr: String,
 }
 
@@ -41,8 +38,8 @@ mod tests {
     fn mb_chain_serializes_pascal_case() {
         assert_eq!(serde_json::to_string(&MbChain::Base).unwrap(), "\"Base\"");
         assert_eq!(
-            serde_json::to_string(&MbChain::Solana).unwrap(),
-            "\"Solana\""
+            serde_json::to_string(&MbChain::Arbitrum).unwrap(),
+            "\"Arbitrum\""
         );
     }
 

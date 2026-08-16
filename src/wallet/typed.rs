@@ -587,12 +587,12 @@ pub enum TypedAction {
     },
     /// `MbWithdraw(string metafluxChain,uint8 chain,uint32 asset,uint64 amount,string dstAddr,uint64 nonce)`
     ///
-    /// The signed `chain` is the mapped `uint8` (`0` = Solana, `1` = Base,
-    /// `2` = Arbitrum); the POST `params.chain` carries the string name.
+    /// The signed `chain` is the mapped `uint8` (`1` = Base, `2` = Arbitrum);
+    /// the POST `params.chain` carries the string name.
     MbWithdraw {
         /// Chain tag.
         metaflux_chain: String,
-        /// Destination chain discriminant (`0` = Solana, `1` = Base, `2` = Arbitrum).
+        /// Destination chain discriminant (`1` = Base, `2` = Arbitrum).
         chain: u8,
         /// Asset id.
         asset: u32,

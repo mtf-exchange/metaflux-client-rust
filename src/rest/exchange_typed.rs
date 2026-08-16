@@ -38,11 +38,10 @@ struct TypedSignedEnvelope<'a> {
 }
 
 /// Map a [`crate::types::meta_bridge::MbChain`] to the `uint8` the typed `MbWithdraw` digest
-/// signs (`Solana = 0`, `Base = 1`, `Arbitrum = 2`). This is independent of the
+/// signs (`Base = 1`, `Arbitrum = 2`). This is independent of the
 /// wire string name, which is still PascalCase in the POST params.
 fn mb_chain_to_u8(chain: crate::types::meta_bridge::MbChain) -> u8 {
     match chain {
-        crate::types::meta_bridge::MbChain::Solana => 0,
         crate::types::meta_bridge::MbChain::Base => 1,
         crate::types::meta_bridge::MbChain::Arbitrum => 2,
     }
@@ -52,7 +51,6 @@ fn mb_chain_to_u8(chain: crate::types::meta_bridge::MbChain) -> u8 {
 /// `params.chain` carries).
 fn mb_chain_name(chain: crate::types::meta_bridge::MbChain) -> &'static str {
     match chain {
-        crate::types::meta_bridge::MbChain::Solana => "Solana",
         crate::types::meta_bridge::MbChain::Base => "Base",
         crate::types::meta_bridge::MbChain::Arbitrum => "Arbitrum",
     }
@@ -863,8 +861,8 @@ impl<'a> Exchange<'a> {
 
     /// Withdraw cross-collateral to a destination chain under the typed scheme.
     ///
-    /// The signed `chain` field is the mapped `uint8` (`Solana = 0`,
-    /// `Base = 1`, `Arbitrum = 2`), but the POST `params.chain` carries the
+    /// The signed `chain` field is the mapped `uint8` (`Base = 1`,
+    /// `Arbitrum = 2`), but the POST `params.chain` carries the
     /// PascalCase string name the wire expects. `amount` is an integer in base
     /// units (not a decimal string); `dst_addr` is a `0x`-hex destination
     /// address for the target chain.
