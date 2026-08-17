@@ -5,9 +5,14 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
-## [0.19.0] — 2026-08-18
+## [0.20.0] — 2026-08-18
 
-First release since 0.18.1. Carries the staged 0.19.0 work plus the
+**0.19.0 was tagged on 2026-08-09 and never published.** Its release run failed because
+the facade crate depended on `metaflux-client = "^0.18.0"`, which cannot resolve 0.19.0 —
+on a 0.x version the caret pins the minor. The dependency now tracks the crate version,
+and this release takes a fresh number rather than reusing a tag that is already pushed.
+
+First release since 0.18.1. Carries the staged work plus the
 `send_to_evm_with_data` action and the Core to EVM fee rules.
 
 ### Removed
