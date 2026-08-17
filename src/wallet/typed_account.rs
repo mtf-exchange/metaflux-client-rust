@@ -37,6 +37,11 @@ pub(crate) const CORE_EVM_TRANSFER_TYPE: &[u8] =
 /// empty payload and a chain id of `0` both choose this string.
 pub(crate) const CORE_EVM_TRANSFER_V2_TYPE: &[u8] =
     b"MetaFluxTransaction:CoreEvmTransferV2(string metafluxChain,string amount,bool toEvm,address destination,uint32 asset,uint32 destinationChainId,bytes data,uint64 nonce)";
+/// `MetaFluxTransaction:SendToEvmWithData` // CONSENSUS-FROZEN. `transferNonce`
+/// is the params-level per-transfer nonce; the trailing `nonce` is the envelope
+/// nonce. Both are signed, and they may differ.
+pub(crate) const SEND_TO_EVM_WITH_DATA_TYPE: &[u8] =
+    b"MetaFluxTransaction:SendToEvmWithData(string metafluxChain,uint32 token,string amount,uint32 sourceDex,address destinationRecipient,bool toPerp,uint32 destinationChainId,bytes data,uint64 transferNonce,uint64 nonce)";
 /// `MetaFluxTransaction:CreateSubAccount` // CONSENSUS-FROZEN. The optional
 /// `explicitIndex` flattens to a presence `bool` + value (`0` when absent).
 pub(crate) const CREATE_SUB_ACCOUNT_TYPE: &[u8] =
@@ -146,6 +151,38 @@ pub(crate) fn core_evm_transfer_v2_words(
         enc_u32(asset),
         enc_u32(destination_chain_id),
         enc_bytes(data),
+        enc_u64(nonce),
+    ]
+}
+
+/// `SendToEvmWithData` words. `amount` is the verbatim canonical decimal string;
+/// `data` hashes as `bytes`. The two nonces are separate signed fields, the
+/// per-transfer one first.
+// One argument per signed field, in the frozen order. Collapsing them into a
+// struct would hide the order the digest depends on.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn send_to_evm_with_data_words(
+    chain: &str,
+    token: u32,
+    amount: &str,
+    source_dex: u32,
+    destination_recipient: &crate::wallet::Address,
+    to_perp: bool,
+    destination_chain_id: u32,
+    data: &[u8],
+    transfer_nonce: u64,
+    nonce: u64,
+) -> Vec<[u8; 32]> {
+    vec![
+        enc_string(chain),
+        enc_u32(token),
+        enc_string(amount),
+        enc_u32(source_dex),
+        enc_addr(destination_recipient),
+        enc_bool(to_perp),
+        enc_u32(destination_chain_id),
+        enc_bytes(data),
+        enc_u64(transfer_nonce),
         enc_u64(nonce),
     ]
 }

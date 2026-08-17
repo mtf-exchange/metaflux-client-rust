@@ -645,6 +645,36 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `SendToEvmWithData(string metafluxChain,uint32 token,string amount,uint32 sourceDex,address destinationRecipient,bool toPerp,uint32 destinationChainId,bytes data,uint64 transferNonce,uint64 nonce)`
+    ///
+    /// Moves a spot token to MetaFluxEVM and runs a payload against the
+    /// recipient. Every field is signed, including the three the chain refuses to
+    /// honour with any value but one — see
+    /// [`crate::types::core_evm::SendToEvmWithData`] for the rule on each.
+    SendToEvmWithData {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Spot token id to move.
+        token: u32,
+        /// Amount as a canonical decimal string (whole-token plane).
+        amount: String,
+        /// Source book. Signed, and accepted only as `0`.
+        source_dex: u32,
+        /// MetaFluxEVM-side recipient, and the target of `data`.
+        destination_recipient: Address,
+        /// Credit a perp account. Signed, and accepted only as `false`.
+        to_perp: bool,
+        /// Delivery chain. Signed, and accepted only as `0` or the local EVM
+        /// chain id.
+        destination_chain_id: u32,
+        /// EVM payload run against the recipient after the credit.
+        data: Vec<u8>,
+        /// Per-transfer nonce — the params-level `nonce`, signed as
+        /// `transferNonce`. Distinct from the envelope nonce below.
+        transfer_nonce: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
     /// `CreateSubAccount(string metafluxChain,string name,bool hasExplicitIndex,uint32 explicitIndex,bool sharedStpGroup,uint64 nonce)`
     ///
     /// The optional explicit index flattens to a presence `bool` + value (`0`
@@ -912,6 +942,7 @@ impl TypedAction {
             TypedAction::MbWithdraw { .. } => MB_WITHDRAW_TYPE,
             TypedAction::CoreEvmTransfer { .. } => account::CORE_EVM_TRANSFER_TYPE,
             TypedAction::CoreEvmTransferV2 { .. } => account::CORE_EVM_TRANSFER_V2_TYPE,
+            TypedAction::SendToEvmWithData { .. } => account::SEND_TO_EVM_WITH_DATA_TYPE,
             TypedAction::CreateSubAccount { .. } => account::CREATE_SUB_ACCOUNT_TYPE,
             TypedAction::SubAccountTransfer { .. } => account::SUB_ACCOUNT_TRANSFER_TYPE,
             TypedAction::SubAccountSpotTransfer { .. } => account::SUB_ACCOUNT_SPOT_TRANSFER_TYPE,
@@ -1322,6 +1353,29 @@ impl TypedAction {
                 *to_evm,
                 destination,
                 *asset,
+                *nonce,
+            ),
+            TypedAction::SendToEvmWithData {
+                metaflux_chain,
+                token,
+                amount,
+                source_dex,
+                destination_recipient,
+                to_perp,
+                destination_chain_id,
+                data,
+                transfer_nonce,
+                nonce,
+            } => account::send_to_evm_with_data_words(
+                metaflux_chain,
+                *token,
+                amount,
+                *source_dex,
+                destination_recipient,
+                *to_perp,
+                *destination_chain_id,
+                data,
+                *transfer_nonce,
                 *nonce,
             ),
             TypedAction::CreateSubAccount {

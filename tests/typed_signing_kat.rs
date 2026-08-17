@@ -870,6 +870,19 @@ fn every_typed_action_signs_and_recovers() {
             stp_group: 0,
             nonce: 49,
         },
+        // The accepted shape: source_dex 0, to_perp false, local delivery (0).
+        TypedAction::SendToEvmWithData {
+            metaflux_chain: chain.clone(),
+            token: 7,
+            amount: "12.5".into(),
+            source_dex: 0,
+            destination_recipient: addr(0xE7),
+            to_perp: false,
+            destination_chain_id: 0,
+            data: vec![0xCA, 0xFE],
+            transfer_nonce: 5,
+            nonce: 50,
+        },
         TypedAction::MultiSig {
             metaflux_chain: chain,
             user: addr(0x22),
@@ -878,7 +891,7 @@ fn every_typed_action_signs_and_recovers() {
             nonce: 44,
         },
     ];
-    assert_eq!(actions.len(), 47, "all 47 reachable typed actions covered");
+    assert_eq!(actions.len(), 48, "all 48 reachable typed actions covered");
 
     for action in &actions {
         let digest = _typed_digest_for_test(action);
@@ -975,5 +988,58 @@ fn expires_after_fold_matches_chain() {
         hex::encode(_typed_digest_for_test_with_expiry(&multi_sig, EXPIRY)),
         "54e5f5d4fe4f8bf2767539fd0d88ab4d5ed0ecae1ccdd604a8c984016227561c",
         "outer MultiSig expiry-folded digest drift vs chain"
+    );
+}
+
+/// `SendToEvmWithData`, pinned byte-for-byte against the chain crate's own
+/// fixture (chain id 114514 / `"Testnet"`). The digest was READ from the chain
+/// crate, not computed here: the same fixture run also reproduces the `SendAsset`
+/// digest already pinned above, which proves the two sides build the digest the
+/// same way.
+///
+/// The fixture deliberately carries `source_dex: 1` and a remote
+/// `destination_chain_id`. Both values are REFUSED at submission, and neither
+/// changes what the signer signs — this test pins the signing form, not what the
+/// chain accepts. Signing the wrong form is the failure it guards: the chain then
+/// rejects the signature, and the caller cannot tell why.
+#[test]
+fn send_to_evm_with_data_matches_chain_fixture() {
+    let action = TypedAction::SendToEvmWithData {
+        metaflux_chain: "Testnet".into(),
+        token: 7,
+        amount: "12.5".into(),
+        source_dex: 1,
+        destination_recipient: addr(0xE7),
+        to_perp: false,
+        destination_chain_id: 8964,
+        data: vec![0xCA, 0xFE],
+        transfer_nonce: 5,
+        nonce: 18,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&action)),
+        "6dd606a21f9786874a3215903bce4d713379222d7e67311c2876a4fd288bd452",
+        "SendToEvmWithData digest drift vs chain"
+    );
+
+    // The two nonces are separate signed fields. Swapping them must move the
+    // digest, else a client could sign one for the other and the chain would
+    // deliver a transfer labelled with the wrong number.
+    let swapped = TypedAction::SendToEvmWithData {
+        metaflux_chain: "Testnet".into(),
+        token: 7,
+        amount: "12.5".into(),
+        source_dex: 1,
+        destination_recipient: addr(0xE7),
+        to_perp: false,
+        destination_chain_id: 8964,
+        data: vec![0xCA, 0xFE],
+        transfer_nonce: 18,
+        nonce: 5,
+    };
+    assert_ne!(
+        _typed_digest_for_test(&action),
+        _typed_digest_for_test(&swapped),
+        "transferNonce and the envelope nonce must occupy distinct signed slots"
     );
 }

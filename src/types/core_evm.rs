@@ -1,9 +1,10 @@
-//! Core ↔ MetaFluxEVM transfer.
+//! Core ↔ MetaFluxEVM transfers.
 //!
-//! Moves USDC between the Core (clearinghouse) balance and the MetaFluxEVM
-//! sidechain. Sender-authorized: the recovered signer is the Core-side account;
-//! `destination` is the MetaFluxEVM-side recipient. `amount` rides the wire as a
-//! decimal **string** (whole-USDC plane) to preserve precision.
+//! Two actions move value one way, Core → MetaFluxEVM: [`CoreEvmTransfer`] and
+//! [`SendToEvmWithData`]. Both are sender-authorized — the recovered signer is
+//! the Core-side account, and the recipient field names the MetaFluxEVM-side
+//! account. `amount` rides the wire as a decimal **string** (whole-token plane)
+//! to preserve precision.
 
 use serde::{Deserialize, Serialize};
 
@@ -51,6 +52,79 @@ impl CoreEvmTransfer {
     pub const fn is_v2(&self) -> bool {
         self.data.is_some() || self.destination_chain_id.is_some()
     }
+}
+
+/// Action — move a spot token to MetaFluxEVM and run a payload against the
+/// recipient.
+///
+/// The chain debits the sender's spot balance of `token`, credits
+/// `destination_recipient` on MetaFluxEVM, and runs `data` against that address.
+/// Wire tag: `send_to_evm_with_data`.
+///
+/// **Every field is required on the wire.** The chain reads all eight keys; an
+/// omitted key fails the whole action.
+///
+/// **A field the chain cannot honour is REFUSED, never ignored.** `source_dex`,
+/// `to_perp` and a remote `destination_chain_id` were all signed and then
+/// dropped in silence by an older node — a caller who named a remote chain got a
+/// LOCAL delivery and no warning. Each one is now a rejection. Read the rule on
+/// the field.
+///
+/// The transfer queue is bounded. A full queue rejects the action until it
+/// drains, so treat that answer as "retry", not "invalid".
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SendToEvmWithData {
+    /// Spot token id to move.
+    ///
+    /// The token needs an EVM contract link, or the chain rejects the action.
+    /// The native gas token is the one exception — it funds gas and always has a
+    /// credit path.
+    pub token: u32,
+    /// Amount as a canonical decimal string (whole-token plane). Sign and send
+    /// the identical text.
+    ///
+    /// The chain truncates the amount to one EVM quantum — first to 8 decimal
+    /// places, then to the token's EVM decimals — and debits exactly what it
+    /// credits. An amount under one quantum credits nothing, so the chain
+    /// rejects it rather than take a debit for a zero credit.
+    pub amount: String,
+    /// Source book. `0` is the only accepted value: this action debits the spot
+    /// ledger and no other ledger.
+    ///
+    /// **This is the row an older caller hits.** A payload built for the earlier
+    /// node carries `1`, which was ignored. It is now rejected. Send `0`.
+    pub source_dex: u32,
+    /// MetaFluxEVM-side recipient, and the target of `data`.
+    ///
+    /// The credit is a mint to this address, so the chain accepts any address —
+    /// **the zero address included**. A zero recipient still takes the debit,
+    /// and nobody can ever spend the credit. Check the value before you sign.
+    pub destination_recipient: Address,
+    /// Credit a perp account. `false` is the only accepted value: the
+    /// MetaFluxEVM side has no perp account, so the credit is always an EVM
+    /// balance. `true` was ignored before; it is now rejected.
+    pub to_perp: bool,
+    /// Delivery chain. `0`, or the local EVM chain id. Any other value is
+    /// rejected, because delivery to a remote chain is not built.
+    ///
+    /// Send `0` — it means "the local chain" and needs no lookup. A remote id
+    /// used to be signed and then delivered locally in silence.
+    pub destination_chain_id: u32,
+    /// EVM payload run against `destination_recipient` AFTER the credit lands.
+    /// An empty payload is valid.
+    ///
+    /// 4096 bytes at most; a longer payload is rejected.
+    ///
+    /// A reverting payload NEVER unwinds the credit: Core is debited, the EVM is
+    /// credited, and the call is additional. Read its receipt.
+    pub data: Vec<u8>,
+    /// Per-transfer nonce, carried into the queued transfer.
+    ///
+    /// This is NOT the action envelope nonce. The envelope nonce orders the
+    /// account's actions; this one labels the transfer, and it signs as
+    /// `transferNonce`. The two may differ.
+    pub nonce: u64,
 }
 
 #[cfg(test)]
@@ -123,5 +197,40 @@ mod tests {
         for k in ["asset", "data", "destination_chain_id"] {
             assert!(j.get(k).is_none(), "{k} must be omitted when defaulted");
         }
+    }
+
+    /// The chain reads all eight keys of `send_to_evm_with_data`, so none may be
+    /// skipped — an omitted key fails the action. The payload rides as a byte
+    /// array and `amount` as a string.
+    #[test]
+    fn send_to_evm_with_data_carries_every_key() {
+        let a = SendToEvmWithData {
+            token: 7,
+            amount: "12.5".into(),
+            source_dex: 0,
+            destination_recipient: Address::from_bytes([0xE7; 20]),
+            to_perp: false,
+            destination_chain_id: 0,
+            data: Vec::new(),
+            nonce: 5,
+        };
+        let j = serde_json::to_value(&a).unwrap();
+        for k in [
+            "token",
+            "amount",
+            "source_dex",
+            "destination_recipient",
+            "to_perp",
+            "destination_chain_id",
+            "data",
+            "nonce",
+        ] {
+            assert!(j.get(k).is_some(), "{k} must ride the wire");
+        }
+        assert_eq!(j["amount"], serde_json::json!("12.5"));
+        assert_eq!(j["data"], serde_json::json!([]));
+        assert!(j.get("sourceDex").is_none(), "no camelCase leak");
+        let dec: SendToEvmWithData = serde_json::from_value(j).unwrap();
+        assert_eq!(a, dec);
     }
 }

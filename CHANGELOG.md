@@ -56,6 +56,35 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Added
 
+- `send_to_evm_with_data` — `Exchange::send_to_evm_with_data_typed`,
+  `types::core_evm::SendToEvmWithData`, and `TypedAction::SendToEvmWithData`.
+  The action moves a spot token to MetaFluxEVM and runs a payload against the
+  recipient. **The node serves it and no client could express it**, so the
+  capability was unreachable from this SDK. The signing string is
+  `MetaFluxTransaction:SendToEvmWithData(string metafluxChain,uint32 token,string
+  amount,uint32 sourceDex,address destinationRecipient,bool toPerp,uint32
+  destinationChainId,bytes data,uint64 transferNonce,uint64 nonce)`, and the
+  digest is pinned against the node's own fixture.
+- The action takes TWO nonces. `transfer_nonce` is the params-level `nonce` that
+  labels the transfer and signs as `transferNonce`; the envelope nonce orders the
+  account's actions. Both are signed, and they may differ.
+- **Send `source_dex = 0`.** The node refuses any other value: the action debits
+  the spot ledger and no other. **This is the row an older caller hits** — a
+  payload built for the earlier node carries `source_dex: 1`, which was signed
+  and then ignored. It now fails.
+- `to_perp` must be `false` (the MetaFluxEVM side has no perp account) and
+  `destination_chain_id` must be `0` or the local EVM chain id (delivery to a
+  remote chain is not built). Both were signed and ignored before. A caller who
+  named a remote chain had the value delivered LOCALLY in silence; that silence
+  is what the rejection replaces.
+- `data` holds 4096 bytes at most. A reverting payload never unwinds the credit:
+  the debit is done and the credit landed, so read the receipt.
+- The node truncates `amount` to one EVM quantum — first to 8 decimal places,
+  then to the token's EVM decimals — and debits exactly what it credits. An
+  amount under one quantum is REFUSED, rather than debited for a zero credit.
+- A zero `destination_recipient` is NOT refused on this action. The debit still
+  happens and nobody can spend the credit, so check the address before you sign.
+  This differs from `core_evm_transfer`, which does refuse a zero destination.
 - **BREAKING** `TwapOrder` carries two new fields, `position_side:
   Option<PositionSide>` and `randomize: bool`. Every struct literal must add
   them; `TwapOrder { position_side: None, randomize: false, ..}` reproduces the

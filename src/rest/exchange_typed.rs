@@ -937,6 +937,70 @@ impl<'a> Exchange<'a> {
         .await
     }
 
+    /// Move a spot token to MetaFluxEVM and run `data` against the recipient,
+    /// under the typed scheme.
+    ///
+    /// The chain debits the signer's spot balance of `token`, credits
+    /// `destination_recipient` on MetaFluxEVM, and then runs `data` against that
+    /// address. `amount` is a canonical decimal string on the whole-token plane;
+    /// it is signed and posted as the identical text.
+    ///
+    /// `transfer_nonce` labels the transfer. It is NOT the envelope nonce, which
+    /// this method takes from the account's nonce source; the two may differ.
+    ///
+    /// **Pass `source_dex = 0`, `to_perp = false`, and `destination_chain_id = 0`
+    /// unless you know otherwise.** The chain refuses any other value for the
+    /// first two, and refuses a `destination_chain_id` that is neither `0` nor
+    /// the local EVM chain id. An older node accepted those fields and then
+    /// ignored them, so a payload copied from that era carries `source_dex = 1`
+    /// and now fails. `data` holds 4096 bytes at most, and an amount under one EVM
+    /// quantum is refused rather than debited for a zero credit. See
+    /// [`crate::types::core_evm::SendToEvmWithData`] for the rule on every field.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_to_evm_with_data_typed(
+        &self,
+        wallet: &Wallet,
+        token: u32,
+        amount: impl Into<String>,
+        source_dex: u32,
+        destination_recipient: crate::wallet::Address,
+        to_perp: bool,
+        destination_chain_id: u32,
+        data: Vec<u8>,
+        transfer_nonce: u64,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SendToEvmWithData {
+                metaflux_chain: chain,
+                token,
+                amount: amount.clone(),
+                source_dex,
+                destination_recipient,
+                to_perp,
+                destination_chain_id,
+                data: data.clone(),
+                transfer_nonce,
+                nonce,
+            };
+            let params = json!({
+                "token": token,
+                "amount": amount,
+                "source_dex": source_dex,
+                "destination_recipient": destination_recipient,
+                "to_perp": to_perp,
+                "destination_chain_id": destination_chain_id,
+                "data": data,
+                "nonce": transfer_nonce,
+            });
+            (action, "send_to_evm_with_data", params)
+        })
+        .await
+    }
+
     /// Create a sub-account under the signing (parent) account, under the typed
     /// scheme.
     ///
