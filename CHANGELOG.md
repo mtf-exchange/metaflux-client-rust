@@ -56,6 +56,32 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Added
 
+- **A Core → MetaFluxEVM move can charge a fee**, and both actions charge the same
+  one: `core_evm_transfer` and `send_to_evm_with_data`. Neither is the cheaper
+  lane. Documented on both types and both client methods, with the full rule in the
+  `types::core_evm` module docs.
+- The fee is a quantity of **MTF**, debited ON TOP of the amount, as a second
+  debit. It has nothing to do with the asset you move: a transfer of BTC debits BTC
+  for the amount and MTF for the fee. It is not a wire field — the chain resolves
+  it, and a caller can neither set it nor choose its currency.
+- Resolution order, and the chain never splits the fee: spot **MTF** first; then
+  **USDC** at the MTF reference price, out of withdrawable collateral; then a
+  refusal of the whole transfer, `insufficient MTF or USDC for the core->evm fee`.
+  A transfer OF MTF needs `amount + fee`, because both debits hit one balance.
+- **The transfer is also refused when the MTF reference price is unusable**:
+  `MTF price unavailable; the core->evm fee cannot be quoted in USDC`. MTF is
+  priced from its own book, and the chain refuses rather than quote a guess. **This
+  is the row callers get wrong: a transfer can fail for a reason unrelated to the
+  asset moved, or to your balance of it.** Only a sender short of MTF meets it.
+- **The fee is ZERO today, so nothing is charged and none of those refusals can
+  happen.** Validator governance sets the amount and no endpoint serves the current
+  value, so a caller can neither read it nor predict a change. Hold a small spot
+  MTF balance to stay payable, and handle the two refusals.
+- A refused transfer pays nothing: the fee is charged only after the amount leg is
+  accepted.
+- `core_evm_transfer` with `to_evm = false` is refused. The return leg must
+  originate as a MetaFluxEVM transaction, not as a signed action. The field
+  documentation claimed the direction worked.
 - `send_to_evm_with_data` — `Exchange::send_to_evm_with_data_typed`,
   `types::core_evm::SendToEvmWithData`, and `TypedAction::SendToEvmWithData`.
   The action moves a spot token to MetaFluxEVM and runs a payload against the
@@ -82,9 +108,10 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 - The node truncates `amount` to one EVM quantum — first to 8 decimal places,
   then to the token's EVM decimals — and debits exactly what it credits. An
   amount under one quantum is REFUSED, rather than debited for a zero credit.
-- A zero `destination_recipient` is NOT refused on this action. The debit still
-  happens and nobody can spend the credit, so check the address before you sign.
-  This differs from `core_evm_transfer`, which does refuse a zero destination.
+- A zero `destination_recipient` IS refused on this action, the same as on
+  `core_evm_transfer`. (An earlier draft of this entry said the opposite. The
+  credit is a mint to the named address and no owner check follows it, so a zero
+  recipient would burn the debit.)
 - **BREAKING** `TwapOrder` carries two new fields, `position_side:
   Option<PositionSide>` and `randomize: bool`. Every struct literal must add
   them; `TwapOrder { position_side: None, randomize: false, ..}` reproduces the

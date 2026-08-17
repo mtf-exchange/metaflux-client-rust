@@ -903,8 +903,16 @@ impl<'a> Exchange<'a> {
     /// Transfer USDC between Core and MetaFluxEVM under the typed scheme.
     ///
     /// `amount` is a canonical decimal string (whole-USDC plane); `to_evm = true`
-    /// moves Core → MetaFluxEVM, `false` the reverse. `destination` is the
+    /// moves Core → MetaFluxEVM, and `false` is refused (the return leg must
+    /// originate as a MetaFluxEVM transaction). `destination` is the
     /// MetaFluxEVM-side recipient.
+    ///
+    /// **A fee may be charged on top of `amount`, in MTF, with a USDC fallback.**
+    /// The chain refuses the whole transfer when neither balance covers the fee,
+    /// and also when the MTF reference price is unusable — so this call can fail
+    /// for a reason unrelated to `asset` or your balance of it. The fee is ZERO
+    /// today, so nothing is charged. See
+    /// [the fee rules](crate::types::core_evm#the-core-to-evm-fee).
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -954,8 +962,16 @@ impl<'a> Exchange<'a> {
     /// the local EVM chain id. An older node accepted those fields and then
     /// ignored them, so a payload copied from that era carries `source_dex = 1`
     /// and now fails. `data` holds 4096 bytes at most, and an amount under one EVM
-    /// quantum is refused rather than debited for a zero credit. See
+    /// quantum is refused rather than debited for a zero credit. A zero
+    /// `destination_recipient` is refused too. See
     /// [`crate::types::core_evm::SendToEvmWithData`] for the rule on every field.
+    ///
+    /// **The SAME fee [`Exchange::core_evm_transfer_typed`] pays applies here**, in
+    /// MTF with a USDC fallback, on top of `amount`. Neither call is the cheaper
+    /// lane. The chain refuses the whole transfer when neither balance covers the
+    /// fee, and also when the MTF reference price is unusable. The fee is ZERO
+    /// today, so nothing is charged. See
+    /// [the fee rules](crate::types::core_evm#the-core-to-evm-fee).
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

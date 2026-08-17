@@ -5,20 +5,64 @@
 //! the Core-side account, and the recipient field names the MetaFluxEVM-side
 //! account. `amount` rides the wire as a decimal **string** (whole-token plane)
 //! to preserve precision.
+//!
+//! # The Core to EVM fee
+//!
+//! Both actions can charge a fee, and neither is the cheaper lane. The fee is a
+//! quantity of MTF. It is a SECOND debit, on top of the amount, and it is
+//! unrelated to the asset you move: a transfer of BTC debits BTC for the amount
+//! and MTF for the fee.
+//!
+//! The chain chooses the currency, never the caller, and it never splits the fee:
+//!
+//! 1. **Spot MTF**, when the balance covers the fee. A transfer OF MTF needs
+//!    `amount + fee`, because both debits hit one balance.
+//! 2. **USDC at the MTF reference price**, when spot MTF is short. It comes out of
+//!    withdrawable collateral, so collateral that backs a position cannot pay it.
+//! 3. **Neither covers the fee** — the whole transfer is refused:
+//!    `insufficient MTF or USDC for the core->evm fee`.
+//!
+//! **A transfer can fail for a reason that has nothing to do with the asset you
+//! move, or your balance of it.** MTF is priced from its own book. When no usable
+//! price exists, the chain refuses the transfer instead of quoting a guess:
+//! `MTF price unavailable; the core->evm fee cannot be quoted in USDC`. The fee
+//! must also quote to a positive USDC amount. Only a sender that is short of MTF
+//! meets either answer, because a fee that spot MTF covers reads no price.
+//!
+//! A refused transfer pays nothing: the chain charges the fee only after it
+//! accepts the amount. The proceeds are validator revenue.
+//!
+//! ## The fee is zero today
+//!
+//! The amount is **zero**, so no fee is charged and none of the refusals above can
+//! happen. Validator governance sets the amount, and no endpoint serves the
+//! current value, so a caller can neither read it nor predict a change. Hold a
+//! small spot MTF balance to stay payable, and handle the two refusals above.
 
 use serde::{Deserialize, Serialize};
 
 use crate::wallet::Address;
 
 /// Action — transfer USDC between Core and MetaFluxEVM.
+///
+/// A Core → MetaFluxEVM move can charge a fee in MTF, with a USDC fallback, on
+/// top of `amount`. The fee is **zero today**, and the chain refuses the transfer
+/// rather than guess when the MTF reference price is unusable — see
+/// [the fee rules](self#the-core-to-evm-fee).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct CoreEvmTransfer {
     /// Amount as a decimal string (whole-USDC plane).
     pub amount: String,
     /// Direction: `true` = Core → MetaFluxEVM, `false` = MetaFluxEVM → Core.
+    ///
+    /// `false` is refused on this endpoint. The return leg must originate as a
+    /// MetaFluxEVM transaction, not as a signed action.
     pub to_evm: bool,
     /// MetaFluxEVM-side recipient address, and the target of `data`.
+    ///
+    /// The zero address is refused, because the credit is a mint and nobody could
+    /// spend it.
     pub destination: Address,
     /// MTF asset id to move. `0` (the default) is USDC cross-collateral; a
     /// non-zero asset moves that spot token instead.
@@ -73,6 +117,12 @@ impl CoreEvmTransfer {
 /// The transfer queue is bounded. A full queue rejects the action until it
 /// drains, so treat that answer as "retry", not "invalid".
 ///
+/// This action can charge a fee in MTF, with a USDC fallback, on top of `amount`.
+/// It is the SAME fee [`CoreEvmTransfer`] charges, so neither action is the cheaper
+/// lane. The fee is **zero today**, and the chain refuses the transfer rather than
+/// guess when the MTF reference price is unusable — see
+/// [the fee rules](self#the-core-to-evm-fee).
+///
 /// # Not live yet
 ///
 /// The deployed exchange still answers `sendToEvmWithData is retired; use
@@ -104,9 +154,9 @@ pub struct SendToEvmWithData {
     pub source_dex: u32,
     /// MetaFluxEVM-side recipient, and the target of `data`.
     ///
-    /// The credit is a mint to this address, so the chain accepts any address —
-    /// **the zero address included**. A zero recipient still takes the debit,
-    /// and nobody can ever spend the credit. Check the value before you sign.
+    /// **The zero address is refused**, as it is on [`CoreEvmTransfer`]. The credit
+    /// is a mint to the named address and no owner check follows it, so a zero
+    /// recipient would burn the debit with nobody able to spend the credit.
     pub destination_recipient: Address,
     /// Credit a perp account. `false` is the only accepted value: the
     /// MetaFluxEVM side has no perp account, so the credit is always an EVM
@@ -239,5 +289,39 @@ mod tests {
         assert!(j.get("sourceDex").is_none(), "no camelCase leak");
         let dec: SendToEvmWithData = serde_json::from_value(j).unwrap();
         assert_eq!(a, dec);
+    }
+
+    /// The chain resolves the Core → EVM fee, so it rides NO wire key on either
+    /// action. A caller cannot set the fee, choose its currency, or read it back
+    /// from the envelope it signed.
+    #[test]
+    fn neither_action_carries_a_fee_key() {
+        let transfer = serde_json::to_value(CoreEvmTransfer {
+            amount: "1".into(),
+            to_evm: true,
+            destination: Address::from_bytes([0xCE; 20]),
+            asset: 0,
+            data: None,
+            destination_chain_id: None,
+        })
+        .unwrap();
+        let with_data = serde_json::to_value(SendToEvmWithData {
+            token: 7,
+            amount: "1".into(),
+            source_dex: 0,
+            destination_recipient: Address::from_bytes([0xE7; 20]),
+            to_perp: false,
+            destination_chain_id: 0,
+            data: Vec::new(),
+            nonce: 5,
+        })
+        .unwrap();
+        for j in [transfer, with_data] {
+            let keys: Vec<&String> = j.as_object().unwrap().keys().collect();
+            assert!(
+                keys.iter().all(|k| !k.contains("fee")),
+                "the fee is not a caller field: {keys:?}"
+            );
+        }
     }
 }
