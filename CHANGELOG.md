@@ -5,7 +5,10 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
-## [Unreleased]
+## [0.19.0] — 2026-08-18
+
+First release since 0.18.1. Carries the staged 0.19.0 work plus the
+`send_to_evm_with_data` action and the Core to EVM fee rules.
 
 ### Removed
 
@@ -482,7 +485,11 @@ serializer that emits the field.
   Ethereum signed raw-tx format); existing clients using standard EVM tooling
   are unaffected.
 
-## [Unreleased]
+## [Unreleased — STALE DUPLICATE, historical]
+
+This second `Unreleased` heading predates 0.19.0 and its content was shipped
+long ago. The version it belonged to is not recoverable from this file, so it is
+labelled rather than guessed. See the note at the top of 0.19.0.
 
 ### Added
 
