@@ -883,6 +883,63 @@ fn every_typed_action_signs_and_recovers() {
             transfer_nonce: 5,
             nonce: 50,
         },
+        TypedAction::BorrowLend {
+            metaflux_chain: chain.clone(),
+            kind: 1,
+            amount: "1000".into(),
+            nonce: 51,
+        },
+        TypedAction::RegisterMetaliquidityOperator {
+            metaflux_chain: chain.clone(),
+            vault_id: 42,
+            operator: addr(0x70),
+            allowed: true,
+            expires_at_ms: 1_700_000_000_000,
+            nonce: 52,
+        },
+        TypedAction::SpotRegisterToken {
+            metaflux_chain: chain.clone(),
+            symbol: "MTFX".into(),
+            sz_decimals: 2,
+            wei_decimals: 8,
+            max_deploy_fee: "1250.50".into(),
+            nonce: 53,
+        },
+        TypedAction::SpotRegisterPair {
+            metaflux_chain: chain.clone(),
+            base: 42,
+            quote: 0,
+            name: "MTFX/USDC".into(),
+            max_deploy_fee: "980.00".into(),
+            nonce: 54,
+        },
+        TypedAction::SpotSetPairParams {
+            metaflux_chain: chain.clone(),
+            pair: 7,
+            taker_fee_dbps: 350,
+            maker_fee_dbps: 120,
+            min_notional_cents: 1000,
+            nonce: 55,
+        },
+        TypedAction::SpotSetPairActive {
+            metaflux_chain: chain.clone(),
+            pair: 7,
+            active: true,
+            nonce: 56,
+        },
+        TypedAction::SpotSeedHolders {
+            metaflux_chain: chain.clone(),
+            asset: 42,
+            holders: vec![addr(0x11), addr(0x22)],
+            amounts: vec!["1000.5".into(), "250".into()],
+            nonce: 57,
+        },
+        TypedAction::SpotFinalizeSupply {
+            metaflux_chain: chain.clone(),
+            asset: 42,
+            max_supply: "1250.5".into(),
+            nonce: 58,
+        },
         TypedAction::MultiSig {
             metaflux_chain: chain,
             user: addr(0x22),
@@ -891,7 +948,7 @@ fn every_typed_action_signs_and_recovers() {
             nonce: 44,
         },
     ];
-    assert_eq!(actions.len(), 48, "all 48 reachable typed actions covered");
+    assert_eq!(actions.len(), 56, "all 56 reachable typed actions covered");
 
     for action in &actions {
         let digest = _typed_digest_for_test(action);
@@ -1041,5 +1098,178 @@ fn send_to_evm_with_data_matches_chain_fixture() {
         _typed_digest_for_test(&action),
         _typed_digest_for_test(&swapped),
         "transferNonce and the envelope nonce must occupy distinct signed slots"
+    );
+}
+
+// ---- `borrow_lend` + `register_metaliquidity_operator` ----
+//
+// The chain publishes no cross-language vector for these two. So the expected
+// digest below is rebuilt from the frozen type string and one explicit word per
+// field, NOT from the encoder under test: a wrong field order or a wrong word
+// width in the encoder fails against this reconstruction. The pinned hex then
+// holds the value still.
+
+/// One 32-byte word per EIP-712 atomic type, written out by hand.
+mod word {
+    use tiny_keccak::{Hasher, Keccak};
+
+    pub fn keccak(input: &[u8]) -> [u8; 32] {
+        let mut h = Keccak::v256();
+        h.update(input);
+        let mut out = [0u8; 32];
+        h.finalize(&mut out);
+        out
+    }
+
+    pub fn string(s: &str) -> [u8; 32] {
+        keccak(s.as_bytes())
+    }
+
+    pub fn uint(v: u64) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[24..].copy_from_slice(&v.to_be_bytes());
+        out
+    }
+
+    pub fn bool_word(v: bool) -> [u8; 32] {
+        uint(u64::from(v))
+    }
+
+    pub fn address(a: &metaflux_client::wallet::Address) -> [u8; 32] {
+        let mut out = [0u8; 32];
+        out[12..].copy_from_slice(a.as_bytes());
+        out
+    }
+}
+
+/// Rebuild `keccak256(0x1901 ‖ domain ‖ keccak256(typeHash ‖ words))` from the
+/// parts, independently of the crate's encoder.
+fn digest_from_parts(type_string: &[u8], words: &[[u8; 32]]) -> [u8; 32] {
+    let mut k = Keccak::v256();
+    k.update(&word::keccak(type_string));
+    for w in words {
+        k.update(w);
+    }
+    let mut hash_struct = [0u8; 32];
+    k.finalize(&mut hash_struct);
+
+    let domain = metaflux_client::wallet::metaflux_domain_separator(
+        metaflux_client::rest::exchange::MTF_CHAIN_ID,
+    );
+    let mut k = Keccak::v256();
+    k.update(&[0x19, 0x01]);
+    k.update(&domain);
+    k.update(&hash_struct);
+    let mut out = [0u8; 32];
+    k.finalize(&mut out);
+    out
+}
+
+const BORROW_LEND_TYPE: &[u8] =
+    b"MetaFluxTransaction:BorrowLend(string metafluxChain,uint8 kind,string amount,uint64 nonce)";
+const REGISTER_METALIQUIDITY_OPERATOR_TYPE: &[u8] =
+    b"MetaFluxTransaction:RegisterMetaliquidityOperator(string metafluxChain,uint64 vaultId,address operator,bool allowed,uint64 expiresAtMs,uint64 nonce)";
+
+#[test]
+fn borrow_lend_matches_an_independent_reconstruction() {
+    let action = TypedAction::BorrowLend {
+        metaflux_chain: "Testnet".into(),
+        kind: 1,
+        amount: "1000".into(),
+        nonce: 18,
+    };
+    assert_eq!(
+        action.type_hash(),
+        word::keccak(BORROW_LEND_TYPE),
+        "encodeType drift makes every borrow_lend signature unrecoverable"
+    );
+    let want = digest_from_parts(
+        BORROW_LEND_TYPE,
+        &[
+            word::string("Testnet"),
+            word::uint(1),
+            word::string("1000"),
+            word::uint(18),
+        ],
+    );
+    assert_eq!(_typed_digest_for_test(&action), want);
+    assert_eq!(
+        hex::encode(want),
+        "ef1af8c9c6e9850fb704694e9034dea700914ba60704c297c3274dc2122b7a5f"
+    );
+
+    // Pinned against the NODE's own vector (`signing_typed_tests::all_actions`,
+    // chain 114514): the SDK reconstruction above proves self-consistency, this
+    // proves cross-implementation agreement.
+    let node_fixture = TypedAction::BorrowLend {
+        metaflux_chain: "Testnet".into(),
+        kind: 0,
+        amount: "1000".into(),
+        nonce: 18,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&node_fixture)),
+        "3e5afde6b9f0d0b1c0b2f9f55234c62ca9487d8d46f990ae0593ff147dfc3bb5",
+        "borrow_lend digest drifted from the node vector"
+    );
+
+    // `kind` is a signed field: lending is not unlending.
+    let lend = TypedAction::BorrowLend {
+        metaflux_chain: "Testnet".into(),
+        kind: 0,
+        amount: "1000".into(),
+        nonce: 18,
+    };
+    assert_ne!(
+        _typed_digest_for_test(&action),
+        _typed_digest_for_test(&lend)
+    );
+}
+
+#[test]
+fn register_metaliquidity_operator_matches_an_independent_reconstruction() {
+    let operator = addr(0x70);
+    let action = TypedAction::RegisterMetaliquidityOperator {
+        metaflux_chain: "Testnet".into(),
+        vault_id: 42,
+        operator,
+        allowed: true,
+        expires_at_ms: 1_700_000_000_000,
+        nonce: 34,
+    };
+    assert_eq!(
+        action.type_hash(),
+        word::keccak(REGISTER_METALIQUIDITY_OPERATOR_TYPE),
+        "encodeType drift makes every operator grant unrecoverable"
+    );
+    let want = digest_from_parts(
+        REGISTER_METALIQUIDITY_OPERATOR_TYPE,
+        &[
+            word::string("Testnet"),
+            word::uint(42),
+            word::address(&operator),
+            word::bool_word(true),
+            word::uint(1_700_000_000_000),
+            word::uint(34),
+        ],
+    );
+    assert_eq!(_typed_digest_for_test(&action), want);
+    assert_eq!(
+        hex::encode(want),
+        "4de965c3bc25f15ddafa0b778179909f50cd0930bf4f58a652dde93bce524c80"
+    );
+
+    // Revoking is not granting.
+    let revoke = TypedAction::RegisterMetaliquidityOperator {
+        metaflux_chain: "Testnet".into(),
+        vault_id: 42,
+        operator,
+        allowed: false,
+        expires_at_ms: 1_700_000_000_000,
+        nonce: 34,
+    };
+    assert_ne!(
+        _typed_digest_for_test(&action),
+        _typed_digest_for_test(&revoke)
     );
 }

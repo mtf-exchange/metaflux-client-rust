@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::types::VaultId;
+use crate::wallet::Address;
 
 /// Snapshot of a user vault returned by `info: { type: "vault_state" }`.
 ///
@@ -141,6 +142,27 @@ pub struct VaultDistribute {
     pub pnl: String,
 }
 
+/// Grant or revoke an operator on a vault the sender leads.
+///
+/// Sender-authorized: the recovered signer must be the vault leader. An
+/// approved operator then acts AS the vault on the order and position lanes,
+/// which carry the vault address as their `owner`.
+///
+/// `expires_at_ms` is a TIMESTAMP (ms since epoch), not a duration. `0` never
+/// expires. Revoking (`allowed = false`) ignores it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RegisterMetaliquidityOperator {
+    /// Vault id the operator acts for (serializes as a bare JSON number).
+    pub vault_id: VaultId,
+    /// Operator address.
+    pub operator: Address,
+    /// `true` grants, `false` revokes.
+    pub allowed: bool,
+    /// Grant expiry (ms since epoch). `0` = never expires.
+    pub expires_at_ms: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +179,23 @@ mod tests {
         assert!(j["pnl"].is_string());
         let dec: VaultDistribute = serde_json::from_value(j).unwrap();
         assert_eq!(dec, d);
+    }
+
+    #[test]
+    fn register_operator_emits_hex_operator_and_numeric_ids() {
+        let r = RegisterMetaliquidityOperator {
+            vault_id: VaultId(42),
+            operator: Address::from_hex("0x7070707070707070707070707070707070707070").unwrap(),
+            allowed: true,
+            expires_at_ms: 1_700_000_000_000,
+        };
+        let j = serde_json::to_value(r).unwrap();
+        assert_eq!(j["vault_id"], 42);
+        assert_eq!(j["operator"], "0x7070707070707070707070707070707070707070");
+        assert_eq!(j["expires_at_ms"], 1_700_000_000_000u64);
+        assert!(j.get("expiresAtMs").is_none(), "no camelCase leak");
+        let dec: RegisterMetaliquidityOperator = serde_json::from_value(j).unwrap();
+        assert_eq!(dec, r);
     }
 
     fn sample_vault_state() -> VaultState {

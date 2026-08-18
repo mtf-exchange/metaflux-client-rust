@@ -129,6 +129,19 @@ fn enc_addr_array(addrs: &[Address]) -> [u8; 32] {
     out
 }
 
+/// `string[]` → `keccak256(concat(keccak256(eᵢ)))` — the same dynamic-array rule
+/// as [`enc_bytes_array`], over elements hashed as `string`. Decimal elements are
+/// hashed verbatim, so `"1.0"` and `"1.00"` are different array digests.
+fn enc_string_array(items: &[String]) -> [u8; 32] {
+    let mut k = Keccak::v256();
+    for s in items {
+        k.update(&enc_string(s));
+    }
+    let mut out = [0u8; 32];
+    k.finalize(&mut out);
+    out
+}
+
 // ===== Type strings (signing order = encodeType order = message field order) =====
 
 const SEND_ASSET_TYPE: &[u8] =
@@ -195,6 +208,26 @@ const CLAIM_BUILDER_REWARDS_TYPE: &[u8] =
     b"MetaFluxTransaction:ClaimBuilderRewards(string metafluxChain,uint64 nonce)";
 const CLAIM_REFERRAL_REWARDS_TYPE: &[u8] =
     b"MetaFluxTransaction:ClaimReferralRewards(string metafluxChain,uint64 nonce)";
+const BORROW_LEND_TYPE: &[u8] =
+    b"MetaFluxTransaction:BorrowLend(string metafluxChain,uint8 kind,string amount,uint64 nonce)";
+const REGISTER_METALIQUIDITY_OPERATOR_TYPE: &[u8] =
+    b"MetaFluxTransaction:RegisterMetaliquidityOperator(string metafluxChain,uint64 vaultId,address operator,bool allowed,uint64 expiresAtMs,uint64 nonce)";
+
+// The six spot-deployer signing strings. Each sub-action is its own frozen
+// string: `spot_deploy` is a node-internal handler name that no caller sends.
+// `maxDeployFee` is a whole-USDC Dutch accept price, NOT gas.
+const SPOT_REGISTER_TOKEN_TYPE: &[u8] =
+    b"MetaFluxTransaction:SpotRegisterToken(string metafluxChain,string symbol,uint8 szDecimals,uint8 weiDecimals,string maxDeployFee,uint64 nonce)";
+const SPOT_REGISTER_PAIR_TYPE: &[u8] =
+    b"MetaFluxTransaction:SpotRegisterPair(string metafluxChain,uint32 base,uint32 quote,string name,string maxDeployFee,uint64 nonce)";
+const SPOT_SET_PAIR_PARAMS_TYPE: &[u8] =
+    b"MetaFluxTransaction:SpotSetPairParams(string metafluxChain,uint32 pair,uint32 takerFeeDbps,uint32 makerFeeDbps,uint64 minNotionalCents,uint64 nonce)";
+const SPOT_SET_PAIR_ACTIVE_TYPE: &[u8] =
+    b"MetaFluxTransaction:SpotSetPairActive(string metafluxChain,uint32 pair,bool active,uint64 nonce)";
+const SPOT_SEED_HOLDERS_TYPE: &[u8] =
+    b"MetaFluxTransaction:SpotSeedHolders(string metafluxChain,uint32 asset,address[] holders,string[] amounts,uint64 nonce)";
+const SPOT_FINALIZE_SUPPLY_TYPE: &[u8] =
+    b"MetaFluxTransaction:SpotFinalizeSupply(string metafluxChain,uint32 asset,string maxSupply,uint64 nonce)";
 
 // ===== TypedAction =====
 
@@ -905,6 +938,126 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `BorrowLend(string metafluxChain,uint8 kind,string amount,uint64 nonce)`
+    ///
+    /// Lend / un-lend / borrow / repay against the BOLE pool. `kind` is the
+    /// signed `uint8` discriminant; the POST `params.kind` carries the
+    /// PascalCase name instead. Build it with
+    /// [`Exchange::borrow_lend`](crate::rest::exchange::Exchange::borrow_lend)
+    /// so the two forms cannot drift.
+    BorrowLend {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Direction: `0` lend, `1` un-lend, `2` borrow, `3` repay.
+        kind: u8,
+        /// Amount as a canonical decimal string.
+        amount: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `RegisterMetaliquidityOperator(string metafluxChain,uint64 vaultId,address operator,bool allowed,uint64 expiresAtMs,uint64 nonce)`
+    ///
+    /// A vault leader grants or revokes an operator on its own vault.
+    RegisterMetaliquidityOperator {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Vault id the operator acts for.
+        vault_id: u64,
+        /// Operator address.
+        operator: Address,
+        /// `true` grants, `false` revokes.
+        allowed: bool,
+        /// Grant expiry (ms since epoch). `0` = never expires.
+        expires_at_ms: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SpotRegisterToken(string metafluxChain,string symbol,uint8 szDecimals,uint8 weiDecimals,string maxDeployFee,uint64 nonce)`
+    SpotRegisterToken {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Token symbol.
+        symbol: String,
+        /// Display / size precision.
+        sz_decimals: u8,
+        /// Native token decimals.
+        wei_decimals: u8,
+        /// Highest Dutch accept price taken, as a canonical decimal string in
+        /// whole USDC.
+        max_deploy_fee: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SpotRegisterPair(string metafluxChain,uint32 base,uint32 quote,string name,string maxDeployFee,uint64 nonce)`
+    SpotRegisterPair {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Base token id.
+        base: u32,
+        /// Quote token id.
+        quote: u32,
+        /// Pair name.
+        name: String,
+        /// Highest Dutch accept price taken, as a canonical decimal string in
+        /// whole USDC.
+        max_deploy_fee: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SpotSetPairParams(string metafluxChain,uint32 pair,uint32 takerFeeDbps,uint32 makerFeeDbps,uint64 minNotionalCents,uint64 nonce)`
+    SpotSetPairParams {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Spot pair id.
+        pair: u32,
+        /// Taker fee in DECI-bps.
+        taker_fee_dbps: u32,
+        /// Maker fee in DECI-bps.
+        maker_fee_dbps: u32,
+        /// Min order notional in USDC cents.
+        min_notional_cents: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SpotSetPairActive(string metafluxChain,uint32 pair,bool active,uint64 nonce)`
+    SpotSetPairActive {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Spot pair id.
+        pair: u32,
+        /// `true` opens the pair, `false` closes it.
+        active: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SpotSeedHolders(string metafluxChain,uint32 asset,address[] holders,string[] amounts,uint64 nonce)`
+    ///
+    /// Both arrays are IN the digest, so no relay can re-target, re-size or
+    /// re-order a staged row under a replayed signature.
+    SpotSeedHolders {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// The spot token being staged.
+        asset: u32,
+        /// Holder addresses, parallel with `amounts`.
+        holders: Vec<Address>,
+        /// WHOLE-unit amounts as canonical decimal strings, parallel with
+        /// `holders`.
+        amounts: Vec<String>,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SpotFinalizeSupply(string metafluxChain,uint32 asset,string maxSupply,uint64 nonce)`
+    SpotFinalizeSupply {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// The spot token being sealed.
+        asset: u32,
+        /// Checksum over every staged row, as a canonical decimal string.
+        max_supply: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
 }
 
 impl TypedAction {
@@ -966,6 +1119,16 @@ impl TypedAction {
             TypedAction::ClaimReferralRewards { .. } => CLAIM_REFERRAL_REWARDS_TYPE,
             TypedAction::RfqQuote { owner: None, .. } => account::RFQ_QUOTE_TYPE,
             TypedAction::RfqQuote { owner: Some(_), .. } => account::RFQ_QUOTE_WITH_OWNER_TYPE,
+            TypedAction::BorrowLend { .. } => BORROW_LEND_TYPE,
+            TypedAction::RegisterMetaliquidityOperator { .. } => {
+                REGISTER_METALIQUIDITY_OPERATOR_TYPE
+            }
+            TypedAction::SpotRegisterToken { .. } => SPOT_REGISTER_TOKEN_TYPE,
+            TypedAction::SpotRegisterPair { .. } => SPOT_REGISTER_PAIR_TYPE,
+            TypedAction::SpotSetPairParams { .. } => SPOT_SET_PAIR_PARAMS_TYPE,
+            TypedAction::SpotSetPairActive { .. } => SPOT_SET_PAIR_ACTIVE_TYPE,
+            TypedAction::SpotSeedHolders { .. } => SPOT_SEED_HOLDERS_TYPE,
+            TypedAction::SpotFinalizeSupply { .. } => SPOT_FINALIZE_SUPPLY_TYPE,
         }
     }
 
@@ -1579,6 +1742,112 @@ impl TypedAction {
                     *nonce,
                 ),
             },
+            TypedAction::BorrowLend {
+                metaflux_chain,
+                kind,
+                amount,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u8(*kind),
+                enc_string(amount),
+                enc_u64(*nonce),
+            ],
+            TypedAction::RegisterMetaliquidityOperator {
+                metaflux_chain,
+                vault_id,
+                operator,
+                allowed,
+                expires_at_ms,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u64(*vault_id),
+                enc_addr(operator),
+                enc_bool(*allowed),
+                enc_u64(*expires_at_ms),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SpotRegisterToken {
+                metaflux_chain,
+                symbol,
+                sz_decimals,
+                wei_decimals,
+                max_deploy_fee,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_string(symbol),
+                enc_u8(*sz_decimals),
+                enc_u8(*wei_decimals),
+                enc_string(max_deploy_fee),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SpotRegisterPair {
+                metaflux_chain,
+                base,
+                quote,
+                name,
+                max_deploy_fee,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*base),
+                enc_u32(*quote),
+                enc_string(name),
+                enc_string(max_deploy_fee),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SpotSetPairParams {
+                metaflux_chain,
+                pair,
+                taker_fee_dbps,
+                maker_fee_dbps,
+                min_notional_cents,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*pair),
+                enc_u32(*taker_fee_dbps),
+                enc_u32(*maker_fee_dbps),
+                enc_u64(*min_notional_cents),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SpotSetPairActive {
+                metaflux_chain,
+                pair,
+                active,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*pair),
+                enc_bool(*active),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SpotSeedHolders {
+                metaflux_chain,
+                asset,
+                holders,
+                amounts,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_addr_array(holders),
+                enc_string_array(amounts),
+                enc_u64(*nonce),
+            ],
+            TypedAction::SpotFinalizeSupply {
+                metaflux_chain,
+                asset,
+                max_supply,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_string(max_supply),
+                enc_u64(*nonce),
+            ],
         }
     }
 

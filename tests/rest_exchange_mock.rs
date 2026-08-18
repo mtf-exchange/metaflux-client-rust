@@ -12,15 +12,19 @@ use metaflux_client::{
     rest::exchange::{_recover_for_test, MTF_CHAIN_ID},
     rest::exchange_typed::{_typed_digest_for_test, _typed_trade_digest_for_test},
     types::{
-        Cloid, MarketId, OrderId,
+        Cloid, MarketId, OrderId, VaultId,
         account::{ApproveBrokerFee, UpdateLeverage},
         chase::{CancelChaseParams, ChaseParams},
+        defi::{BorrowLend, BorrowLendKind},
         order::{
             BatchCancel, BatchModify, BatchOrder, CancelByCloid, CancelOrder, Modify, Order,
             OrderKind, OrderStatus, PositionSide, Side, StpMode, TimeInForce,
         },
-        spot::{EarnWithdraw, SpotMarginOpen},
-        vault::{CreateVault, VaultKind},
+        spot::{
+            EarnWithdraw, SpotFinalizeSupply, SpotMarginOpen, SpotRegisterPair, SpotRegisterToken,
+            SpotSeedHolders, SpotSetPairActive, SpotSetPairParams,
+        },
+        vault::{CreateVault, RegisterMetaliquidityOperator, VaultKind},
     },
     wallet::{
         Address, TypedAction, TypedTradingAction, TypedTradingDigest, Wallet, metaflux_chain_tag,
@@ -999,4 +1003,283 @@ fn decode_sig(hex_str: &str) -> metaflux_client::wallet::Signature {
     r.copy_from_slice(&bytes[..32]);
     s.copy_from_slice(&bytes[32..64]);
     metaflux_client::wallet::Signature { r, s, v: bytes[64] }
+}
+
+// ---- BOLE pool, vault operators, and the spot deployer lane ----
+
+/// `kind` has TWO spellings: the POST carries the PascalCase name, the digest
+/// signs the `uint8`. A client that sends `"unlend"` is refused at the node's
+/// serde, and one that signs the wrong number is refused at recovery.
+#[tokio::test]
+async fn borrow_lend_posts_the_pascal_case_kind_and_signs_the_uint8() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let params = BorrowLend {
+        kind: BorrowLendKind::UnLend,
+        amount: "1000".into(),
+    };
+    let _: Value = client
+        .exchange()
+        .borrow_lend(&wallet, &params)
+        .await
+        .unwrap();
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("borrow_lend"));
+    assert_eq!(action["params"]["kind"], json!("UnLend"));
+    assert_eq!(action["params"]["amount"], json!("1000"));
+    assert!(action["params"]["amount"].is_string());
+
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _typed_digest_for_test(&TypedAction::BorrowLend {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        kind: 1,
+        amount: "1000".into(),
+        nonce,
+    });
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(
+        _recover_for_test(&digest, &sig).expect("recover"),
+        wallet.address()
+    );
+}
+
+#[tokio::test]
+async fn register_metaliquidity_operator_omits_a_zero_expiry() {
+    // The node refuses an explicit `expires_at_ms: 0`, so a never-expiring
+    // operator MUST leave the key out. Sending it is a guaranteed 400.
+    let (client, captor, wallet) = capturing_exchange().await;
+    let params = RegisterMetaliquidityOperator {
+        vault_id: VaultId(42),
+        operator: Address::from_bytes([0x70; 20]),
+        allowed: true,
+        expires_at_ms: 0,
+    };
+    let _: Value = client
+        .exchange()
+        .register_metaliquidity_operator(&wallet, &params)
+        .await
+        .unwrap();
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    assert!(
+        body["action"]["params"].get("expires_at_ms").is_none(),
+        "a zero expiry must be omitted, not sent"
+    );
+}
+
+#[tokio::test]
+async fn register_metaliquidity_operator_posts_hex_operator_and_signs_the_expiry() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let operator = Address::from_bytes([0x70; 20]);
+    let params = RegisterMetaliquidityOperator {
+        vault_id: VaultId(42),
+        operator,
+        allowed: true,
+        expires_at_ms: 1_700_000_000_000,
+    };
+    let _: Value = client
+        .exchange()
+        .register_metaliquidity_operator(&wallet, &params)
+        .await
+        .unwrap();
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(
+        action["type"].as_str(),
+        Some("register_metaliquidity_operator")
+    );
+    assert_eq!(action["params"]["vault_id"], json!(42));
+    assert_eq!(
+        action["params"]["operator"],
+        json!("0x7070707070707070707070707070707070707070")
+    );
+    assert_eq!(action["params"]["allowed"], json!(true));
+    assert_eq!(
+        action["params"]["expires_at_ms"],
+        json!(1_700_000_000_000u64)
+    );
+
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _typed_digest_for_test(&TypedAction::RegisterMetaliquidityOperator {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        vault_id: 42,
+        operator,
+        allowed: true,
+        expires_at_ms: 1_700_000_000_000,
+        nonce,
+    });
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(
+        _recover_for_test(&digest, &sig).expect("recover"),
+        wallet.address()
+    );
+}
+
+/// Each of the six deployer actions posts its OWN tag with its own field names.
+/// A wrong tag or a renamed field is refused at the node's serde before any
+/// handler runs, and the caller cannot tell that from a rejected signature.
+#[tokio::test]
+async fn the_spot_deployer_lane_posts_its_six_tags_with_their_own_fields() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let ex = client.exchange();
+
+    let _: Value = ex
+        .spot_register_token(
+            &wallet,
+            &SpotRegisterToken {
+                symbol: "MTFX".into(),
+                sz_decimals: 2,
+                wei_decimals: 8,
+                max_deploy_fee: "1250.50".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("spot_register_token"));
+    assert_eq!(a["params"]["symbol"], json!("MTFX"));
+    assert_eq!(a["params"]["sz_decimals"], json!(2));
+    assert_eq!(a["params"]["wei_decimals"], json!(8));
+    assert_eq!(
+        a["params"]["max_deploy_fee"],
+        json!("1250.50"),
+        "the fee is the verbatim signed string, not a number"
+    );
+
+    let _: Value = ex
+        .spot_register_pair(
+            &wallet,
+            &SpotRegisterPair {
+                base: 42,
+                quote: 0,
+                name: "MTFX/USDC".into(),
+                max_deploy_fee: "980.00".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("spot_register_pair"));
+    assert_eq!(a["params"]["base"], json!(42));
+    assert_eq!(a["params"]["quote"], json!(0));
+    assert_eq!(a["params"]["max_deploy_fee"], json!("980.00"));
+
+    let _: Value = ex
+        .spot_set_pair_params(
+            &wallet,
+            &SpotSetPairParams {
+                pair: 7,
+                taker_fee_dbps: 350,
+                maker_fee_dbps: 120,
+                min_notional_cents: 1000,
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("spot_set_pair_params"));
+    assert_eq!(a["params"]["taker_fee_dbps"], json!(350));
+    assert_eq!(a["params"]["min_notional_cents"], json!(1000));
+
+    let _: Value = ex
+        .spot_set_pair_active(
+            &wallet,
+            &SpotSetPairActive {
+                pair: 7,
+                active: false,
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("spot_set_pair_active"));
+    assert_eq!(a["params"]["active"], json!(false));
+
+    let holders = vec![
+        Address::from_bytes([0x11; 20]),
+        Address::from_bytes([0x22; 20]),
+    ];
+    let _: Value = ex
+        .spot_seed_holders(
+            &wallet,
+            &SpotSeedHolders {
+                asset: 42,
+                holders: holders.clone(),
+                amounts: vec!["1000.5".into(), "250".into()],
+            },
+        )
+        .await
+        .unwrap();
+    let body = captor.last.lock().await.clone().unwrap();
+    let a = body["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("spot_seed_holders"));
+    assert_eq!(a["params"]["amounts"], json!(["1000.5", "250"]));
+    assert_eq!(
+        a["params"]["holders"],
+        json!([
+            "0x1111111111111111111111111111111111111111",
+            "0x2222222222222222222222222222222222222222"
+        ])
+    );
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _typed_digest_for_test(&TypedAction::SpotSeedHolders {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        asset: 42,
+        holders,
+        amounts: vec!["1000.5".into(), "250".into()],
+        nonce,
+    });
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(
+        _recover_for_test(&digest, &sig).expect("recover"),
+        wallet.address(),
+        "the staged rows must be signed exactly as posted"
+    );
+
+    let _: Value = ex
+        .spot_finalize_supply(
+            &wallet,
+            &SpotFinalizeSupply {
+                asset: 42,
+                max_supply: "1250.500001".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("spot_finalize_supply"));
+    assert_eq!(a["params"]["max_supply"], json!("1250.500001"));
+    assert!(a["params"]["max_supply"].is_string());
+}
+
+/// Staged rows are refused BEFORE signing when the two arrays cannot pair up.
+/// The node refuses the same call, but a client that signs it burns a nonce.
+#[tokio::test]
+async fn spot_seed_holders_refuses_unpaired_rows_before_signing() {
+    let (client, _captor, wallet) = capturing_exchange().await;
+    let bad = SpotSeedHolders {
+        asset: 42,
+        holders: vec![Address::from_bytes([0x11; 20])],
+        amounts: vec!["1".into(), "2".into()],
+    };
+    let err = client
+        .exchange()
+        .spot_seed_holders(&wallet, &bad)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, metaflux_client::ClientError::Validation(_)));
+
+    let empty = SpotSeedHolders {
+        asset: 42,
+        holders: Vec::new(),
+        amounts: Vec::new(),
+    };
+    let err = client
+        .exchange()
+        .spot_seed_holders(&wallet, &empty)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, metaflux_client::ClientError::Validation(_)));
 }

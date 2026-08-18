@@ -37,6 +37,7 @@ use crate::types::{
         UpdateIsolatedMargin, UpdateLeverage, UserPortfolioMargin, UserSetAbstraction,
     },
     chase::{CancelChaseParams, ChaseParams},
+    defi::BorrowLend,
     encrypted::SubmitEncryptedOrder,
     fba::FbaSubmit,
     meta_bridge::MbWithdraw,
@@ -47,12 +48,16 @@ use crate::types::{
     rfq::{RfqAccept, RfqRequest},
     scale::{CancelScaleParams, ScaleDist, ScaleParams},
     spot::{
-        EarnDeposit, EarnWithdraw, SpotCancel, SpotMarginClose, SpotMarginDeposit, SpotMarginOpen,
-        SpotMarginWithdraw, SpotOrder,
+        EarnDeposit, EarnWithdraw, SpotCancel, SpotFinalizeSupply, SpotMarginClose,
+        SpotMarginDeposit, SpotMarginOpen, SpotMarginWithdraw, SpotOrder, SpotRegisterPair,
+        SpotRegisterToken, SpotSeedHolders, SpotSetPairActive, SpotSetPairParams,
     },
     staking::{ClaimRewards, LinkStakingUser, TokenDelegate},
     twap::{TwapCancel, TwapOrder},
-    vault::{CreateVault, VaultDistribute, VaultKind, VaultModify, VaultTransfer, VaultWithdraw},
+    vault::{
+        CreateVault, RegisterMetaliquidityOperator, VaultDistribute, VaultKind, VaultModify,
+        VaultTransfer, VaultWithdraw,
+    },
 };
 use crate::wallet::{Address, Eip712, Signature, TypedTradingAction, Wallet};
 
@@ -1278,6 +1283,157 @@ impl<'a> Exchange<'a> {
             params.stp_group,
         )
         .await
+    }
+
+    // --- BOLE pool ---
+
+    /// Lend, un-lend, borrow or repay against the BOLE pool.
+    ///
+    /// Sender-authorized. The direction rides the wire as its PascalCase name
+    /// and the digest as a `uint8`; both come from `params.kind`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn borrow_lend(
+        &self,
+        wallet: &Wallet,
+        params: &BorrowLend,
+    ) -> Result<Value, ClientError> {
+        self.borrow_lend_typed(wallet, params.kind, params.amount.clone())
+            .await
+    }
+
+    // --- Vault operators ---
+
+    /// Grant or revoke an operator on a vault the sender leads.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn register_metaliquidity_operator(
+        &self,
+        wallet: &Wallet,
+        params: &RegisterMetaliquidityOperator,
+    ) -> Result<Value, ClientError> {
+        self.register_metaliquidity_operator_typed(
+            wallet,
+            params.vault_id.0,
+            params.operator,
+            params.allowed,
+            params.expires_at_ms,
+        )
+        .await
+    }
+
+    // --- Permissionless spot deployer lane ---
+
+    /// Register a fresh spot token.
+    ///
+    /// Sender-authorized: the signer is the deployer. The node charges the
+    /// Dutch-clock price from free collateral and refuses the call when that
+    /// price is above `max_deploy_fee`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_register_token(
+        &self,
+        wallet: &Wallet,
+        params: &SpotRegisterToken,
+    ) -> Result<Value, ClientError> {
+        self.spot_register_token_typed(
+            wallet,
+            params.symbol.clone(),
+            params.sz_decimals,
+            params.wei_decimals,
+            params.max_deploy_fee.clone(),
+        )
+        .await
+    }
+
+    /// Register a `(base, quote)` spot pair over registered tokens.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_register_pair(
+        &self,
+        wallet: &Wallet,
+        params: &SpotRegisterPair,
+    ) -> Result<Value, ClientError> {
+        self.spot_register_pair_typed(
+            wallet,
+            params.base,
+            params.quote,
+            params.name.clone(),
+            params.max_deploy_fee.clone(),
+        )
+        .await
+    }
+
+    /// Set a spot pair's fee tier and min order notional.
+    ///
+    /// Both fees are DECI-bps, not bps.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_set_pair_params(
+        &self,
+        wallet: &Wallet,
+        params: &SpotSetPairParams,
+    ) -> Result<Value, ClientError> {
+        self.spot_set_pair_params_typed(
+            wallet,
+            params.pair,
+            params.taker_fee_dbps,
+            params.maker_fee_dbps,
+            params.min_notional_cents,
+        )
+        .await
+    }
+
+    /// Open or close a spot pair to new orders.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_set_pair_active(
+        &self,
+        wallet: &Wallet,
+        params: &SpotSetPairActive,
+    ) -> Result<Value, ClientError> {
+        self.spot_set_pair_active_typed(wallet, params.pair, params.active)
+            .await
+    }
+
+    /// Stage genesis holder rows for a spot token. Repeatable.
+    ///
+    /// Amounts are WHOLE units, never wei.
+    ///
+    /// # Errors
+    /// - [`ClientError::Validation`] if the arrays differ in length or are empty.
+    /// - HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_seed_holders(
+        &self,
+        wallet: &Wallet,
+        params: &SpotSeedHolders,
+    ) -> Result<Value, ClientError> {
+        self.spot_seed_holders_typed(
+            wallet,
+            params.asset,
+            params.holders.clone(),
+            params.amounts.clone(),
+        )
+        .await
+    }
+
+    /// Check the staged sum, then mint the token supply once.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_finalize_supply(
+        &self,
+        wallet: &Wallet,
+        params: &SpotFinalizeSupply,
+    ) -> Result<Value, ClientError> {
+        self.spot_finalize_supply_typed(wallet, params.asset, params.max_supply.clone())
+            .await
     }
 
     // --- Legacy opaque MIP-3 deploy lane ---

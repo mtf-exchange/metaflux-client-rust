@@ -253,6 +253,115 @@ pub struct EarnWithdraw {
     pub shares: String,
 }
 
+// ---- Permissionless spot deployer lane ----
+//
+// Six sender-authorized actions deploy a spot token and its pair. The signer IS
+// the deployer — there is no `owner` field. The full sequence is: register the
+// token, register the pair, set its params, stage the genesis rows in one or
+// more calls, seal the supply, then open the pair.
+//
+// `max_deploy_fee` is the highest Dutch-clock accept price the signer takes, in
+// WHOLE USDC. It is not gas. The node charges the clock price at register time
+// from free collateral and refuses the call when the clock is above this cap.
+//
+// Every decimal here is hashed VERBATIM into the signed digest and re-sent
+// unchanged, so pick one canonical form: `"980"` and `"980.00"` are different
+// signatures.
+
+/// Register a fresh spot token (step 1 of the deployer sequence).
+///
+/// The node assigns the token id. A deployer cannot declare its token canonical
+/// or bind its own EVM contract — neither field is on this wire.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotRegisterToken {
+    /// Token symbol.
+    pub symbol: String,
+    /// Display / size precision.
+    pub sz_decimals: u8,
+    /// Native (ERC-20 style) token decimals. The node rejects a value above 18;
+    /// pass 1 or more, since a 0 names a token with no wei scale.
+    pub wei_decimals: u8,
+    /// Highest Dutch accept price taken, as a decimal string in whole USDC
+    /// (`>= 0`).
+    pub max_deploy_fee: String,
+}
+
+/// Register a `(base, quote)` trading pair over registered tokens (step 2).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotRegisterPair {
+    /// Base token id.
+    pub base: u32,
+    /// Quote token id (USDC today).
+    pub quote: u32,
+    /// Pair name.
+    pub name: String,
+    /// Highest Dutch accept price taken, as a decimal string in whole USDC
+    /// (`>= 0`).
+    pub max_deploy_fee: String,
+}
+
+/// Set a pair's fee tier and minimum order notional in one intent.
+///
+/// **Unit trap:** both fees are DECI-bps (one tenth of a basis point), not bps.
+/// The node rejects a leg at 1000 or above.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotSetPairParams {
+    /// Spot pair id.
+    pub pair: u32,
+    /// Taker fee in deci-bps (`< 1000`).
+    pub taker_fee_dbps: u32,
+    /// Maker fee in deci-bps (`< 1000`).
+    pub maker_fee_dbps: u32,
+    /// Min order notional in USDC cents.
+    pub min_notional_cents: u64,
+}
+
+/// Open or close a pair to new orders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotSetPairActive {
+    /// Spot pair id.
+    pub pair: u32,
+    /// `true` opens the pair, `false` closes it.
+    pub active: bool,
+}
+
+/// Stage genesis holder rows for a registered token. Repeatable.
+///
+/// The two arrays are parallel and must be the same length; an empty call is
+/// refused. Both ride INSIDE the signed digest, so a relay can neither
+/// re-target, re-size nor re-order a row.
+///
+/// **Amounts are WHOLE UNITS, never wei.** The spot ledger is whole-unit, so a
+/// caller that sends wei mints 10^18 times too much AND the
+/// [`SpotFinalizeSupply`] checksum agrees — the error is silent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotSeedHolders {
+    /// The spot token being staged.
+    pub asset: u32,
+    /// Holder addresses, parallel with `amounts`. At most 128 rows per call.
+    pub holders: Vec<Address>,
+    /// Whole-unit amounts as decimal strings, parallel with `holders`.
+    pub amounts: Vec<String>,
+}
+
+/// Check the staged sum, then mint the supply once.
+///
+/// `max_supply` is an integrity check over the seed SEQUENCE, not a setting: it
+/// proves every [`SpotSeedHolders`] call landed. A mismatch refuses the mint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SpotFinalizeSupply {
+    /// The spot token being sealed.
+    pub asset: u32,
+    /// Sum of every staged row, as a whole-unit decimal string.
+    pub max_supply: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -478,5 +587,86 @@ mod tests {
             "fractional shares must survive as a string"
         );
         assert_eq!(w, serde_json::from_value::<EarnWithdraw>(jw).unwrap());
+    }
+
+    /// The node reads `max_deploy_fee` / `max_supply` as the VERBATIM signed
+    /// string. A JSON number there fails the read and the action is refused, so
+    /// pin the string shape and the trailing zero.
+    #[test]
+    fn spot_deploy_decimals_ride_as_verbatim_json_strings() {
+        let t = SpotRegisterToken {
+            symbol: "MTFX".into(),
+            sz_decimals: 2,
+            wei_decimals: 8,
+            max_deploy_fee: "1250.50".into(),
+        };
+        let jt = serde_json::to_value(&t).unwrap();
+        assert_eq!(jt["max_deploy_fee"], serde_json::json!("1250.50"));
+        assert!(jt["max_deploy_fee"].is_string());
+        assert_eq!(jt["sz_decimals"], serde_json::json!(2));
+        assert!(jt.get("szDecimals").is_none(), "no camelCase leak");
+        assert_eq!(t, serde_json::from_value(jt).unwrap());
+
+        let p = SpotRegisterPair {
+            base: 42,
+            quote: 0,
+            name: "MTFX/USDC".into(),
+            max_deploy_fee: "980.00".into(),
+        };
+        let jp = serde_json::to_value(&p).unwrap();
+        assert_eq!(
+            jp["max_deploy_fee"],
+            serde_json::json!("980.00"),
+            "the trailing zeros are part of the signed bytes"
+        );
+        assert_eq!(p, serde_json::from_value(jp).unwrap());
+
+        let f = SpotFinalizeSupply {
+            asset: 42,
+            max_supply: "1250.500001".into(),
+        };
+        let jf = serde_json::to_value(&f).unwrap();
+        assert!(jf["max_supply"].is_string());
+        assert_eq!(f, serde_json::from_value(jf).unwrap());
+    }
+
+    #[test]
+    fn spot_seed_holders_keeps_two_parallel_arrays() {
+        let s = SpotSeedHolders {
+            asset: 42,
+            holders: vec![
+                Address::from_hex("0x1111111111111111111111111111111111111111").unwrap(),
+                Address::from_hex("0x00000000000000000000000000000000000000aB").unwrap(),
+            ],
+            amounts: vec!["1000.5".into(), "250".into()],
+        };
+        let j = serde_json::to_value(&s).unwrap();
+        assert_eq!(j["holders"].as_array().unwrap().len(), 2);
+        assert!(j["holders"][0].is_string(), "holders are 0x-hex strings");
+        assert_eq!(j["amounts"], serde_json::json!(["1000.5", "250"]));
+        assert_eq!(s, serde_json::from_value(j).unwrap());
+    }
+
+    #[test]
+    fn spot_pair_params_and_active_serialize_snake_case() {
+        let p = SpotSetPairParams {
+            pair: 7,
+            taker_fee_dbps: 350,
+            maker_fee_dbps: 120,
+            min_notional_cents: 1000,
+        };
+        let j = serde_json::to_value(p).unwrap();
+        assert_eq!(j["taker_fee_dbps"], serde_json::json!(350));
+        assert_eq!(j["min_notional_cents"], serde_json::json!(1000));
+        assert!(j.get("takerFeeDbps").is_none(), "no camelCase leak");
+        assert_eq!(p, serde_json::from_value(j).unwrap());
+
+        let a = SpotSetPairActive {
+            pair: 7,
+            active: true,
+        };
+        let ja = serde_json::to_value(a).unwrap();
+        assert_eq!(ja["active"], serde_json::json!(true));
+        assert_eq!(a, serde_json::from_value(ja).unwrap());
     }
 }

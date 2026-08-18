@@ -21,6 +21,7 @@ pub mod candle;
 pub mod chase;
 pub mod core_evm;
 pub mod cross_chain;
+pub mod defi;
 pub mod encrypted;
 pub mod fba;
 pub mod meta_bridge;

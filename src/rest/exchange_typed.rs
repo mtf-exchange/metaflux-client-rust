@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use crate::error::ClientError;
 use crate::rest::exchange::{Exchange, MTF_CHAIN_ID, next_nonce};
+use crate::types::defi::BorrowLendKind;
 use crate::wallet::{
     Eip712, TypedAction, TypedActionDigest, TypedTradingAction, TypedTradingDigest, Wallet,
     metaflux_chain_tag,
@@ -1628,6 +1629,271 @@ impl<'a> Exchange<'a> {
                 nonce,
             };
             (action, "claim_referral_rewards", json!({}))
+        })
+        .await
+    }
+
+    /// Lend / un-lend / borrow / repay against the BOLE pool under the typed
+    /// scheme.
+    ///
+    /// `amount` is a canonical decimal string. The POST carries `kind` as its
+    /// PascalCase name; the digest signs the same direction as a `uint8`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn borrow_lend_typed(
+        &self,
+        wallet: &Wallet,
+        kind: BorrowLendKind,
+        amount: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let amount = amount.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::BorrowLend {
+                metaflux_chain: chain,
+                kind: kind.as_u8(),
+                amount: amount.clone(),
+                nonce,
+            };
+            let params = json!({ "kind": kind.wire_name(), "amount": amount });
+            (action, "borrow_lend", params)
+        })
+        .await
+    }
+
+    /// Grant or revoke a vault operator under the typed scheme.
+    ///
+    /// The signer must lead `vault_id`. `expires_at_ms` is a timestamp in ms
+    /// since epoch; `0` never expires.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn register_metaliquidity_operator_typed(
+        &self,
+        wallet: &Wallet,
+        vault_id: u64,
+        operator: crate::wallet::Address,
+        allowed: bool,
+        expires_at_ms: u64,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::RegisterMetaliquidityOperator {
+                metaflux_chain: chain,
+                vault_id,
+                operator,
+                allowed,
+                expires_at_ms,
+                nonce,
+            };
+            let mut params = json!({
+                "vault_id": vault_id,
+                "operator": operator,
+                "allowed": allowed,
+            });
+            // The node refuses an explicit `expires_at_ms: 0` because absent and
+            // zero flatten to one digest. Omit the key, as `approve_agent` does.
+            if expires_at_ms != 0 {
+                params["expires_at_ms"] = json!(expires_at_ms);
+            }
+            (action, "register_metaliquidity_operator", params)
+        })
+        .await
+    }
+
+    // ---- permissionless spot deployer lane ----
+    //
+    // `max_deploy_fee` / `max_supply` / every seeded amount are hashed VERBATIM
+    // and re-sent unchanged, so each method holds ONE `String` and feeds it to
+    // both the digest and the POST.
+
+    /// Register a fresh spot token under the typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_register_token_typed(
+        &self,
+        wallet: &Wallet,
+        symbol: impl Into<String>,
+        sz_decimals: u8,
+        wei_decimals: u8,
+        max_deploy_fee: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let symbol = symbol.into();
+        let max_deploy_fee = max_deploy_fee.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SpotRegisterToken {
+                metaflux_chain: chain,
+                symbol: symbol.clone(),
+                sz_decimals,
+                wei_decimals,
+                max_deploy_fee: max_deploy_fee.clone(),
+                nonce,
+            };
+            let params = json!({
+                "symbol": symbol,
+                "sz_decimals": sz_decimals,
+                "wei_decimals": wei_decimals,
+                "max_deploy_fee": max_deploy_fee,
+            });
+            (action, "spot_register_token", params)
+        })
+        .await
+    }
+
+    /// Register a `(base, quote)` spot pair under the typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_register_pair_typed(
+        &self,
+        wallet: &Wallet,
+        base: u32,
+        quote: u32,
+        name: impl Into<String>,
+        max_deploy_fee: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let name = name.into();
+        let max_deploy_fee = max_deploy_fee.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SpotRegisterPair {
+                metaflux_chain: chain,
+                base,
+                quote,
+                name: name.clone(),
+                max_deploy_fee: max_deploy_fee.clone(),
+                nonce,
+            };
+            let params = json!({
+                "base": base,
+                "quote": quote,
+                "name": name,
+                "max_deploy_fee": max_deploy_fee,
+            });
+            (action, "spot_register_pair", params)
+        })
+        .await
+    }
+
+    /// Set a spot pair's fee tier and min notional under the typed scheme.
+    ///
+    /// Both fees are DECI-bps, not bps.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_set_pair_params_typed(
+        &self,
+        wallet: &Wallet,
+        pair: u32,
+        taker_fee_dbps: u32,
+        maker_fee_dbps: u32,
+        min_notional_cents: u64,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SpotSetPairParams {
+                metaflux_chain: chain,
+                pair,
+                taker_fee_dbps,
+                maker_fee_dbps,
+                min_notional_cents,
+                nonce,
+            };
+            let params = json!({
+                "pair": pair,
+                "taker_fee_dbps": taker_fee_dbps,
+                "maker_fee_dbps": maker_fee_dbps,
+                "min_notional_cents": min_notional_cents,
+            });
+            (action, "spot_set_pair_params", params)
+        })
+        .await
+    }
+
+    /// Open or close a spot pair under the typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_set_pair_active_typed(
+        &self,
+        wallet: &Wallet,
+        pair: u32,
+        active: bool,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SpotSetPairActive {
+                metaflux_chain: chain,
+                pair,
+                active,
+                nonce,
+            };
+            let params = json!({ "pair": pair, "active": active });
+            (action, "spot_set_pair_active", params)
+        })
+        .await
+    }
+
+    /// Stage genesis holder rows for a spot token under the typed scheme.
+    ///
+    /// The rows are inside the signed digest, so the two arrays must stay
+    /// parallel and keep their order.
+    ///
+    /// # Errors
+    /// - [`ClientError::Validation`] if the arrays differ in length or are empty.
+    /// - HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_seed_holders_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        holders: Vec<crate::wallet::Address>,
+        amounts: Vec<String>,
+    ) -> Result<Value, ClientError> {
+        if holders.is_empty() {
+            return Err(ClientError::Validation(
+                "spot_seed_holders needs at least one row".into(),
+            ));
+        }
+        if holders.len() != amounts.len() {
+            return Err(ClientError::Validation(
+                "spot_seed_holders holders and amounts differ in length".into(),
+            ));
+        }
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SpotSeedHolders {
+                metaflux_chain: chain,
+                asset,
+                holders: holders.clone(),
+                amounts: amounts.clone(),
+                nonce,
+            };
+            let params = json!({
+                "asset": asset,
+                "holders": holders,
+                "amounts": amounts,
+            });
+            (action, "spot_seed_holders", params)
+        })
+        .await
+    }
+
+    /// Check the staged sum, then mint the supply once, under the typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn spot_finalize_supply_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        max_supply: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let max_supply = max_supply.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SpotFinalizeSupply {
+                metaflux_chain: chain,
+                asset,
+                max_supply: max_supply.clone(),
+                nonce,
+            };
+            let params = json!({ "asset": asset, "max_supply": max_supply });
+            (action, "spot_finalize_supply", params)
         })
         .await
     }
