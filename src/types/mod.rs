@@ -26,6 +26,7 @@ pub mod encrypted;
 pub mod fba;
 pub mod meta_bridge;
 pub mod order;
+pub mod perp;
 pub mod place;
 pub mod rfq;
 pub mod scale;

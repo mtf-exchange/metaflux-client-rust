@@ -20,6 +20,11 @@ use metaflux_client::{
             BatchCancel, BatchModify, BatchOrder, CancelByCloid, CancelOrder, Modify, Order,
             OrderKind, OrderStatus, PositionSide, Side, StpMode, TimeInForce,
         },
+        perp::{
+            PerpActivateMarket, PerpDeactivateMarket, PerpRegisterAsset, PerpSetFeeTier,
+            PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOracle,
+            PerpSetSubDeployers,
+        },
         spot::{
             EarnWithdraw, SpotFinalizeSupply, SpotMarginOpen, SpotRegisterPair, SpotRegisterToken,
             SpotSeedHolders, SpotSetPairActive, SpotSetPairParams,
@@ -1282,4 +1287,191 @@ async fn spot_seed_holders_refuses_unpaired_rows_before_signing() {
         .await
         .unwrap_err();
     assert!(matches!(err, metaflux_client::ClientError::Validation(_)));
+}
+
+// ---- MIP-3 perp deployer lane ----
+
+/// Each of the nine deployer actions posts its OWN tag with its own field
+/// names. A wrong tag or a renamed field is refused at the node's serde before
+/// any handler runs, and the caller cannot tell that from a rejected signature.
+#[tokio::test]
+async fn the_perp_deployer_lane_posts_its_nine_tags_with_their_own_fields() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let ex = client.exchange();
+
+    let _: Value = ex
+        .perp_register_asset(
+            &wallet,
+            &PerpRegisterAsset {
+                symbol: "WIF".into(),
+                decimals: 8,
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("perp_register_asset"));
+    assert_eq!(a["params"]["symbol"], json!("WIF"));
+    assert_eq!(a["params"]["decimals"], json!(8));
+    assert!(a["params"].get("bid").is_none(), "the bid lane is dead");
+    assert!(
+        a["params"].get("asset").is_none(),
+        "the node assigns the id"
+    );
+
+    let _: Value = ex
+        .perp_set_oracle(
+            &wallet,
+            &PerpSetOracle {
+                asset: 1001,
+                oracle_source_mask: 0x03ff,
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("perp_set_oracle"));
+    assert_eq!(a["params"]["asset"], json!(1001));
+    assert_eq!(a["params"]["oracle_source_mask"], json!(1023));
+
+    let _: Value = ex
+        .perp_set_leverage(
+            &wallet,
+            &PerpSetLeverage {
+                asset: 1001,
+                max_leverage: 20,
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("perp_set_leverage"));
+    assert_eq!(a["params"]["max_leverage"], json!(20));
+
+    let _: Value = ex
+        .perp_set_fee_tier(
+            &wallet,
+            &PerpSetFeeTier {
+                asset: 1001,
+                taker_fee_dbps: 45,
+                maker_fee_dbps: 12,
+                deployer_fee_bps: 6,
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("perp_set_fee_tier"));
+    assert_eq!(
+        a["params"]["taker_fee_dbps"],
+        json!(45),
+        "the three legs post separately; the node packs them"
+    );
+    assert_eq!(a["params"]["maker_fee_dbps"], json!(12));
+    assert_eq!(a["params"]["deployer_fee_bps"], json!(6));
+    assert!(
+        a["params"].get("value").is_none(),
+        "no packed value on the wire"
+    );
+
+    let _: Value = ex
+        .perp_set_maker_rebate(
+            &wallet,
+            &PerpSetMakerRebate {
+                asset: 1001,
+                rebate_bps: 2,
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("perp_set_maker_rebate"));
+    assert_eq!(a["params"]["rebate_bps"], json!(2));
+
+    let _: Value = ex
+        .perp_set_min_size(
+            &wallet,
+            &PerpSetMinSize {
+                asset: 1001,
+                min_order_size: 1000,
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("perp_set_min_size"));
+    assert_eq!(a["params"]["min_order_size"], json!(1000));
+
+    let _: Value = ex
+        .perp_activate_market(&wallet, &PerpActivateMarket { asset: 1001 })
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("perp_activate_market"));
+    assert_eq!(a["params"]["asset"], json!(1001));
+
+    let _: Value = ex
+        .perp_deactivate_market(&wallet, &PerpDeactivateMarket { asset: 1001 })
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(
+        a["type"].as_str(),
+        Some("perp_deactivate_market"),
+        "closing a market must not post the activate tag"
+    );
+
+    let _: Value = ex
+        .perp_set_sub_deployers(
+            &wallet,
+            &PerpSetSubDeployers {
+                asset: 1001,
+                sub_deployer: Address::from_bytes([0xaa; 20]),
+                add: true,
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("perp_set_sub_deployers"));
+    assert_eq!(
+        a["params"]["sub_deployer"],
+        json!("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    );
+    assert_eq!(a["params"]["add"], json!(true));
+}
+
+/// The delegate grant is the lane's authority handover, so pin that what the
+/// signer signs is exactly what the POST carries.
+#[tokio::test]
+async fn perp_set_sub_deployers_signs_the_posted_delegate() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let sub_deployer = Address::from_bytes([0xaa; 20]);
+    let _: Value = client
+        .exchange()
+        .perp_set_sub_deployers(
+            &wallet,
+            &PerpSetSubDeployers {
+                asset: 1001,
+                sub_deployer,
+                add: true,
+            },
+        )
+        .await
+        .unwrap();
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _typed_digest_for_test(&TypedAction::PerpSetSubDeployers {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        asset: 1001,
+        sub_deployer,
+        add: true,
+        nonce,
+    });
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(
+        _recover_for_test(&digest, &sig).expect("recover"),
+        wallet.address()
+    );
 }

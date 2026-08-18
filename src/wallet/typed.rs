@@ -229,6 +229,28 @@ const SPOT_SEED_HOLDERS_TYPE: &[u8] =
 const SPOT_FINALIZE_SUPPLY_TYPE: &[u8] =
     b"MetaFluxTransaction:SpotFinalizeSupply(string metafluxChain,uint32 asset,string maxSupply,uint64 nonce)";
 
+// The nine MIP-3 perp-deployer signing strings, one per sub-action. Each binds
+// ONLY the fields its own sub-handler reads. None carries `bid`: the legacy
+// gas-auction lane is dead and the node rejects a non-zero bid.
+const PERP_REGISTER_ASSET_TYPE: &[u8] =
+    b"MetaFluxTransaction:PerpRegisterAsset(string metafluxChain,string symbol,uint8 decimals,uint64 nonce)";
+const PERP_SET_ORACLE_TYPE: &[u8] =
+    b"MetaFluxTransaction:PerpSetOracle(string metafluxChain,uint32 asset,uint16 oracleSourceMask,uint64 nonce)";
+const PERP_SET_LEVERAGE_TYPE: &[u8] =
+    b"MetaFluxTransaction:PerpSetLeverage(string metafluxChain,uint32 asset,uint8 maxLeverage,uint64 nonce)";
+const PERP_SET_FEE_TIER_TYPE: &[u8] =
+    b"MetaFluxTransaction:PerpSetFeeTier(string metafluxChain,uint32 asset,uint32 takerFeeDbps,uint32 makerFeeDbps,uint32 deployerFeeBps,uint64 nonce)";
+const PERP_SET_MAKER_REBATE_TYPE: &[u8] =
+    b"MetaFluxTransaction:PerpSetMakerRebate(string metafluxChain,uint32 asset,uint16 rebateBps,uint64 nonce)";
+const PERP_SET_MIN_SIZE_TYPE: &[u8] =
+    b"MetaFluxTransaction:PerpSetMinSize(string metafluxChain,uint32 asset,uint64 minOrderSize,uint64 nonce)";
+const PERP_ACTIVATE_MARKET_TYPE: &[u8] =
+    b"MetaFluxTransaction:PerpActivateMarket(string metafluxChain,uint32 asset,uint64 nonce)";
+const PERP_DEACTIVATE_MARKET_TYPE: &[u8] =
+    b"MetaFluxTransaction:PerpDeactivateMarket(string metafluxChain,uint32 asset,uint64 nonce)";
+const PERP_SET_SUB_DEPLOYERS_TYPE: &[u8] =
+    b"MetaFluxTransaction:PerpSetSubDeployers(string metafluxChain,uint32 asset,address subDeployer,bool add,uint64 nonce)";
+
 // ===== TypedAction =====
 
 /// One wallet-signed action per variant, carrying exactly its EIP-712 fields in
@@ -1058,6 +1080,114 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `PerpRegisterAsset(string metafluxChain,string symbol,uint8 decimals,uint64 nonce)`
+    PerpRegisterAsset {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Market symbol.
+        symbol: String,
+        /// Token decimals. `0` is not "zero decimals" — the node reads it as its
+        /// default of 8.
+        decimals: u8,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `PerpSetOracle(string metafluxChain,uint32 asset,uint16 oracleSourceMask,uint64 nonce)`
+    PerpSetOracle {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Target market asset id.
+        asset: u32,
+        /// Bitmask of enabled oracle sources.
+        oracle_source_mask: u16,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `PerpSetLeverage(string metafluxChain,uint32 asset,uint8 maxLeverage,uint64 nonce)`
+    PerpSetLeverage {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Target market asset id.
+        asset: u32,
+        /// Max leverage.
+        max_leverage: u8,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `PerpSetFeeTier(string metafluxChain,uint32 asset,uint32 takerFeeDbps,uint32 makerFeeDbps,uint32 deployerFeeBps,uint64 nonce)`
+    ///
+    /// The three legs are signed SEPARATELY. The node packs them into the one
+    /// value its handler decodes, so the signer signs the legs it means.
+    PerpSetFeeTier {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Target market asset id.
+        asset: u32,
+        /// Taker fee in DECI-bps.
+        taker_fee_dbps: u32,
+        /// Maker fee in DECI-bps.
+        maker_fee_dbps: u32,
+        /// Deployer cut in WHOLE bps.
+        deployer_fee_bps: u32,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `PerpSetMakerRebate(string metafluxChain,uint32 asset,uint16 rebateBps,uint64 nonce)`
+    PerpSetMakerRebate {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Target market asset id.
+        asset: u32,
+        /// Maker rebate in whole bps.
+        rebate_bps: u16,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `PerpSetMinSize(string metafluxChain,uint32 asset,uint64 minOrderSize,uint64 nonce)`
+    PerpSetMinSize {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Target market asset id.
+        asset: u32,
+        /// Min order size in the market's size plane.
+        min_order_size: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `PerpActivateMarket(string metafluxChain,uint32 asset,uint64 nonce)`
+    PerpActivateMarket {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Target market asset id.
+        asset: u32,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `PerpDeactivateMarket(string metafluxChain,uint32 asset,uint64 nonce)`
+    PerpDeactivateMarket {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Target market asset id.
+        asset: u32,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `PerpSetSubDeployers(string metafluxChain,uint32 asset,address subDeployer,bool add,uint64 nonce)`
+    ///
+    /// `sub_deployer` and `add` are both IN the digest, so no relay can re-target
+    /// the delegate or flip a removal into a grant.
+    PerpSetSubDeployers {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Target market asset id.
+        asset: u32,
+        /// The delegate address.
+        sub_deployer: Address,
+        /// `true` adds the delegate, `false` removes it.
+        add: bool,
+        /// Envelope nonce.
+        nonce: u64,
+    },
 }
 
 impl TypedAction {
@@ -1129,6 +1259,15 @@ impl TypedAction {
             TypedAction::SpotSetPairActive { .. } => SPOT_SET_PAIR_ACTIVE_TYPE,
             TypedAction::SpotSeedHolders { .. } => SPOT_SEED_HOLDERS_TYPE,
             TypedAction::SpotFinalizeSupply { .. } => SPOT_FINALIZE_SUPPLY_TYPE,
+            TypedAction::PerpRegisterAsset { .. } => PERP_REGISTER_ASSET_TYPE,
+            TypedAction::PerpSetOracle { .. } => PERP_SET_ORACLE_TYPE,
+            TypedAction::PerpSetLeverage { .. } => PERP_SET_LEVERAGE_TYPE,
+            TypedAction::PerpSetFeeTier { .. } => PERP_SET_FEE_TIER_TYPE,
+            TypedAction::PerpSetMakerRebate { .. } => PERP_SET_MAKER_REBATE_TYPE,
+            TypedAction::PerpSetMinSize { .. } => PERP_SET_MIN_SIZE_TYPE,
+            TypedAction::PerpActivateMarket { .. } => PERP_ACTIVATE_MARKET_TYPE,
+            TypedAction::PerpDeactivateMarket { .. } => PERP_DEACTIVATE_MARKET_TYPE,
+            TypedAction::PerpSetSubDeployers { .. } => PERP_SET_SUB_DEPLOYERS_TYPE,
         }
     }
 
@@ -1846,6 +1985,99 @@ impl TypedAction {
                 enc_string(metaflux_chain),
                 enc_u32(*asset),
                 enc_string(max_supply),
+                enc_u64(*nonce),
+            ],
+            TypedAction::PerpRegisterAsset {
+                metaflux_chain,
+                symbol,
+                decimals,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_string(symbol),
+                enc_u8(*decimals),
+                enc_u64(*nonce),
+            ],
+            TypedAction::PerpSetOracle {
+                metaflux_chain,
+                asset,
+                oracle_source_mask,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_u16(*oracle_source_mask),
+                enc_u64(*nonce),
+            ],
+            TypedAction::PerpSetLeverage {
+                metaflux_chain,
+                asset,
+                max_leverage,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_u8(*max_leverage),
+                enc_u64(*nonce),
+            ],
+            TypedAction::PerpSetFeeTier {
+                metaflux_chain,
+                asset,
+                taker_fee_dbps,
+                maker_fee_dbps,
+                deployer_fee_bps,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_u32(*taker_fee_dbps),
+                enc_u32(*maker_fee_dbps),
+                enc_u32(*deployer_fee_bps),
+                enc_u64(*nonce),
+            ],
+            TypedAction::PerpSetMakerRebate {
+                metaflux_chain,
+                asset,
+                rebate_bps,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_u16(*rebate_bps),
+                enc_u64(*nonce),
+            ],
+            TypedAction::PerpSetMinSize {
+                metaflux_chain,
+                asset,
+                min_order_size,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_u64(*min_order_size),
+                enc_u64(*nonce),
+            ],
+            TypedAction::PerpActivateMarket {
+                metaflux_chain,
+                asset,
+                nonce,
+            } => vec![enc_string(metaflux_chain), enc_u32(*asset), enc_u64(*nonce)],
+            TypedAction::PerpDeactivateMarket {
+                metaflux_chain,
+                asset,
+                nonce,
+            } => vec![enc_string(metaflux_chain), enc_u32(*asset), enc_u64(*nonce)],
+            TypedAction::PerpSetSubDeployers {
+                metaflux_chain,
+                asset,
+                sub_deployer,
+                add,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_addr(sub_deployer),
+                enc_bool(*add),
                 enc_u64(*nonce),
             ],
         }

@@ -1898,6 +1898,239 @@ impl<'a> Exchange<'a> {
         .await
     }
 
+    // ---- MIP-3 perp deployer lane ----
+    //
+    // Nine sub-actions, nine tags, nine frozen signing strings. Each method
+    // posts only the fields ITS sub-handler reads. No method carries a bid: the
+    // gas-auction lane is dead and the node rejects a non-zero one.
+
+    /// Allocate a fresh perp market under the typed scheme.
+    ///
+    /// `decimals` of `0` selects the node default of 8, not zero decimals.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_register_asset_typed(
+        &self,
+        wallet: &Wallet,
+        symbol: impl Into<String>,
+        decimals: u8,
+    ) -> Result<Value, ClientError> {
+        let symbol = symbol.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PerpRegisterAsset {
+                metaflux_chain: chain,
+                symbol: symbol.clone(),
+                decimals,
+                nonce,
+            };
+            let params = json!({ "symbol": symbol, "decimals": decimals });
+            (action, "perp_register_asset", params)
+        })
+        .await
+    }
+
+    /// Bind a market's enabled oracle-source subset under the typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_oracle_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        oracle_source_mask: u16,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PerpSetOracle {
+                metaflux_chain: chain,
+                asset,
+                oracle_source_mask,
+                nonce,
+            };
+            let params = json!({ "asset": asset, "oracle_source_mask": oracle_source_mask });
+            (action, "perp_set_oracle", params)
+        })
+        .await
+    }
+
+    /// Set a market's max leverage under the typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_leverage_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        max_leverage: u8,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PerpSetLeverage {
+                metaflux_chain: chain,
+                asset,
+                max_leverage,
+                nonce,
+            };
+            let params = json!({ "asset": asset, "max_leverage": max_leverage });
+            (action, "perp_set_leverage", params)
+        })
+        .await
+    }
+
+    /// Set a market's three fee legs under the typed scheme.
+    ///
+    /// The taker and maker legs are DECI-bps; the deployer leg is WHOLE bps.
+    /// The signer signs the three legs, not the node's packing of them.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_fee_tier_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        taker_fee_dbps: u32,
+        maker_fee_dbps: u32,
+        deployer_fee_bps: u32,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PerpSetFeeTier {
+                metaflux_chain: chain,
+                asset,
+                taker_fee_dbps,
+                maker_fee_dbps,
+                deployer_fee_bps,
+                nonce,
+            };
+            let params = json!({
+                "asset": asset,
+                "taker_fee_dbps": taker_fee_dbps,
+                "maker_fee_dbps": maker_fee_dbps,
+                "deployer_fee_bps": deployer_fee_bps,
+            });
+            (action, "perp_set_fee_tier", params)
+        })
+        .await
+    }
+
+    /// Set a market's maker rebate under the typed scheme.
+    ///
+    /// `rebate_bps` is WHOLE bps, unlike the fee-tier legs.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_maker_rebate_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        rebate_bps: u16,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PerpSetMakerRebate {
+                metaflux_chain: chain,
+                asset,
+                rebate_bps,
+                nonce,
+            };
+            let params = json!({ "asset": asset, "rebate_bps": rebate_bps });
+            (action, "perp_set_maker_rebate", params)
+        })
+        .await
+    }
+
+    /// Set a market's minimum order size under the typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_min_size_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        min_order_size: u64,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PerpSetMinSize {
+                metaflux_chain: chain,
+                asset,
+                min_order_size,
+                nonce,
+            };
+            let params = json!({ "asset": asset, "min_order_size": min_order_size });
+            (action, "perp_set_min_size", params)
+        })
+        .await
+    }
+
+    /// Open a market to trading under the typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_activate_market_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PerpActivateMarket {
+                metaflux_chain: chain,
+                asset,
+                nonce,
+            };
+            (action, "perp_activate_market", json!({ "asset": asset }))
+        })
+        .await
+    }
+
+    /// Close a market to new orders under the typed scheme.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_deactivate_market_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PerpDeactivateMarket {
+                metaflux_chain: chain,
+                asset,
+                nonce,
+            };
+            (action, "perp_deactivate_market", json!({ "asset": asset }))
+        })
+        .await
+    }
+
+    /// Add or remove one delegated deployer under the typed scheme.
+    ///
+    /// The delegate and the direction are both signed, so neither can be
+    /// re-targeted nor flipped under a replayed signature.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_sub_deployers_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        sub_deployer: crate::wallet::Address,
+        add: bool,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PerpSetSubDeployers {
+                metaflux_chain: chain,
+                asset,
+                sub_deployer,
+                add,
+                nonce,
+            };
+            let params = json!({
+                "asset": asset,
+                "sub_deployer": sub_deployer,
+                "add": add,
+            });
+            (action, "perp_set_sub_deployers", params)
+        })
+        .await
+    }
+
     /// Sign + POST a structured (typed-scheme) action.
     ///
     /// The closure is handed the chain tag and a fresh nonce; it returns the

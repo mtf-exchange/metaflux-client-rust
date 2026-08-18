@@ -1,5 +1,18 @@
 //! Typed MIP-3 deployment params + per-step `Action` variants.
 //!
+//! # DEPRECATED — use the typed perp and spot deployer methods instead.
+//!
+//! **The action names in this module do not exist on the chain.** It emits
+//! `set_fees`, `set_min_order_size`, `set_funding_params` and
+//! `register_market`, keyed by `asset_name`; the chain accepts nine perp
+//! actions keyed by asset id, and it answers `unknown variant` to these. It
+//! also submits an opaque digest that the node refuses at decode.
+//!
+//! The reachable lane is `Client::exchange().perp_*_typed()` and
+//! `spot_*_typed()`, whose type strings are pinned against the chain's own
+//! vectors. This module stays only so a caller pinned to an older version
+//! still compiles; it will be removed.
+//!
 //! MIP-3 (MetaFlux Improvement Proposal #3) lets any builder deploy a new
 //! perp or spot market via a gas-auction credit + a sequence of signed
 //! `perpDeploy` / `spotDeploy` sub-actions. This module mirrors the L1's

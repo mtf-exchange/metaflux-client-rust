@@ -45,6 +45,10 @@ use crate::types::{
         BatchCancel, BatchModify, BatchOrder, CancelAllOrders, CancelByCloid, CancelOrder, Modify,
         Order, OrderResponse, ScheduleCancel, TimeInForce,
     },
+    perp::{
+        PerpActivateMarket, PerpDeactivateMarket, PerpRegisterAsset, PerpSetFeeTier,
+        PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOracle, PerpSetSubDeployers,
+    },
     rfq::{RfqAccept, RfqRequest},
     scale::{CancelScaleParams, ScaleDist, ScaleParams},
     spot::{
@@ -1436,14 +1440,144 @@ impl<'a> Exchange<'a> {
             .await
     }
 
+    // --- MIP-3 perp deployer lane ---
+
+    /// Allocate a fresh perp market.
+    ///
+    /// Sender-authorized: the signer is the deployer. The node assigns the asset
+    /// id; read it back from `/info` before sending any of the eight actions
+    /// below, since each targets an id and not a symbol.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_register_asset(
+        &self,
+        wallet: &Wallet,
+        params: &PerpRegisterAsset,
+    ) -> Result<Value, ClientError> {
+        self.perp_register_asset_typed(wallet, params.symbol.clone(), params.decimals)
+            .await
+    }
+
+    /// Bind a market's enabled oracle-source subset.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_oracle(
+        &self,
+        wallet: &Wallet,
+        params: &PerpSetOracle,
+    ) -> Result<Value, ClientError> {
+        self.perp_set_oracle_typed(wallet, params.asset, params.oracle_source_mask)
+            .await
+    }
+
+    /// Set a market's max leverage.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_leverage(
+        &self,
+        wallet: &Wallet,
+        params: &PerpSetLeverage,
+    ) -> Result<Value, ClientError> {
+        self.perp_set_leverage_typed(wallet, params.asset, params.max_leverage)
+            .await
+    }
+
+    /// Set a market's three fee legs.
+    ///
+    /// The taker and maker legs are DECI-bps; the deployer leg is WHOLE bps.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_fee_tier(
+        &self,
+        wallet: &Wallet,
+        params: &PerpSetFeeTier,
+    ) -> Result<Value, ClientError> {
+        self.perp_set_fee_tier_typed(
+            wallet,
+            params.asset,
+            params.taker_fee_dbps,
+            params.maker_fee_dbps,
+            params.deployer_fee_bps,
+        )
+        .await
+    }
+
+    /// Set a market's maker rebate, in WHOLE bps.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_maker_rebate(
+        &self,
+        wallet: &Wallet,
+        params: &PerpSetMakerRebate,
+    ) -> Result<Value, ClientError> {
+        self.perp_set_maker_rebate_typed(wallet, params.asset, params.rebate_bps)
+            .await
+    }
+
+    /// Set a market's minimum order size.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_min_size(
+        &self,
+        wallet: &Wallet,
+        params: &PerpSetMinSize,
+    ) -> Result<Value, ClientError> {
+        self.perp_set_min_size_typed(wallet, params.asset, params.min_order_size)
+            .await
+    }
+
+    /// Open a market to trading.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_activate_market(
+        &self,
+        wallet: &Wallet,
+        params: &PerpActivateMarket,
+    ) -> Result<Value, ClientError> {
+        self.perp_activate_market_typed(wallet, params.asset).await
+    }
+
+    /// Close a market to new orders.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_deactivate_market(
+        &self,
+        wallet: &Wallet,
+        params: &PerpDeactivateMarket,
+    ) -> Result<Value, ClientError> {
+        self.perp_deactivate_market_typed(wallet, params.asset)
+            .await
+    }
+
+    /// Add or remove one delegated deployer on a market.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_sub_deployers(
+        &self,
+        wallet: &Wallet,
+        params: &PerpSetSubDeployers,
+    ) -> Result<Value, ClientError> {
+        self.perp_set_sub_deployers_typed(wallet, params.asset, params.sub_deployer, params.add)
+            .await
+    }
+
     // --- Legacy opaque MIP-3 deploy lane ---
 
     /// Sign + POST a MIP-3 deploy-lane action under the LEGACY opaque
     /// `MetaFluxAction(string action,uint64 nonce)` digest.
     ///
-    /// This is the ONE remaining opaque path. It exists ONLY for the MIP-3
-    /// deploy actions (`submit_gas_auction_bid` / `perp_deploy` / `spot_deploy`),
-    /// which have no typed-scheme variant. Do NOT use it for standard trading /
+    /// This is the ONE remaining opaque path, and it reaches nothing: the perp
+    /// and spot deployer lanes both have typed-scheme methods in this module,
+    /// and the node refuses this digest. Do NOT use it for standard trading /
     /// account actions — those sign the structured [`crate::wallet::TypedAction`]
     /// digest through the dedicated methods in this module.
     ///
