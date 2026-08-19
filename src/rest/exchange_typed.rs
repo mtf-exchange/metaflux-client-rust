@@ -1354,6 +1354,28 @@ impl<'a> Exchange<'a> {
         .await
     }
 
+    /// Burn one envelope nonce with the `noop` tag under the typed scheme.
+    ///
+    /// The handler touches no state. Use it as a keepalive, or to close a nonce
+    /// gap: once a `noop` commits at nonce `N`, any other in-flight action
+    /// signed with nonce `N` can no longer commit.
+    ///
+    /// Sender-authorized, and effectively master only: the chain does not permit
+    /// an agent wallet to sign it. The POST carries no `params` key.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn noop_typed(&self, wallet: &Wallet) -> Result<Value, ClientError> {
+        self.post_signed_typed_raw(wallet, |chain, nonce| {
+            let action = TypedAction::Noop {
+                metaflux_chain: chain,
+                nonce,
+            };
+            (action, json!({ "type": "noop" }))
+        })
+        .await
+    }
+
     /// Open an RFQ session as a taker via the `rfq_request` tag under the typed
     /// scheme.
     ///
@@ -1907,6 +1929,10 @@ impl<'a> Exchange<'a> {
     /// Allocate a fresh perp market under the typed scheme.
     ///
     /// `decimals` of `0` selects the node default of 8, not zero decimals.
+    ///
+    /// **This lane is not live yet.** The chain answers `unknown variant` to all
+    /// nine deploy actions until the release that carries them. See
+    /// [`crate::types::perp`].
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

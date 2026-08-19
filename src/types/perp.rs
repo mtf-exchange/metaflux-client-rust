@@ -16,6 +16,13 @@
 //! { "type": "perp_set_leverage", "params": { "asset": 1001, "max_leverage": 20 } }
 //! ```
 //!
+//! ## Not live yet
+//!
+//! These nine actions are built and frozen in the chain, but no release carries
+//! them yet. The chain answers `unknown variant` until one does — the same error
+//! a nonexistent action gets. Build and sign against them now; do not expect a
+//! call to succeed before that release.
+//!
 //! ## No `bid` field
 //!
 //! The legacy gas-auction outbid lane is dead. The node rejects a non-zero bid,

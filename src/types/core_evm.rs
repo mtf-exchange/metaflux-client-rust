@@ -122,13 +122,6 @@ impl CoreEvmTransfer {
 /// lane. The fee is **zero today**, and the chain refuses the transfer rather than
 /// guess when the MTF reference price is unusable — see
 /// [the fee rules](self#the-core-to-evm-fee).
-///
-/// # Not live yet
-///
-/// The deployed exchange still answers `sendToEvmWithData is retired; use
-/// coreEvmTransfer` with a 400. This type and its signing path ship ahead of that,
-/// so a signature built today is correct and the request is refused until the next
-/// exchange release. Use [`CoreEvmTransfer`] in the meantime.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SendToEvmWithData {

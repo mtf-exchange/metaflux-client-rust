@@ -461,6 +461,16 @@ fn w1_micro_typed_kat_vectors_match_pinned_digests() {
         "3cc62ef670c2f4276cd3aad36c3c073173bd3fd215f797af25f67ed7cc945d86",
         "FbaSubmit digest drift vs node"
     );
+
+    let noop = TypedAction::Noop {
+        metaflux_chain: "Testnet".into(),
+        nonce: 57,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&noop)),
+        "64c8dcfe04b60e572df9b22536e82c46020d6953a36a3a5619307b0ef1fb1a1b",
+        "Noop digest drift vs node"
+    );
 }
 
 /// (1f) The P1 additions (`vault_distribute` / `claim_builder_rewards` /
@@ -834,6 +844,10 @@ fn every_typed_action_signs_and_recovers() {
             stp_group: 5,
             nonce: 43,
         },
+        TypedAction::Noop {
+            metaflux_chain: chain.clone(),
+            nonce: 44,
+        },
         TypedAction::VaultDistribute {
             metaflux_chain: chain.clone(),
             vault_id: 42,
@@ -1003,7 +1017,7 @@ fn every_typed_action_signs_and_recovers() {
             nonce: 44,
         },
     ];
-    assert_eq!(actions.len(), 65, "all 65 reachable typed actions covered");
+    assert_eq!(actions.len(), 66, "all 66 reachable typed actions covered");
 
     for action in &actions {
         let digest = _typed_digest_for_test(action);

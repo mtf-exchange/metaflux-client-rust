@@ -106,6 +106,9 @@ pub(crate) const RFQ_QUOTE_WITH_OWNER_TYPE: &[u8] =
 /// flattens to a presence `bool` + value (`0` when absent).
 pub(crate) const FBA_SUBMIT_TYPE: &[u8] =
     b"MetaFluxTransaction:FbaSubmit(string metafluxChain,uint32 market,uint8 side,uint64 size,uint64 price,bool hasStpGroup,uint64 stpGroup,uint64 nonce)";
+/// `MetaFluxTransaction:Noop` // CONSENSUS-FROZEN. The chain tag and the
+/// envelope nonce are the only signed fields.
+pub(crate) const NOOP_TYPE: &[u8] = b"MetaFluxTransaction:Noop(string metafluxChain,uint64 nonce)";
 
 // ===== encodeData builders (called by `TypedAction::encode_data`) =====
 
@@ -453,4 +456,9 @@ pub(crate) fn fba_submit_words(
         enc_u64(stp_group),
         enc_u64(nonce),
     ]
+}
+
+/// `Noop` words — the chain tag and the envelope nonce only.
+pub(crate) fn noop_words(chain: &str, nonce: u64) -> Vec<[u8; 32]> {
+    vec![enc_string(chain), enc_u64(nonce)]
 }

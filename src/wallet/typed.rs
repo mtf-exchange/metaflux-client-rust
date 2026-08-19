@@ -960,6 +960,21 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `Noop(string metafluxChain,uint64 nonce)`
+    ///
+    /// A deliberate no-op. The handler touches no state, so the only effect is
+    /// burning the envelope nonce. Use it as a keepalive, or to close a nonce
+    /// gap: a committed `noop` at nonce `N` invalidates any other in-flight
+    /// action signed with nonce `N`.
+    ///
+    /// Sender-authorized, and effectively master only: the chain does not
+    /// permit an agent wallet to sign it. The wire action carries no `params`.
+    Noop {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
     /// `BorrowLend(string metafluxChain,uint8 kind,string amount,uint64 nonce)`
     ///
     /// Lend / un-lend / borrow / repay against the BOLE pool. `kind` is the
@@ -1244,6 +1259,7 @@ impl TypedAction {
             TypedAction::RfqRequest { .. } => account::RFQ_REQUEST_TYPE,
             TypedAction::RfqAccept { .. } => account::RFQ_ACCEPT_TYPE,
             TypedAction::FbaSubmit { .. } => account::FBA_SUBMIT_TYPE,
+            TypedAction::Noop { .. } => account::NOOP_TYPE,
             TypedAction::VaultDistribute { .. } => VAULT_DISTRIBUTE_TYPE,
             TypedAction::ClaimBuilderRewards { .. } => CLAIM_BUILDER_REWARDS_TYPE,
             TypedAction::ClaimReferralRewards { .. } => CLAIM_REFERRAL_REWARDS_TYPE,
@@ -1829,6 +1845,10 @@ impl TypedAction {
                 *stp_group,
                 *nonce,
             ),
+            TypedAction::Noop {
+                metaflux_chain,
+                nonce,
+            } => account::noop_words(metaflux_chain, *nonce),
             TypedAction::VaultDistribute {
                 metaflux_chain,
                 vault_id,

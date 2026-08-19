@@ -1475,3 +1475,30 @@ async fn perp_set_sub_deployers_signs_the_posted_delegate() {
         wallet.address()
     );
 }
+
+#[tokio::test]
+async fn noop_posts_a_bare_tag_and_signs_the_chain_and_nonce() {
+    // The chain's wire form carries no `params` key. Sending one is an unknown
+    // field, so the shape matters as much as the digest.
+    let (client, captor, wallet) = capturing_exchange().await;
+    let _: Value = client.exchange().noop_typed(&wallet).await.unwrap();
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("noop"));
+    assert!(
+        action.get("params").is_none(),
+        "noop must post no params key"
+    );
+
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _typed_digest_for_test(&TypedAction::Noop {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        nonce,
+    });
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(
+        _recover_for_test(&digest, &sig).expect("recover"),
+        wallet.address()
+    );
+}
