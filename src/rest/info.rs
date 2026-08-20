@@ -23,6 +23,15 @@
 //! - **Static / misc** — [`Info::node_info`], [`Info::spot_meta`],
 //!   [`Info::fee_schedule`], [`Info::vault_state`], [`Info::rfq_open`],
 //!   [`Info::encode_action`].
+//! - **Bridge reads** — [`Info::bridge_chain_configs`],
+//!   [`Info::bridge_user_outbox`].
+
+mod bridge;
+
+pub use bridge::{
+    BridgeChainConfigRow, BridgeChainConfigs, BridgeOutboxEntry, BridgeOutboxStatus,
+    BridgeScanPolicy, BridgeUserOutbox,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
