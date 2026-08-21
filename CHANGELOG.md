@@ -5,6 +5,26 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
+## [Unreleased]
+
+### Added
+
+- `Info::gossip_root_ips` and the `GossipRootIps` / `AdvertisedPeer` types. The
+  read returns the nodes a deployment advertises for peer discovery: id, the
+  three public endpoints, and the peer's public key. The fields map one-to-one
+  onto a joining node's own peer config, so a row is copied and dialed.
+
+  A node that advertises nothing is ABSENT from the rows. There is no fallback
+  to a node's internal dial list, so an empty `peers` is the honest answer for a
+  deployment that advertises nothing.
+
+  The read was previously reachable only through the raw `Value` escape hatch.
+
+  **Not live yet.** The node release that serves this shape has not fired.
+  Against an older node the decode fails on the missing `peers` field. That is
+  deliberate: a silent empty roster is indistinguishable from a deployment that
+  advertises nothing.
+
 ## [0.20.0] — 2026-08-18
 
 **0.19.0 was tagged on 2026-08-09 and never published.** Its release run failed because

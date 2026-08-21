@@ -25,13 +25,16 @@
 //!   [`Info::encode_action`].
 //! - **Bridge reads** — [`Info::bridge_chain_configs`],
 //!   [`Info::bridge_user_outbox`].
+//! - **Peer discovery** — [`Info::gossip_root_ips`].
 
 mod bridge;
+mod discovery;
 
 pub use bridge::{
     BridgeChainConfigRow, BridgeChainConfigs, BridgeOutboxEntry, BridgeOutboxStatus,
     BridgeScanPolicy, BridgeUserOutbox,
 };
+pub use discovery::{AdvertisedPeer, GossipRootIps};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
