@@ -765,16 +765,19 @@ impl AccountState {
 
 /// EVM-side contract binding for a registered token.
 ///
-/// Present on a [`SpotToken`] / [`PerpUnderlyingToken`] when the token has a
-/// deployed EVM contract; the node emits it as an OBJECT (not a bare address
-/// string). `evm_extra_wei_decimals` is the SIGNED decimal offset between the
-/// token's native `wei_decimals` and its EVM ERC-20 decimals (can be negative).
+/// Present on a [`SpotToken`] / [`PerpUnderlyingToken`] when the token BINDS an
+/// EVM contract; the node emits it as an OBJECT (not a bare address string).
+///
+/// `address` is the bound contract a Core-to-EVM transfer credits. A contract a
+/// deployer merely declared at `register_token` is never served.
+/// `evm_extra_wei_decimals` is that declared value, signed. It does NOT change a
+/// credit: a credit lands in the token's `wei_decimals`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TokenEvmContract {
     /// EVM contract address (`0x`-hex, 20 bytes).
     pub address: String,
-    /// Signed decimal offset (native `wei_decimals` → EVM ERC-20 decimals).
+    /// Deployer-declared signed offset. Metadata only — see the type doc.
     pub evm_extra_wei_decimals: i32,
 }
 
