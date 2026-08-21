@@ -2157,6 +2157,38 @@ impl<'a> Exchange<'a> {
         .await
     }
 
+    /// Push a MIP-3 market's index px under the typed scheme.
+    ///
+    /// `px` is a WHOLE-USDC decimal string, not the 1e8 book plane. The exact
+    /// bytes given here are hashed AND posted, so the node verifies the same
+    /// spelling the wallet signed.
+    ///
+    /// **Not live yet.** The node refuses the push with `mip3_deployer_oracle
+    /// feature not active` until governance arms the feature. See
+    /// [`crate::types::perp::Mip3SetOraclePx`].
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn mip3_set_oracle_px_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        px: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        let px = px.into();
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::Mip3SetOraclePx {
+                metaflux_chain: chain,
+                asset,
+                px: px.clone(),
+                nonce,
+            };
+            let params = json!({ "asset": asset, "px": px.clone() });
+            (action, "mip3_set_oracle_px", params)
+        })
+        .await
+    }
+
     /// Sign + POST a structured (typed-scheme) action.
     ///
     /// The closure is handed the chain tag and a fresh nonce; it returns the

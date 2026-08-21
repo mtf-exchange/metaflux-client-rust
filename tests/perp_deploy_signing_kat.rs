@@ -1,8 +1,10 @@
-//! The nine MIP-3 perp-deployer signing strings, pinned by digest.
+//! The ten MIP-3 perp-deployer signing strings, pinned by digest.
 //!
 //! `perp_deploy` is an internal handler name. A caller never sends it. It sends
 //! one of NINE distinct typed actions, each with its own frozen EIP-712 string.
-//! Every client that builds one must reproduce the digest byte-for-byte.
+//! `mip3_set_oracle_px` is the tenth deployer action — the repeating index-px
+//! push, on its own frozen string. Every client that builds one must reproduce
+//! the digest byte-for-byte.
 //!
 //! The fixture table and the expected hex below are COPIED from the chain's own
 //! cross-language vector set (domain chain 114514 = `"Testnet"`). They are not
@@ -22,7 +24,7 @@ fn addr(b: u8) -> Address {
 }
 
 #[test]
-fn the_nine_perp_deploy_signing_strings_keep_their_digests() {
+fn the_ten_perp_deployer_signing_strings_keep_their_digests() {
     let cases: Vec<(&str, TypedAction, &str)> = vec![
         (
             "perp_register_asset",
@@ -115,9 +117,19 @@ fn the_nine_perp_deploy_signing_strings_keep_their_digests() {
             },
             "6e39d36bdd1f80375e71c3609d10ee15ad030004d3c41c246fcfbcb93df6750d",
         ),
+        (
+            "mip3_set_oracle_px",
+            TypedAction::Mip3SetOraclePx {
+                metaflux_chain: CHAIN.to_string(),
+                asset: 42,
+                px: "1250.500001".to_string(),
+                nonce: 210,
+            },
+            "b927bb6c255ba92dee601d083e13779abee1b42e527e29f2b944dbf7c2ac56b6",
+        ),
     ];
 
-    assert_eq!(cases.len(), 9, "all nine perp deploy actions covered");
+    assert_eq!(cases.len(), 10, "all ten perp deployer actions covered");
     for (label, action, want) in &cases {
         assert_eq!(
             &hex::encode(_typed_digest_for_test(action)),
@@ -125,6 +137,33 @@ fn the_nine_perp_deploy_signing_strings_keep_their_digests() {
             "{label} digest drifted from the node vector"
         );
     }
+}
+
+/// The px is hashed VERBATIM, so two spellings of ONE price are two digests.
+/// A client that re-formats the string after signing sends an unsigned push.
+#[test]
+fn the_oracle_px_spelling_is_part_of_the_signature() {
+    let build = |px: &str| TypedAction::Mip3SetOraclePx {
+        metaflux_chain: CHAIN.to_string(),
+        asset: 42,
+        px: px.to_string(),
+        nonce: 210,
+    };
+    assert_ne!(
+        _typed_digest_for_test(&build("1250.500001")),
+        _typed_digest_for_test(&build("1250.5000010")),
+        "a trailing zero must move the digest"
+    );
+    assert_ne!(
+        _typed_digest_for_test(&build("1250.500001")),
+        _typed_digest_for_test(&TypedAction::Mip3SetOraclePx {
+            metaflux_chain: CHAIN.to_string(),
+            asset: 43,
+            px: "1250.500001".to_string(),
+            nonce: 210,
+        }),
+        "re-targeting the market must move the digest"
+    );
 }
 
 /// Activate and deactivate carry the SAME three fields. Only the type string

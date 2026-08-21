@@ -251,6 +251,12 @@ const PERP_DEACTIVATE_MARKET_TYPE: &[u8] =
 const PERP_SET_SUB_DEPLOYERS_TYPE: &[u8] =
     b"MetaFluxTransaction:PerpSetSubDeployers(string metafluxChain,uint32 asset,address subDeployer,bool add,uint64 nonce)";
 
+// The tenth MIP-3 deployer action: the repeating index-px push. `asset` and the
+// VERBATIM `px` string both sit inside the digest, so a relay can neither
+// reprice a push nor re-target it at another market.
+const MIP3_SET_ORACLE_PX_TYPE: &[u8] =
+    b"MetaFluxTransaction:Mip3SetOraclePx(string metafluxChain,uint32 asset,string px,uint64 nonce)";
+
 // ===== TypedAction =====
 
 /// One wallet-signed action per variant, carrying exactly its EIP-712 fields in
@@ -1203,6 +1209,21 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `Mip3SetOraclePx(string metafluxChain,uint32 asset,string px,uint64 nonce)`
+    ///
+    /// `asset` and the verbatim `px` string are both IN the digest, so a relay
+    /// can neither reprice the push nor re-target another market with it.
+    Mip3SetOraclePx {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// The MIP-3 market whose index px is pushed.
+        asset: u32,
+        /// The pushed index px — the RAW wire decimal string, hashed verbatim.
+        /// Never a parsed number: the node signs the spelling.
+        px: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
 }
 
 impl TypedAction {
@@ -1284,6 +1305,7 @@ impl TypedAction {
             TypedAction::PerpActivateMarket { .. } => PERP_ACTIVATE_MARKET_TYPE,
             TypedAction::PerpDeactivateMarket { .. } => PERP_DEACTIVATE_MARKET_TYPE,
             TypedAction::PerpSetSubDeployers { .. } => PERP_SET_SUB_DEPLOYERS_TYPE,
+            TypedAction::Mip3SetOraclePx { .. } => MIP3_SET_ORACLE_PX_TYPE,
         }
     }
 
@@ -2098,6 +2120,17 @@ impl TypedAction {
                 enc_u32(*asset),
                 enc_addr(sub_deployer),
                 enc_bool(*add),
+                enc_u64(*nonce),
+            ],
+            TypedAction::Mip3SetOraclePx {
+                metaflux_chain,
+                asset,
+                px,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_string(px),
                 enc_u64(*nonce),
             ],
         }

@@ -46,8 +46,9 @@ use crate::types::{
         Order, OrderResponse, ScheduleCancel, TimeInForce,
     },
     perp::{
-        PerpActivateMarket, PerpDeactivateMarket, PerpRegisterAsset, PerpSetFeeTier,
-        PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOracle, PerpSetSubDeployers,
+        Mip3SetOraclePx, PerpActivateMarket, PerpDeactivateMarket, PerpRegisterAsset,
+        PerpSetFeeTier, PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOracle,
+        PerpSetSubDeployers,
     },
     rfq::{RfqAccept, RfqRequest},
     scale::{CancelScaleParams, ScaleDist, ScaleParams},
@@ -1567,6 +1568,23 @@ impl<'a> Exchange<'a> {
         params: &PerpSetSubDeployers,
     ) -> Result<Value, ClientError> {
         self.perp_set_sub_deployers_typed(wallet, params.asset, params.sub_deployer, params.add)
+            .await
+    }
+
+    /// Push a MIP-3 market's index px from its deployer oracle.
+    ///
+    /// **Not live yet.** The node refuses the push with `mip3_deployer_oracle
+    /// feature not active` until governance arms the feature. See
+    /// [`Mip3SetOraclePx`] for what the first push does to open positions.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn mip3_set_oracle_px(
+        &self,
+        wallet: &Wallet,
+        params: &Mip3SetOraclePx,
+    ) -> Result<Value, ClientError> {
+        self.mip3_set_oracle_px_typed(wallet, params.asset, params.px.clone())
             .await
     }
 

@@ -1,4 +1,5 @@
-//! MIP-3 perp deployer types — the nine `perp_*` deploy actions (`/exchange`).
+//! MIP-3 perp deployer types — the nine `perp_*` deploy actions and the
+//! deployer-oracle push (`/exchange`).
 //!
 //! Nine sender-authorized actions build a perp market. The signer IS the
 //! deployer, so no action carries an `owner`. `perp_deploy` is a node-internal
@@ -9,6 +10,11 @@
 //! leverage, fees, the maker rebate and the min size, then activate the market.
 //! [`PerpSetSubDeployers`] delegates the lane to another address, and
 //! [`PerpDeactivateMarket`] closes the market to new orders.
+//!
+//! [`Mip3SetOraclePx`] is the tenth action and the only repeating one. A market
+//! may run its OWN index feed instead of the venue-weighted median; the
+//! deployer then pushes every price. It rides a SEPARATE fork feature from the
+//! nine, so read its doc before you build against it.
 //!
 //! Wire shape (MTF-native, snake_case):
 //!
@@ -22,6 +28,10 @@
 //! them yet. The chain answers `unknown variant` until one does — the same error
 //! a nonexistent action gets. Build and sign against them now; do not expect a
 //! call to succeed before that release.
+//!
+//! [`Mip3SetOraclePx`] is not live either, and it fails DIFFERENTLY. The node
+//! knows the action and refuses it with `mip3_deployer_oracle feature not
+//! active`, because governance has not armed that fork feature.
 //!
 //! ## No `bid` field
 //!
@@ -150,6 +160,35 @@ pub struct PerpSetSubDeployers {
     pub add: bool,
 }
 
+/// Push the market's index px (`mip3_set_oracle_px`, the deployer oracle).
+///
+/// **NOT LIVE YET.** The action sits behind the `mip3_deployer_oracle` fork
+/// feature and governance has not armed it. The node refuses every push with
+/// `mip3_deployer_oracle feature not active` until a stake vote arms it.
+///
+/// Only the market's deployer or a registered sub-deployer may sign one. No
+/// relay and no system sender can inject one.
+///
+/// The feed is load-bearing, not advisory. Once the feature is armed:
+///
+/// - The FIRST push force-migrates every existing cross leg on the market to
+///   strict-isolated margin, and every later leg opens strict-isolated.
+/// - A feed that goes stale flips the market reduce-only: opens are refused and
+///   closes always pass. Push faster than the staleness window.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Mip3SetOraclePx {
+    /// Target market asset id.
+    pub asset: u32,
+    /// The pushed index px, as a WHOLE-USDC decimal string — never the 1e8
+    /// book plane.
+    ///
+    /// The node hashes this string VERBATIM, so the signature covers the
+    /// SPELLING and not the value: `"1250.5"` and `"1250.50"` are one price and
+    /// two digests. Build the string once, then sign and send the same bytes.
+    pub px: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +252,25 @@ mod tests {
         );
         assert_eq!(j["add"], serde_json::json!(true));
         assert_eq!(s, serde_json::from_value(j).unwrap());
+    }
+
+    /// The px must reach the wire as the SAME string the wallet signed. A
+    /// number here would respell the value and unsign the push.
+    #[test]
+    fn oracle_px_rides_as_a_verbatim_string() {
+        let p = Mip3SetOraclePx {
+            asset: 42,
+            px: "1250.500001".into(),
+        };
+        let j = serde_json::to_value(&p).unwrap();
+        assert_eq!(j["px"], serde_json::json!("1250.500001"));
+        assert!(j["px"].is_string(), "px must not degrade to a number");
+        assert_eq!(p, serde_json::from_value(j).unwrap());
+
+        let trailing = Mip3SetOraclePx {
+            asset: 42,
+            px: "1250.5000010".into(),
+        };
+        assert_ne!(p, trailing, "spelling is part of the payload");
     }
 }

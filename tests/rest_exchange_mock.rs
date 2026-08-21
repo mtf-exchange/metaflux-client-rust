@@ -21,8 +21,8 @@ use metaflux_client::{
             OrderKind, OrderStatus, PositionSide, Side, StpMode, TimeInForce,
         },
         perp::{
-            PerpActivateMarket, PerpDeactivateMarket, PerpRegisterAsset, PerpSetFeeTier,
-            PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOracle,
+            Mip3SetOraclePx, PerpActivateMarket, PerpDeactivateMarket, PerpRegisterAsset,
+            PerpSetFeeTier, PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOracle,
             PerpSetSubDeployers,
         },
         spot::{
@@ -1467,6 +1467,49 @@ async fn perp_set_sub_deployers_signs_the_posted_delegate() {
         asset: 1001,
         sub_deployer,
         add: true,
+        nonce,
+    });
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(
+        _recover_for_test(&digest, &sig).expect("recover"),
+        wallet.address()
+    );
+}
+
+/// The node hashes the px string it is SENT. If the SDK ever re-formatted the
+/// string between signing and posting, every push would fail signer auth, so
+/// pin that the posted px is the exact string the digest covers.
+#[tokio::test]
+async fn mip3_oracle_px_posts_the_exact_string_it_signs() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let px = "1250.500001";
+    let _: Value = client
+        .exchange()
+        .mip3_set_oracle_px(
+            &wallet,
+            &Mip3SetOraclePx {
+                asset: 42,
+                px: px.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("mip3_set_oracle_px"));
+    assert_eq!(action["params"]["asset"], json!(42));
+    assert_eq!(action["params"]["px"], json!(px));
+    assert!(
+        action["params"]["px"].is_string(),
+        "px must ride as a string, never a number"
+    );
+
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _typed_digest_for_test(&TypedAction::Mip3SetOraclePx {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        asset: 42,
+        px: px.to_string(),
         nonce,
     });
     let sig = decode_sig(body["signature"].as_str().unwrap());
