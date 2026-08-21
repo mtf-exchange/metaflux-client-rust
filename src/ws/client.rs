@@ -286,8 +286,11 @@ impl WsClient {
     /// (`"1m"`/`"5m"`/`"15m"`/`"1h"`/`"4h"`/`"1d"`) and one price series.
     ///
     /// The routing key is `(coin, interval, candle_type)`, so two series at the
-    /// same interval are two subscriptions. The executed-trade candle is
-    /// retired; see [`CandleType`](crate::types::candle::CandleType).
+    /// same interval are two subscriptions. All three series are served; see
+    /// [`CandleType`](crate::types::candle::CandleType).
+    ///
+    /// The GATEWAY serves this channel. A node-direct `/ws` mount refuses it as
+    /// an unknown channel — the node does not aggregate OHLCV.
     ///
     /// # Errors
     /// See [`WsClient::subscribe`].

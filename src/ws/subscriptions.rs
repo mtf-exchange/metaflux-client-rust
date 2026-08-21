@@ -87,14 +87,15 @@ pub enum Subscription {
     /// `oracle` at the same interval — are independent subscriptions. The ack
     /// echoes `interval` and `candle_type`.
     ///
-    /// The initial frame is an ARRAY of recent bars, oldest first; every later
-    /// frame is a SINGLE bar object, the current open bar.
+    /// Every frame carries `{snapshot, candles}`. `snapshot: true` is the
+    /// recent history, oldest first; `snapshot: false` is the one bar that
+    /// changed. The frame-level `is_snapshot` stays `false` on this channel.
     Candles {
         /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
         coin: String,
         /// Bar interval token (`1m`/`5m`/`15m`/`1h`/`4h`/`1d`).
         interval: String,
-        /// Price series. The executed-trade candle is retired.
+        /// Price or executed-trade series. All three values are served.
         candle_type: CandleType,
     },
     /// Global `{coin: mid}` snapshot, one per commit.
