@@ -7,7 +7,22 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-08-21
+
 ### Added
+
+- `Client::mip3_set_oracle_px` and the `Mip3SetOraclePx` params type. A MIP-3
+  market deployer can push their market's index price from their own source. The
+  chain has carried the action since its EIP-712 type was frozen, but no client
+  could sign it, so the capability was unreachable from Rust.
+
+  `px` is a decimal STRING and is signed VERBATIM: the exact bytes passed are the
+  bytes hashed and the bytes posted, so a relay can neither reprice a push nor
+  re-target it at another market. Only the market's deployer or a registered
+  sub-deployer may sign one.
+
+  The KAT digest is derived FROM THE NODE. Pinning this SDK against its own
+  output would prove nothing.
 
 - `Info::gossip_root_ips` and the `GossipRootIps` / `AdvertisedPeer` types. The
   read returns the nodes a deployment advertises for peer discovery: id, the
@@ -20,10 +35,23 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
   The read was previously reachable only through the raw `Value` escape hatch.
 
-  **Not live yet.** The node release that serves this shape has not fired.
   Against an older node the decode fails on the missing `peers` field. That is
   deliberate: a silent empty roster is indistinguishable from a deployment that
   advertises nothing.
+
+### Changed
+
+- **Availability claims corrected — they were false.** The deployer actions do
+  NOT answer `unknown variant` on the primary networks; the node knows every
+  tag. And `mip3_deployer_oracle` is ACTIVE FROM GENESIS on a chain that started
+  fresh, so no stake vote will ever arm it there. Only a legacy or unknown
+  network keeps it dormant. Availability is per network: probe one call and read
+  the error.
+
+- The executed-trade candle is NOT retired. `CandleType::ALL` has carried three
+  values for some time while the docs still told callers otherwise. The candle
+  frame doc also described the node's old shape; every frame carries
+  `{snapshot, candles}`, and the frame-level `is_snapshot` stays `false`.
 
 ## [0.20.0] — 2026-08-18
 

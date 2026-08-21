@@ -1,6 +1,6 @@
 [package]
 name = "metaflux"
-version = "0.20.0"
+version = "0.21.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["MTF Exchange contributors"]
@@ -16,4 +16,4 @@ categories = ["api-bindings", "cryptography::cryptocurrencies"]
 [dependencies]
 # Path for local builds, version for crates.io. Publish `metaflux-client`
 # first, then this crate.
-metaflux-client = { path = "..", version = "0.20.0" }
+metaflux-client = { path = "..", version = "0.21.0" }
