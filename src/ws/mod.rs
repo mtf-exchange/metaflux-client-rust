@@ -19,8 +19,9 @@
 //!
 //! Frames hand back a raw [`serde_json::Value`] so a new server field never
 //! breaks an old client. [`WsMessage::as_account_state`],
-//! [`WsMessage::as_open_orders`] and [`WsMessage::as_order_updates`] decode the
-//! account channels into the REST DTOs.
+//! [`WsMessage::as_open_orders`], [`WsMessage::as_order_updates`] and
+//! [`WsMessage::as_ledger_updates`] decode the account channels into typed
+//! records.
 //!
 //! ## Heartbeat
 //!
@@ -33,4 +34,4 @@ mod typed;
 
 pub use client::{WsClient, WsConfig};
 pub use subscriptions::{Subscription, WsFrame, WsMessage};
-pub use typed::{OrderUpdate, WsOrderRow};
+pub use typed::{OrderUpdate, WsLedgerUpdate, WsOrderRow};

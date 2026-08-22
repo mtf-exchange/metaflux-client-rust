@@ -7,6 +7,17 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+### Added
+
+- `WsMessage::as_ledger_updates` and the `WsLedgerUpdate` record. The
+  `ledger_updates` channel was reachable only as a raw `Value`, so every caller
+  wrote its own decoder for a shape the SDK already knew.
+
+  `kind` is a `String`, not an enum, and every field except `kind` and `time` is
+  optional. Two kinds arrive in a later node release — `deposit` for a bridge
+  inbound credit and `liquidation` for a forced-close settlement — and this
+  decoder accepts both today, along with any kind a newer node adds.
+
 ## [0.21.0] — 2026-08-21
 
 ### Added

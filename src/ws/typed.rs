@@ -97,6 +97,78 @@ pub struct OrderUpdate {
     pub time: u64,
 }
 
+/// One `ledger_updates` record — a per-account money movement, read from the
+/// committed block payload. Each frame is an ARRAY of these; the on-subscribe
+/// snapshot is the recent ring, NEWEST first.
+///
+/// `kind` stays a `String` for the same reason [`OrderUpdate::status`] does: the
+/// node adds kinds as it attributes more causes, and a closed enum would reject
+/// a newer server. Known kinds today are `usd_send` / `usd_receive`, `spot_send`
+/// / `spot_receive`, `asset_send` / `asset_receive`, `withdraw`,
+/// `system_credit`, `sub_account_transfer`, `sub_account_spot_transfer` and
+/// `vault_transfer`. `deposit` (a bridge inbound credit) and `liquidation` (a
+/// forced-close settlement) arrive in a later node release.
+///
+/// Only `kind`, `amount` and `time` ride every record; every other field is
+/// per-kind. `amount` is UNSIGNED — read the direction from `kind` — except on
+/// a `liquidation` record, where it is SIGNED (negative on a loss). The gateway
+/// `user_non_funding_ledger_updates` REST read is the other shape: it normalizes
+/// to a signed `delta`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct WsLedgerUpdate {
+    /// Record kind.
+    pub kind: String,
+    /// Whole-token amount moved, decimal string. Unsigned.
+    #[serde(default)]
+    pub amount: Option<String>,
+    /// Record timestamp (unix ms).
+    pub time: u64,
+    /// Token symbol. Absent on the USD-plane kinds (`usd_send` / `usd_receive`).
+    #[serde(default)]
+    pub coin: Option<String>,
+    /// Recipient `0x` address on a send.
+    #[serde(default)]
+    pub destination: Option<String>,
+    /// Sender `0x` address on a receive.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Destination EVM chain id on a `withdraw` through the `Withdraw3` action.
+    #[serde(default)]
+    pub destination_chain_id: Option<u64>,
+    /// Destination chain label on a `withdraw` through the bridge action.
+    #[serde(default)]
+    pub chain: Option<String>,
+    /// Withdraw lane label, e.g. `"metabridge"`.
+    #[serde(default)]
+    pub via: Option<String>,
+    /// Sub-account index on the `sub_account_*` kinds.
+    #[serde(default)]
+    pub sub_index: Option<u32>,
+    /// Vault id on `vault_transfer`.
+    #[serde(default)]
+    pub vault_id: Option<u64>,
+    /// `true` when funds move INTO the sub-account / vault.
+    #[serde(default)]
+    pub deposit: Option<bool>,
+    /// `true` when the asset moves to the perp side.
+    #[serde(default)]
+    pub to_perp: Option<bool>,
+    /// Perp market a `liquidation` record's forced close ran on. Not live yet.
+    #[serde(default)]
+    pub market: Option<String>,
+    /// Forced-close cause on a `liquidation` record, e.g. `"forced_close_full"`.
+    /// Not live yet.
+    #[serde(default)]
+    pub cause: Option<String>,
+    /// Whole-USDC mark a `liquidation` slice was priced from. Absent when the
+    /// market had no usable mark. On a `liquidation` record `amount` is SIGNED
+    /// (negative on a loss) — the one signed exception on this channel. Not
+    /// live yet.
+    #[serde(default)]
+    pub mark_px: Option<String>,
+}
+
 fn wrong_channel(want: &str, got: &WsMessage) -> ClientError {
     use serde::de::Error as _;
     ClientError::Decode(serde_json::Error::custom(format!(
@@ -180,6 +252,21 @@ impl WsMessage {
         match self {
             Self::OrderUpdates(v) => Ok(Vec::<OrderUpdate>::deserialize(v)?),
             other => Err(wrong_channel("order_updates", other)),
+        }
+    }
+
+    /// Decode a `ledger_updates` frame into the typed money-movement records.
+    ///
+    /// The frame is a bare ARRAY. A record whose `kind` this build has never
+    /// seen still decodes — `kind` is a free `String`.
+    ///
+    /// # Errors
+    /// [`ClientError::Decode`] when this is not a `ledger_updates` frame, or
+    /// when the payload does not match `Vec<WsLedgerUpdate>`.
+    pub fn as_ledger_updates(&self) -> Result<Vec<WsLedgerUpdate>, ClientError> {
+        match self {
+            Self::LedgerUpdates(v) => Ok(Vec::<WsLedgerUpdate>::deserialize(v)?),
+            other => Err(wrong_channel("ledger_updates", other)),
         }
     }
 }
@@ -390,6 +477,47 @@ mod tests {
         assert_eq!(recs[0].status, "rejected");
         assert!(recs[0].order.oid.is_none());
         assert_eq!(recs[0].reason.as_deref(), Some("insufficient margin"));
+    }
+
+    /// A `liquidation` record and a kind this build has never seen must BOTH
+    /// decode. The positive control is the third record: an existing kind still
+    /// carries its own optional fields, so the tolerance is not "everything
+    /// became optional and nothing is read".
+    #[test]
+    fn ledger_updates_decode_new_and_unknown_kinds() {
+        let f = WsFrame::from_value(json!({
+            "channel": "ledger_updates",
+            "data": [
+                { "kind": "liquidation", "coin": "USDC", "amount": "-125.5",
+                  "time": 1_785_139_478_030u64 },
+                { "kind": "a_kind_from_a_newer_node", "coin": "USDC",
+                  "amount": "1", "time": 1_785_139_478_031u64 },
+                { "kind": "vault_transfer", "vault_id": 7, "deposit": true,
+                  "amount": "50", "time": 1_785_139_478_032u64 }
+            ]
+        }));
+        let recs = f.message.as_ledger_updates().unwrap();
+        assert_eq!(recs.len(), 3);
+        assert_eq!(recs[0].kind, "liquidation");
+        assert_eq!(recs[0].amount.as_deref(), Some("-125.5"));
+        assert_eq!(recs[1].kind, "a_kind_from_a_newer_node");
+        assert_eq!(recs[2].vault_id, Some(7));
+        assert_eq!(recs[2].deposit, Some(true));
+    }
+
+    /// A `deposit` record arrives with a real `amount` after the bridge-credit
+    /// release, and the record shape does not change.
+    #[test]
+    fn ledger_updates_decode_a_bridge_deposit() {
+        let f = WsFrame::from_value(json!({
+            "channel": "ledger_updates",
+            "data": [{ "kind": "deposit", "coin": "USDC", "amount": "1000",
+                       "time": 1_785_139_478_033u64 }]
+        }));
+        let recs = f.message.as_ledger_updates().unwrap();
+        assert_eq!(recs[0].kind, "deposit");
+        assert_eq!(recs[0].coin.as_deref(), Some("USDC"));
+        assert_eq!(recs[0].amount.as_deref(), Some("1000"));
     }
 
     #[test]
