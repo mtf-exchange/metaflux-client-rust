@@ -66,7 +66,8 @@ pub enum Subscription {
     },
     /// Public trade prints for one market. On subscribe the server sends a
     /// NON-EMPTY snapshot of the bounded recent tape (snapshot rows carry
-    /// `users: null`); subsequent frames are live prints.
+    /// `users: null`); subsequent frames are live prints, whose `users` names
+    /// the AGGRESSOR only. The resting maker is never disclosed.
     Trades {
         /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
         coin: String,
