@@ -1573,8 +1573,9 @@ impl<'a> Exchange<'a> {
 
     /// Push a MIP-3 market's index px from its deployer oracle.
     ///
-    /// **Not live yet.** The node refuses the push with `mip3_deployer_oracle
-    /// feature not active` until governance arms the feature. See
+    /// Gated by the `mip3_deployer_oracle` fork feature, which is ACTIVE FROM
+    /// GENESIS on a fresh chain. A legacy or unknown network answers
+    /// `mip3_deployer_oracle feature not active` until a stake vote arms it. See
     /// [`Mip3SetOraclePx`] for what the first push does to open positions.
     ///
     /// # Errors

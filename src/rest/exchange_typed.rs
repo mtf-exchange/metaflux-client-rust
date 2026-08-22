@@ -1930,9 +1930,9 @@ impl<'a> Exchange<'a> {
     ///
     /// `decimals` of `0` selects the node default of 8, not zero decimals.
     ///
-    /// **This lane is not live yet.** The chain answers `unknown variant` to all
-    /// nine deploy actions until the release that carries them. See
-    /// [`crate::types::perp`].
+    /// Availability is per network. On the primary networks the node knows
+    /// these tags; an unknown action is what gets `unknown variant`. Probe one
+    /// call against your target network. See [`crate::types::perp`].
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -2163,8 +2163,9 @@ impl<'a> Exchange<'a> {
     /// bytes given here are hashed AND posted, so the node verifies the same
     /// spelling the wallet signed.
     ///
-    /// **Not live yet.** The node refuses the push with `mip3_deployer_oracle
-    /// feature not active` until governance arms the feature. See
+    /// Gated by the `mip3_deployer_oracle` fork feature, which is ACTIVE FROM
+    /// GENESIS on a fresh chain. A legacy or unknown network answers
+    /// `mip3_deployer_oracle feature not active` until a stake vote arms it. See
     /// [`crate::types::perp::Mip3SetOraclePx`].
     ///
     /// # Errors

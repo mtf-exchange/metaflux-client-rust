@@ -22,16 +22,19 @@
 //! { "type": "perp_set_leverage", "params": { "asset": 1001, "max_leverage": 20 } }
 //! ```
 //!
-//! ## Not live yet
+//! ## Availability
 //!
-//! These nine actions are built and frozen in the chain, but no release carries
-//! them yet. The chain answers `unknown variant` until one does — the same error
-//! a nonexistent action gets. Build and sign against them now; do not expect a
-//! call to succeed before that release.
+//! Availability is PER NETWORK. Do not assume it — probe one call against your
+//! target network and read the error.
 //!
-//! [`Mip3SetOraclePx`] is not live either, and it fails DIFFERENTLY. The node
-//! knows the action and refuses it with `mip3_deployer_oracle feature not
-//! active`, because governance has not armed that fork feature.
+//! On the primary networks the node knows all ten tags: an unknown action gets
+//! `unknown variant`, and these do not. A malformed one gets a field or
+//! signature error instead, which means the tag resolved.
+//!
+//! [`Mip3SetOraclePx`] additionally sits behind the `mip3_deployer_oracle` fork
+//! feature. That feature is ACTIVE FROM GENESIS on a fresh chain; only a legacy
+//! or unknown network keeps it dormant until a two-thirds stake vote arms it,
+//! and there the node answers `mip3_deployer_oracle feature not active`.
 //!
 //! ## No `bid` field
 //!
@@ -162,14 +165,15 @@ pub struct PerpSetSubDeployers {
 
 /// Push the market's index px (`mip3_set_oracle_px`, the deployer oracle).
 ///
-/// **NOT LIVE YET.** The action sits behind the `mip3_deployer_oracle` fork
-/// feature and governance has not armed it. The node refuses every push with
-/// `mip3_deployer_oracle feature not active` until a stake vote arms it.
+/// The action sits behind the `mip3_deployer_oracle` fork feature, which is
+/// ACTIVE FROM GENESIS on a fresh chain. A legacy or unknown network keeps it
+/// dormant and answers `mip3_deployer_oracle feature not active` until a
+/// two-thirds stake vote arms it. Probe your target network; do not assume.
 ///
 /// Only the market's deployer or a registered sub-deployer may sign one. No
 /// relay and no system sender can inject one.
 ///
-/// The feed is load-bearing, not advisory. Once the feature is armed:
+/// The feed is load-bearing, not advisory. Where the feature is active:
 ///
 /// - The FIRST push force-migrates every existing cross leg on the market to
 ///   strict-isolated margin, and every later leg opens strict-isolated.
