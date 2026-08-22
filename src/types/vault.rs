@@ -36,8 +36,8 @@ pub struct VaultState {
     pub depositor_count: u64,
     /// High-water mark, whole-USDC decimal string.
     pub high_water_mark: String,
-    /// Leader performance fee in bps.
-    pub performance_fee_bps: u16,
+    /// Leader performance fee, whole basis points as a decimal string.
+    pub performance_fee_bps: String,
     /// Follower withdrawal lock DURATION in milliseconds.
     pub lock_period_ms: u64,
     /// Vault strategy class (`"User"` / `"Metaliquidity"`).
@@ -206,7 +206,7 @@ mod tests {
             share_price: "1.000000000000000001".into(),
             depositor_count: 5,
             high_water_mark: "50000".into(),
-            performance_fee_bps: 1000,
+            performance_fee_bps: "1000".into(),
             lock_period_ms: 345_600_000,
             strategy: "Metaliquidity".into(),
         }
@@ -229,7 +229,7 @@ mod tests {
             "share_price": "1.000000000000000001",
             "depositor_count": 5,
             "high_water_mark": "50000",
-            "performance_fee_bps": 1000,
+            "performance_fee_bps": "1000",
             "lock_period_ms": 345_600_000u64,
             "strategy": "Metaliquidity"
         });

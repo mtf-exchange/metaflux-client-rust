@@ -311,9 +311,14 @@ pub struct Trade {
     pub tid: u64,
     /// Block height the trade committed in.
     pub block: u64,
-    /// 0x action hash that produced the fill; empty for systemic prints.
+    /// 0x action hash that produced the fill.
+    ///
+    /// `None` = NOT RECORDED: an archive-served print, whose table stores no
+    /// trace hash. `Some("")` = recorded, and there was no signed taker action
+    /// (a systemic print). The two are different facts, so they get different
+    /// values.
     #[serde(default)]
-    pub hash: String,
+    pub hash: Option<String>,
     /// Trade timestamp (unix ms).
     pub time: u64,
 }
@@ -3789,14 +3794,23 @@ mod tests {
         assert_eq!(t.side, "A");
         assert_eq!(t.tid, 18_232_248_797_686_447_553);
         assert_eq!(t.block, 37697);
-        assert!(t.hash.starts_with("0x"));
-        // A systemic print with no action hash decodes to an empty string.
+        assert!(t.hash.as_deref().is_some_and(|h| h.starts_with("0x")));
+        // The node sends `""` for a systemic print: recorded, and there was no
+        // signed taker action.
         let systemic = serde_json::json!({
             "coin": "BTC", "px": "1", "sz": "1", "side": "B",
-            "tid": 1u64, "block": 1, "time": 1u64
+            "tid": 1u64, "block": 1, "time": 1u64, "hash": ""
         });
         let s: Trade = serde_json::from_value(systemic).unwrap();
-        assert!(s.hash.is_empty());
+        assert_eq!(s.hash.as_deref(), Some(""), "recorded, and there was none");
+        // An archive-served print OMITS the key: the table stores no hash, so
+        // the fact is unknown, not empty.
+        let archived = serde_json::json!({
+            "coin": "BTC", "px": "1", "sz": "1", "side": "B",
+            "tid": 2u64, "block": 1, "time": 1u64
+        });
+        let a: Trade = serde_json::from_value(archived).unwrap();
+        assert_eq!(a.hash, None, "not recorded is not the same as empty");
     }
 
     /// Decode a `predicted_fundings` entry: clamped rate + next boundary.

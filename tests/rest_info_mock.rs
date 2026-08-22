@@ -217,7 +217,7 @@ async fn vault_state_is_keyed_by_address_and_reads_the_human_plane() {
                 "share_price": "1.000000000000000001",
                 "depositor_count": 3,
                 "high_water_mark": "50000",
-                "performance_fee_bps": 1000,
+                "performance_fee_bps": "1000",
                 "lock_period_ms": 345_600_000u64,
                 "strategy": "Metaliquidity"
             }),
@@ -234,7 +234,7 @@ async fn vault_state_is_keyed_by_address_and_reads_the_human_plane() {
     assert_eq!(v.high_water_mark, "50000");
     // Whole USDC per WHOLE share, full precision — no client-side share scaling.
     assert_eq!(v.share_price, "1.000000000000000001");
-    assert_eq!(v.performance_fee_bps, 1000);
+    assert_eq!(v.performance_fee_bps, "1000");
     // A DURATION keeps its `_ms` suffix.
     assert_eq!(v.lock_period_ms, 345_600_000);
     assert_eq!(v.strategy, "Metaliquidity");
@@ -753,7 +753,12 @@ async fn trades_by_time_decodes_symbol_prints() {
     assert_eq!(trades[0].coin, "BTC");
     assert_eq!(trades[0].side, "A");
     assert_eq!(trades[0].tid, 18_232_248_797_686_447_553);
-    assert!(trades[0].hash.starts_with("0x"));
+    assert!(
+        trades[0]
+            .hash
+            .as_deref()
+            .is_some_and(|h| h.starts_with("0x"))
+    );
 }
 
 #[tokio::test]
@@ -1295,7 +1300,7 @@ async fn web_data_decodes_every_facet() {
                         { "vault": "0x00000000000000000000000000000000000000aa",
                           "name": "mlp", "tvl": "50000",
                           "share_price": "1.000000000000000001", "depositor_count": 3,
-                          "high_water_mark": "50000", "performance_fee_bps": 1000,
+                          "high_water_mark": "50000", "performance_fee_bps": "1000",
                           "lock_period_ms": 345_600_000u64, "strategy": "Metaliquidity" }
                     ]
                 },

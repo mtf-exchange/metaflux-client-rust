@@ -134,7 +134,7 @@ pub struct BridgeChainConfigRow {
     /// 32-byte deployment id (`0x` + 64 hex) — the EVM address left-padded.
     pub contract_address: String,
     /// Stake share required to co-sign, in basis points (`6700` = 67%).
-    pub validator_quorum_threshold_bps: u16,
+    pub validator_quorum_threshold_bps: String,
     /// Per-chain replay counter, shared by both directions.
     pub replay_nonce: u64,
     /// Per-chain kill switch. Blocks withdrawals AND deposit attestation.

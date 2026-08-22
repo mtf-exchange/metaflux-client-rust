@@ -7,6 +7,19 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: two read fields change type.** The node serializes every `*_bps`
+  field on the public wire as a JSON string, so `VaultState.performance_fee_bps`
+  and `BridgeChainConfig.validator_quorum_threshold_bps` are now `String`. The
+  value is unchanged; only the type moves. This lands with the node release that
+  makes the change, not before it.
+
+- **Breaking: `Trade.hash` is now `Option<String>`.** An ABSENT hash and an
+  EMPTY hash are different facts and the old `String` collapsed them. `None`
+  means NOT RECORDED — an archive-served print, whose table stores no trace
+  hash. `Some("")` means recorded, and there was no signed taker action.
+
 ### Added
 
 - `WsMessage::as_ledger_updates` and the `WsLedgerUpdate` record. The
