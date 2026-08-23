@@ -199,7 +199,6 @@ impl WsMessage {
             Self::UserTwapSliceFills(_) => "user_twap_slice_fills",
             Self::UserTwapHistory(_) => "user_twap_history",
             Self::AccountState(_) => "account_state",
-            Self::WebData(_) => "web_data",
             Self::SpotMarginState(_) => "spot_margin_state",
             Self::ActiveAssetData(_) => "active_asset_data",
             Self::ExplorerBlock(_) => "explorer_block",

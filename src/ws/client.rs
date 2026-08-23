@@ -357,18 +357,6 @@ impl WsClient {
         self.subscribe(Subscription::AccountState { user }).await
     }
 
-    /// Subscribe to the per-user consolidated account snapshot (vaults /
-    /// staking / sub-accounts / multisig / agents).
-    ///
-    /// # Errors
-    /// See [`WsClient::subscribe`].
-    pub async fn subscribe_web_data(
-        &self,
-        user: crate::wallet::Address,
-    ) -> Result<(), ClientError> {
-        self.subscribe(Subscription::WebData { user }).await
-    }
-
     /// Subscribe to the per-user spot-margin position stream.
     ///
     /// # Errors

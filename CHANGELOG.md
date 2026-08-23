@@ -7,6 +7,18 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+### Removed
+
+- **Breaking: the WS `web_data` channel is retired.** `Subscription::WebData`,
+  `WsMessage::WebData` and `WsClient::subscribe_web_data` are gone. The node
+  refuses a `web_data` subscribe at the next release.
+
+  **The REST `web_data` read is unchanged.** Keep using
+  `client.rest().info().web_data(addr)`; it returns the same `WebData` body the
+  channel pushed. Poll it in place of the push. Every facet also has its own
+  focused read: `user_vault_equities`, `staking_state`, `delegator_summary`,
+  `sub_accounts`, `user_to_multi_sig_signers` and `agents`.
+
 ### Changed
 
 - **Breaking: two read fields change type.** The node serializes every `*_bps`

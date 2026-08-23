@@ -157,13 +157,6 @@ pub enum Subscription {
         /// User `0x` address.
         user: Address,
     },
-    /// Per-account CONSOLIDATED snapshot: vaults, staking, sub-accounts, the
-    /// multisig signer set, and agent wallets. Body identical to the REST
-    /// `web_data` read.
-    WebData {
-        /// User `0x` address.
-        user: Address,
-    },
     /// Per-account spot-margin positions, one per commit. Body identical to the
     /// REST `spot_margin_state` read.
     SpotMarginState {
@@ -257,9 +250,6 @@ pub enum WsMessage {
     /// `account_state` read returns. Decode with
     /// [`WsMessage::as_account_state`].
     AccountState(serde_json::Value),
-    /// Per-account consolidated snapshot (vaults / staking / sub-accounts /
-    /// multisig / agents).
-    WebData(serde_json::Value),
     /// Per-account spot-margin positions.
     SpotMarginState(serde_json::Value),
     /// Per-(user, market) leverage/margin context.
@@ -492,7 +482,6 @@ mod tests {
             "fills",
             "order_updates",
             "account_state",
-            "web_data",
             "spot_margin_state",
             "user_fundings",
             "explorer_block",
@@ -509,16 +498,17 @@ mod tests {
     }
 
     #[test]
-    fn spot_state_channel_is_retired() {
-        // The node dropped the WS `spot_state` channel; a subscribe now answers
-        // an error envelope. Keep the SDK from re-declaring it.
-        let raw = serde_json::json!({ "channel": "spot_state", "data": { "x": 1 } });
-        assert!(serde_json::from_value::<WsMessage>(raw).is_err());
-        let subs = serde_json::to_string(&Subscription::WebData {
-            user: Address::ZERO,
-        })
-        .unwrap();
-        assert!(!subs.contains("spot_state"));
+    fn spot_state_and_web_data_channels_are_retired() {
+        // The node dropped the WS `spot_state` and `web_data` channels; a
+        // subscribe now answers an error envelope. Keep the SDK from
+        // re-declaring either. The REST `web_data` read is unaffected.
+        for chan in ["spot_state", "web_data"] {
+            let raw = serde_json::json!({ "channel": chan, "data": { "x": 1 } });
+            assert!(
+                serde_json::from_value::<WsMessage>(raw).is_err(),
+                "channel {chan} must not decode"
+            );
+        }
     }
 
     #[test]
@@ -549,26 +539,14 @@ mod tests {
     }
 
     #[test]
-    fn new_account_channels_carry_only_user() {
-        for sub in [
-            Subscription::WebData {
-                user: Address::ZERO,
-            },
-            Subscription::SpotMarginState {
-                user: Address::ZERO,
-            },
-        ] {
-            let j = serde_json::to_value(&sub).unwrap();
-            assert!(j.get("user").is_some(), "missing user: {j}");
-            assert!(j.get("coin").is_none());
-        }
-        assert_eq!(
-            serde_json::to_value(Subscription::SpotMarginState {
-                user: Address::ZERO
-            })
-            .unwrap()["type"],
-            "spot_margin_state"
-        );
+    fn spot_margin_state_carries_only_user() {
+        let j = serde_json::to_value(Subscription::SpotMarginState {
+            user: Address::ZERO,
+        })
+        .unwrap();
+        assert!(j.get("user").is_some(), "missing user: {j}");
+        assert!(j.get("coin").is_none());
+        assert_eq!(j["type"], "spot_margin_state");
     }
 
     #[test]
