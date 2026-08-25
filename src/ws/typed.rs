@@ -285,7 +285,7 @@ mod tests {
                 "abstraction": "unified",
                 "account_value": "1250.5",
                 "address": "0xd486e1b74b8ba0b30bff5c1c5c4e0a5f2c1c0a1f",
-                "balances": [{ "asset": 100, "hold": "0", "name": "USDC", "total": "1250.5" }],
+                "balances": [{ "signing_id": 100, "hold": "0", "name": "USDC", "total": "1250.5" }],
                 "clearinghouse_state": { "": { "positions": [{
                     "coin": "BTC",
                     "size": "-1.5",
@@ -326,7 +326,7 @@ mod tests {
         assert_eq!(a.height, 318_172);
         assert_eq!(a.time, 1_785_139_478_032);
         assert!(!a.health_deferred);
-        assert_eq!(a.balances[0].asset, 100);
+        assert_eq!(a.balances[0].signing_id, 100);
         assert_eq!(a.core_positions().len(), 1);
         assert_eq!(a.core_positions()[0].coin, "BTC");
     }

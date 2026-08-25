@@ -445,8 +445,8 @@ async fn account_state_decodes_rich_shape_by_address() {
                     }] }
                 },
                 "balances": [
-                    { "asset": 0, "name": "USDC", "total": "100000000", "hold": "0" },
-                    { "asset": 102, "name": "ETH", "total": "5000000000", "hold": "0" }
+                    { "name": "USDC", "signing_id": 0, "total": "100000000", "hold": "0" },
+                    { "name": "ETH", "signing_id": 102, "total": "5000000000", "hold": "0" }
                 ],
                 "pm_maint_margin": "0",
                 "pm_net_value": "0",
@@ -1025,7 +1025,7 @@ async fn earn_state_with_user_inserts_key_and_decodes_user_fields() {
             "earn_state",
             json!({
                 "pools": [
-                    { "asset": 0u32, "name": "USDC", "total_supplied": "10000", "total_borrowed": "4000",
+                    { "name": "USDC", "signing_id": 0, "total_supplied": "10000", "total_borrowed": "4000",
                       "idle": "6000", "shares_total": "9500", "share_value": "1.0526",
                       "borrow_index": "1.03", "reserve_factor_bps": "1000",
                       "borrow_rate_bps_annual": "550", "reserve_accrued": "12.5",
@@ -1058,7 +1058,7 @@ async fn earn_state_without_user_omits_key() {
             "earn_state",
             json!({
                 "pools": [
-                    { "asset": 0u32, "name": "USDC", "total_supplied": "1", "total_borrowed": "0",
+                    { "name": "USDC", "signing_id": 0, "total_supplied": "1", "total_borrowed": "0",
                       "idle": "1", "shares_total": "1", "share_value": "1",
                       "borrow_index": "1", "reserve_factor_bps": "0",
                       "borrow_rate_bps_annual": "0", "reserve_accrued": "0" }

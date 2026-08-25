@@ -627,10 +627,13 @@ pub struct DexPositions {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TokenBalance {
-    /// Token asset id (USDC = 100).
-    pub asset: u32,
     /// Token symbol (e.g. `"USDC"`), else `asset:<id>`.
     pub name: String,
+    /// The uint32 to put in the `token` field of a signed `spotSend`, and in
+    /// `asset` of an `earnDeposit`. It has no other meaning: every row is keyed
+    /// and joined by `name`.
+    #[serde(default)]
+    pub signing_id: u32,
     /// Total balance (spendable + hold), decimal string.
     pub total: String,
     /// Amount held in escrow by resting orders, decimal string.
@@ -1533,10 +1536,12 @@ pub struct SpotMarginState {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct EarnPool {
-    /// Pool asset id.
-    pub asset: u32,
     /// Pool token symbol (e.g. `"USDC"`), else `asset:<id>`.
     pub name: String,
+    /// The uint32 to put in the `asset` field of a signed `earnDeposit` /
+    /// `earnWithdraw`. It has no other meaning: every row is keyed by `name`.
+    #[serde(default)]
+    pub signing_id: u32,
     /// Total supplied principal, decimal string.
     pub total_supplied: String,
     /// Total borrowed principal, decimal string.
@@ -2700,8 +2705,8 @@ mod tests {
                 }] }
             },
             "balances": [
-                { "asset": 100, "name": "USDC", "total": "100000000", "hold": "0" },
-                { "asset": 102, "name": "ETH", "total": "5000000000", "hold": "1" }
+                { "name": "USDC", "signing_id": 100, "total": "100000000", "hold": "0" },
+                { "name": "ETH", "signing_id": 102, "total": "5000000000", "hold": "1" }
             ],
             "pm_maint_margin": "0",
             "pm_net_value": "0",
@@ -2740,7 +2745,7 @@ mod tests {
 
         // Balances are an ARRAY of token rows; USDC is first.
         assert_eq!(a.balances[0].name, "USDC");
-        assert_eq!(a.balances[0].asset, 100);
+        assert_eq!(a.balances[0].signing_id, 100);
         assert_eq!(a.balances[1].name, "ETH");
         assert_eq!(a.balances[1].hold, "1");
 
@@ -2877,7 +2882,7 @@ mod tests {
         }
         let data = serde_json::json!({
             "perp": [{
-                "coin": "BTC", "asset_id": 0, "kind": "perp", "sz_decimals": 5,
+                "coin": "BTC", "signing_id": 0, "kind": "perp", "sz_decimals": 5,
                 "mark_px": "64000", "oracle_px": "64000", "mid_px": "64000",
                 "mark_source": "oracle_median", "fba_enabled": false,
                 "change_24h": "0", "day_ntl_vlm": "0", "premium": "0", "prev_day_px": "64000",
@@ -2900,7 +2905,7 @@ mod tests {
                 }
             }, {
                 // A perp with NO registered underlying token omits `token` -> None.
-                "coin": "ETH", "asset_id": 1, "kind": "perp", "sz_decimals": 4,
+                "coin": "ETH", "signing_id": 1, "kind": "perp", "sz_decimals": 4,
                 "mark_source": "oracle_median", "fba_enabled": false,
                 "tick_size": "100000", "step_size": "1", "min_order": "1",
                 "max_leverage": 25, "init_margin_ratio": "400", "maint_margin_ratio": "500"
@@ -3026,8 +3031,8 @@ mod tests {
     #[test]
     fn token_balance_carries_optional_avg_entry_px() {
         let rows = serde_json::json!([
-            { "asset": 100, "name": "USDC", "total": "390548", "hold": "390548" },
-            { "asset": 104, "name": "MTF", "total": "10000039.5196599",
+            { "name": "USDC", "signing_id": 100, "total": "390548", "hold": "390548" },
+            { "name": "MTF", "signing_id": 104, "total": "10000039.5196599",
               "hold": "3000000", "avg_entry_px": "412.5" }
         ]);
         let b: Vec<TokenBalance> = serde_json::from_value(rows).unwrap();
@@ -3754,7 +3759,7 @@ mod tests {
     fn earn_state_decodes_with_and_without_user() {
         let data = serde_json::json!({
             "pools": [
-                { "asset": 0u32, "name": "USDC", "total_supplied": "10000", "total_borrowed": "4000",
+                { "name": "USDC", "signing_id": 0u32, "total_supplied": "10000", "total_borrowed": "4000",
                   "idle": "6000", "shares_total": "9500", "share_value": "1.0526",
                   "borrow_index": "1.03", "reserve_factor_bps": "1000",
                   "borrow_rate_bps_annual": "550", "reserve_accrued": "12.5",
@@ -3771,7 +3776,7 @@ mod tests {
         // No user: the per-user fields are absent -> None.
         let no_user = serde_json::json!({
             "pools": [
-                { "asset": 0u32, "name": "USDC", "total_supplied": "1", "total_borrowed": "0",
+                { "name": "USDC", "signing_id": 0u32, "total_supplied": "1", "total_borrowed": "0",
                   "idle": "1", "shares_total": "1", "share_value": "1",
                   "borrow_index": "1", "reserve_factor_bps": "0",
                   "borrow_rate_bps_annual": "0", "reserve_accrued": "0" }
