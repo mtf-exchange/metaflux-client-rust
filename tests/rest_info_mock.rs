@@ -431,7 +431,9 @@ async fn account_state_decodes_rich_shape_by_address() {
                 "address": "0x000000000000000000000000000000000000beef",
                 "account_value": "100000000",
                 "withdrawable": "80000000",
-                "init_margin": "20000000",
+                "total_margin_used": "20000000",
+                "total_raw_usd": "99500000",
+                "total_ntl_pos": "64000",
                 "health": "10000000",
                 "tier": "Safe",
                 "abstraction": "unified",
@@ -468,6 +470,9 @@ async fn account_state_decodes_rich_shape_by_address() {
         .unwrap();
     assert_eq!(a.account_value, "100000000");
     assert_eq!(a.withdrawable, "80000000");
+    assert_eq!(a.total_margin_used, "20000000");
+    assert_eq!(a.total_raw_usd, "99500000");
+    assert_eq!(a.total_ntl_pos.as_deref(), Some("64000"));
     assert_eq!(a.tier, Tier::Safe);
     assert_eq!(a.abstraction, Abstraction::Unified);
     // Positions live under the core dex key `""`.

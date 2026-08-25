@@ -42,6 +42,17 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Changed
 
+- **Breaking: `AccountState` renames its two account-level margin scalars.**
+  `init_margin` is now `total_margin_used`, and `maint_margin` is now
+  `cross_maintenance_margin_used`. The names now say the SCOPE: the maintenance
+  figure covers the CROSS book only. An isolated position is margined and
+  liquidated on its own bucket, so size it off the row's own `maint_margin`.
+
+  The PER-POSITION `maint_margin` and `margin` fields on a
+  `clearinghouse_state` row are UNCHANGED, as are `maint_margin_ratio` /
+  `init_margin_ratio` on the market surfaces and the `pm_maint_margin` account
+  field.
+
 - **Breaking: two read fields change type.** The node serializes every `*_bps`
   field on the public wire as a JSON string, so `VaultState.performance_fee_bps`
   and `BridgeChainConfig.validator_quorum_threshold_bps` are now `String`. The
@@ -54,6 +65,15 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   hash. `Some("")` means recorded, and there was no signed taker action.
 
 ### Added
+
+- **`AccountState.total_raw_usd`** — settled cash equity as a decimal string.
+  It EXCLUDES unrealised PnL, so it differs from `account_value` by exactly the
+  open PnL. Served at both `detail` depths.
+
+- **`AccountState.total_ntl_pos`** — mark notional of the account's CROSS legs
+  as a decimal string. Isolated legs are NOT counted, so it is not the whole
+  exposure. `Option<String>`: served at the FULL depth only, because
+  `detail: "margin"` skips the position walk.
 
 - `WsMessage::as_ledger_updates` and the `WsLedgerUpdate` record. The
   `ledger_updates` channel was reachable only as a raw `Value`, so every caller

@@ -667,8 +667,9 @@ pub struct TokenBalance {
 ///
 /// Every money field the requested depth serves is required, so decoding FAILS
 /// if the server drops or renames one — a missing money field must never read
-/// as an empty account. The depth-conditional fields (`maint_margin`,
-/// `clearinghouse_state`, `balances`) and `health_deferred` are the exceptions.
+/// as an empty account. The depth-conditional fields
+/// (`cross_maintenance_margin_used`, `total_ntl_pos`, `clearinghouse_state`,
+/// `balances`) and `health_deferred` are the exceptions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct AccountState {
@@ -678,15 +679,27 @@ pub struct AccountState {
     pub account_value: String,
     /// Cash the account can take out, decimal string, CLAMPED at zero.
     ///
-    /// Settled cash minus funding owed minus `init_margin`. It does NOT count
-    /// unrealised profit, so a healthy account whose margin is funded by open
-    /// profit reads `"0"` — that means "nothing to withdraw", not "broke". The
-    /// chain's admission gate uses the raw signed figure, which can go
+    /// Settled cash minus funding owed minus `total_margin_used`. It does NOT
+    /// count unrealised profit, so a healthy account whose margin is funded by
+    /// open profit reads `"0"` — that means "nothing to withdraw", not "broke".
+    /// The chain's admission gate uses the raw signed figure, which can go
     /// negative; this read never does.
     pub withdrawable: String,
-    /// Initial margin requirement, decimal string.
-    pub init_margin: String,
-    /// `account_value - maint_margin`, decimal string; can be negative.
+    /// Total initial margin the account posts, whole-USDC decimal string.
+    /// Served at BOTH depths.
+    pub total_margin_used: String,
+    /// Settled cash equity, whole-USDC decimal string. It EXCLUDES unrealised
+    /// PnL: `account_value` counts open profit, this does not. Served at BOTH
+    /// depths.
+    pub total_raw_usd: String,
+    /// Mark notional of the account's CROSS legs, whole-USDC decimal string.
+    /// An ISOLATED leg is not counted, so this is not the account's whole
+    /// exposure. Served at [`AccountDetail::Full`] ONLY — the margin depth
+    /// skips the position walk, so it reads `None` there.
+    #[serde(default)]
+    pub total_ntl_pos: Option<String>,
+    /// `account_value - cross_maintenance_margin_used`, decimal string; can be
+    /// negative.
     pub health: String,
     /// Liquidation tier.
     pub tier: Tier,
@@ -700,11 +713,15 @@ pub struct AccountState {
     pub abstraction: Abstraction,
     /// Position mode (one-way / hedge).
     pub position_mode: PositionMode,
-    /// Maintenance margin, whole-USDC decimal string. Served ONLY at
-    /// [`AccountDetail::Margin`]; the full depth carries the per-leg
+    /// Maintenance margin of the CROSS book, whole-USDC decimal string. Served
+    /// ONLY at [`AccountDetail::Margin`]; the full depth carries the per-leg
     /// `maint_margin` on each position row instead.
+    ///
+    /// The scope is CROSS. An isolated position is margined and liquidated on
+    /// its own bucket, so NEVER size an isolated position off this number. Read
+    /// that leg's own [`AccountPosition::maint_margin`] instead.
     #[serde(default)]
-    pub maint_margin: Option<String>,
+    pub cross_maintenance_margin_used: Option<String>,
     /// Open positions grouped by dex key. `BTreeMap` for deterministic key
     /// ordering. Empty at [`AccountDetail::Margin`], which skips the walk.
     #[serde(default)]
@@ -1929,7 +1946,8 @@ pub enum AccountDetail {
     /// Margin scalars, positions and the whole token ledger. The default.
     Full,
     /// Margin scalars only — no position walk, no balance scan. Adds
-    /// [`AccountState::maint_margin`].
+    /// [`AccountState::cross_maintenance_margin_used`] and drops
+    /// [`AccountState::total_ntl_pos`], which needs the walk.
     Margin,
 }
 
@@ -2135,8 +2153,9 @@ impl<'a> Info<'a> {
     /// poll. Both depths compute the scalars with one shared helper, so the two
     /// can never disagree.
     ///
-    /// [`AccountState::maint_margin`] is served ONLY at
-    /// [`AccountDetail::Margin`].
+    /// [`AccountState::cross_maintenance_margin_used`] is served ONLY at
+    /// [`AccountDetail::Margin`], and [`AccountState::total_ntl_pos`] ONLY at
+    /// [`AccountDetail::Full`].
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -2668,7 +2687,9 @@ mod tests {
             "address": "0x000000000000000000000000000000000000beef",
             "account_value": "100000000",
             "withdrawable": "80000000",
-            "init_margin": "20000000",
+            "total_margin_used": "20000000",
+            "total_raw_usd": "99500000",
+            "total_ntl_pos": "96000",
             "health": "10000000",
             "tier": "Safe",
             "abstraction": "unified",
@@ -2720,6 +2741,11 @@ mod tests {
     fn account_state_decodes_the_wire_v2_body() {
         let a: AccountState = serde_json::from_value(account_state_fixture()).unwrap();
         assert_eq!(a.account_value, "100000000");
+        assert_eq!(a.total_margin_used, "20000000");
+        // `total_raw_usd` excludes the leg's 500000 unrealised profit.
+        assert_eq!(a.total_raw_usd, "99500000");
+        // The isolated XYZ leg's 20 notional is NOT in the cross total.
+        assert_eq!(a.total_ntl_pos.as_deref(), Some("96000"));
         assert_eq!(a.tier, Tier::Safe);
         assert_eq!(a.abstraction, Abstraction::Unified);
         assert_eq!(a.position_mode, PositionMode::OneWay);
@@ -2765,7 +2791,9 @@ mod tests {
     fn account_state_body_drops_the_retired_keys() {
         let body = account_state_fixture();
         assert!(body.get("positions").is_none());
+        assert!(body.get("init_margin").is_none());
         assert!(body.get("maint_margin").is_none());
+        assert!(body.get("cross_maintenance_margin_used").is_none());
         assert!(body.get("mode").is_none());
         assert!(body.get("pm_enabled").is_none());
         assert!(body["balances"].is_array());
@@ -2804,7 +2832,8 @@ mod tests {
             "position_mode",
             "account_value",
             "withdrawable",
-            "init_margin",
+            "total_margin_used",
+            "total_raw_usd",
             "health",
             "tier",
             "pm_maint_margin",
@@ -2840,24 +2869,34 @@ mod tests {
 
     /// The margin depth answers the scalars alone: it omits the position walk
     /// and the balance scan, and it is the ONLY depth that carries
-    /// `maint_margin`. Both collections must read empty, never as a decode
+    /// `cross_maintenance_margin_used`. Dropping the walk also drops
+    /// `total_ntl_pos`. Both collections must read empty, never as a decode
     /// failure and never as a fabricated row.
     #[test]
-    fn account_state_margin_depth_drops_the_walks_and_adds_maint_margin() {
+    fn account_state_margin_depth_drops_the_walks_and_adds_cross_maintenance_margin_used() {
         let mut body = account_state_fixture();
         let obj = body.as_object_mut().unwrap();
         obj.remove("clearinghouse_state");
         obj.remove("balances");
-        obj.insert("maint_margin".into(), serde_json::json!("90000000"));
+        obj.remove("total_ntl_pos");
+        obj.insert(
+            "cross_maintenance_margin_used".into(),
+            serde_json::json!("90000000"),
+        );
 
         let a: AccountState = serde_json::from_value(body).unwrap();
-        assert_eq!(a.maint_margin.as_deref(), Some("90000000"));
+        assert_eq!(a.cross_maintenance_margin_used.as_deref(), Some("90000000"));
+        assert!(a.total_ntl_pos.is_none());
+        assert_eq!(a.total_margin_used, "20000000");
+        assert_eq!(a.total_raw_usd, "99500000");
         assert!(a.clearinghouse_state.is_empty());
         assert!(a.balances.is_empty());
 
-        // The full depth is the other half of the contract: no `maint_margin`.
+        // The full depth is the other half of the contract: it carries
+        // `total_ntl_pos` and no `cross_maintenance_margin_used`.
         let full: AccountState = serde_json::from_value(account_state_fixture()).unwrap();
-        assert!(full.maint_margin.is_none());
+        assert!(full.cross_maintenance_margin_used.is_none());
+        assert_eq!(full.total_ntl_pos.as_deref(), Some("96000"));
     }
 
     #[test]

@@ -303,7 +303,9 @@ mod tests {
                 "withdrawable": "1000",
                 "health": "770.5",
                 "height": 318_172u64,
-                "init_margin": "250",
+                "total_margin_used": "250",
+                "total_raw_usd": "750.5",
+                "total_ntl_pos": "96000",
                 "pm_concentration_penalty": "0",
                 "pm_maint_margin": "0",
                 "pm_net_value": "0",
@@ -320,6 +322,10 @@ mod tests {
         assert!(f.is_snapshot);
         let a = f.message.as_account_state().unwrap();
         assert_eq!(a.account_value, "1250.5");
+        assert_eq!(a.total_margin_used, "250");
+        assert_eq!(a.total_raw_usd, "750.5");
+        assert_eq!(a.total_ntl_pos.as_deref(), Some("96000"));
+        assert!(a.cross_maintenance_margin_used.is_none());
         assert_eq!(a.tier, Tier::Safe);
         assert_eq!(a.abstraction, Abstraction::Unified);
         assert_eq!(a.position_mode, PositionMode::OneWay);
