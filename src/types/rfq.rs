@@ -1,5 +1,22 @@
 //! RFQ — Request-for-Quote WRITE types.
 //!
+//! # RFQ IS OPTIONS-ONLY, AND EVERY MARKET IS REFUSED TODAY
+//!
+//! All three actions reach the node and are rejected:
+//!
+//! ```text
+//! precondition failed: rfq is options-only: market <n> is not an option series
+//! ```
+//!
+//! No market is an option series, so the refusal is total. No parameter and no
+//! permission gets past it. A request-for-quote lane beside a public order book
+//! lets size trade away from the price everyone else posts against, so MetaFlux
+//! offers RFQ only where there is no continuous book to undercut. That means
+//! options, and options are not built.
+//!
+//! These types stay because the actions keep this shape when option series land.
+//! Do not build against them yet.
+//!
 //! A taker opens an RFQ session; market makers quote it; the taker crosses
 //! against the best quote, or the window expires. These types model the ACTIONS
 //! a client submits. The read side is OPERATOR LANE: the RFQ engine is not
