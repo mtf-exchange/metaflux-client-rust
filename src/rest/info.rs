@@ -141,6 +141,10 @@ pub enum OrderSide {
 /// `is_market` is `true` for a market trigger (`limit_px` `null`) and `false`
 /// for a limit trigger (`limit_px` a decimal string). Those three are absent on
 /// a resting-book trigger block, hence `Option`.
+///
+/// [`Self::group`] and [`Self::trail_px`] are absent again on all of those. The
+/// node writes each key only on the leg that owns it, so a row that carries
+/// neither decodes exactly as it did before the two keys existed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct OrderTrigger {
@@ -161,6 +165,26 @@ pub struct OrderTrigger {
     /// trigger. Present only on a parked row.
     #[serde(default)]
     pub limit_px: Option<String>,
+    /// Scaled-TP/SL LADDER handle, shared by every leg of one ladder.
+    ///
+    /// A `positionTpsl` batch of THREE or more protective legs parks a ladder.
+    /// Its legs share this handle, and they are NOT OCO: a fill of one leg does
+    /// not cancel the others. One or two legs are the older shapes — a lone
+    /// trigger, or an OCO pair — and read `None` here. Group the rows by this
+    /// value to render one ladder; the whole ladder retires together when the
+    /// position it protects closes.
+    #[serde(default)]
+    pub group: Option<u64>,
+    /// TRAILING callback, an absolute price offset as a decimal string.
+    ///
+    /// `Some(d)` means the parked level ratchets toward the mark by `d` and
+    /// never away from it. Read [`OrderTrigger::trigger_px`] as the RATCHETED
+    /// level, not the level the owner sent. `None` = a static level.
+    ///
+    /// READ-SIDE ONLY today. No SDK type can send it — see the note on
+    /// [`crate::types::order::Trigger`].
+    #[serde(default)]
+    pub trail_px: Option<String>,
 }
 
 /// One open order in an [`OpenOrders`] snapshot — the canonical order row.
@@ -605,6 +629,22 @@ pub struct AccountPosition {
     /// Hedge-leg label; absent on a one-way account.
     #[serde(default)]
     pub side: Option<PositionSide>,
+    /// ADL queue indicator, `0..=4` lamps. Served ONLY at
+    /// [`AccountDetail::Adl`]; every other depth reads `None`.
+    ///
+    /// More lamps = sooner in the auto-deleveraging queue. It is a RANKING of
+    /// this seat against the other seats on the same side, NOT a probability:
+    /// four lamps with nobody being liquidated on the other side still means
+    /// nothing happens.
+    ///
+    /// `Some(0)` is meaningful and is not "unknown". Zero says the position is
+    /// not in the queue at all, which is the honest answer for a position ADL
+    /// cannot structurally reach — no committed mark, no profit, no cost basis,
+    /// or nobody on the opposite side to be deleveraged against. A hedge
+    /// account whose only opposing leg is its OWN reads zero, because ADL never
+    /// nets an account against itself.
+    #[serde(default)]
+    pub adl_lamps: Option<u8>,
 }
 
 /// The positions of one dex inside [`AccountState::clearinghouse_state`].
@@ -1265,6 +1305,14 @@ pub struct TriggerOrderStatus {
     /// trigger.
     #[serde(default)]
     pub limit_px: Option<String>,
+    /// Scaled-TP/SL ladder handle — same rule as [`OrderTrigger::group`].
+    /// Absent unless this leg belongs to a ladder.
+    #[serde(default)]
+    pub group: Option<u64>,
+    /// Trailing callback — same rule as [`OrderTrigger::trail_px`]. Absent on a
+    /// static level; when present, `trigger_px` is the RATCHETED level.
+    #[serde(default)]
+    pub trail_px: Option<String>,
 }
 
 /// `order_status` response — single-order lifecycle lookup by `oid` or `cloid`.
@@ -1949,6 +1997,13 @@ pub enum AccountDetail {
     /// [`AccountState::cross_maintenance_margin_used`] and drops
     /// [`AccountState::total_ntl_pos`], which needs the walk.
     Margin,
+    /// The [`AccountDetail::Full`] body, widened by
+    /// [`AccountPosition::adl_lamps`] on every position row.
+    ///
+    /// It is opt-in because each lamp ranks the position against every other
+    /// position in that market, so the node pays one extra pass per row. Ask
+    /// for it only when you render the column.
+    Adl,
 }
 
 /// Insert `coin` into a request body only when present — an absent `coin` asks
@@ -2156,6 +2211,9 @@ impl<'a> Info<'a> {
     /// [`AccountState::cross_maintenance_margin_used`] is served ONLY at
     /// [`AccountDetail::Margin`], and [`AccountState::total_ntl_pos`] ONLY at
     /// [`AccountDetail::Full`].
+    ///
+    /// [`AccountDetail::Adl`] answers the full body plus
+    /// [`AccountPosition::adl_lamps`] on every position row.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -2899,6 +2957,33 @@ mod tests {
         assert_eq!(full.total_ntl_pos.as_deref(), Some("96000"));
     }
 
+    /// `detail: "adl"` is the full body plus `adl_lamps` on every position row.
+    /// Zero lamps is a real answer — the position is not in the queue — so it
+    /// must decode as `Some(0)`, never as the absent case.
+    #[test]
+    fn account_state_adl_depth_reads_the_queue_lamps() {
+        assert_eq!(
+            serde_json::to_value(AccountDetail::Adl).unwrap(),
+            serde_json::json!("adl")
+        );
+
+        // No `adl_lamps` at the other depths.
+        let full: AccountState = serde_json::from_value(account_state_fixture()).unwrap();
+        assert_eq!(full.clearinghouse_state[""].positions[0].adl_lamps, None);
+
+        let mut body = account_state_fixture();
+        body["clearinghouse_state"][""]["positions"][0]["adl_lamps"] = serde_json::json!(3u8);
+        body["clearinghouse_state"]["0x000000000000000000000000000000000000dead"]["positions"][0]
+            ["adl_lamps"] = serde_json::json!(0u8);
+        let a: AccountState = serde_json::from_value(body).unwrap();
+        assert_eq!(a.clearinghouse_state[""].positions[0].adl_lamps, Some(3));
+        assert_eq!(
+            a.clearinghouse_state["0x000000000000000000000000000000000000dead"].positions[0]
+                .adl_lamps,
+            Some(0)
+        );
+    }
+
     #[test]
     fn account_state_reads_a_portfolio_margin_account() {
         let mut body = account_state_fixture();
@@ -3587,6 +3672,24 @@ mod tests {
         };
         assert!(trigger.is_market);
         assert_eq!(trigger.limit_px, None);
+        // Neither key is written on an ordinary trigger, so both stay None.
+        assert_eq!(trigger.group, None);
+        assert_eq!(trigger.trail_px, None);
+
+        // A ladder leg carries `group`; a trailing leg carries `trail_px`.
+        let ladder = serde_json::json!({
+            "status": "triggered",
+            "trigger": { "oid": 11u64, "coin": "BTC", "side": "A",
+                         "trigger_px": "59000", "trigger_above": false, "sz": "1",
+                         "registered_at": 3u64, "fired": false,
+                         "is_market": true, "limit_px": null,
+                         "group": 9u64, "trail_px": "250.5" }
+        });
+        let OrderStatus::Triggered { trigger } = serde_json::from_value(ladder).unwrap() else {
+            panic!("expected Triggered");
+        };
+        assert_eq!(trigger.group, Some(9));
+        assert_eq!(trigger.trail_px.as_deref(), Some("250.5"));
     }
 
     /// `order_status` unknown branch.
@@ -3943,12 +4046,61 @@ mod tests {
             f.orders[1].cloid.as_deref(),
             Some("0x0000000000000000000000000000abcd")
         );
-        // Parked TP/SL-LIMIT row: full trigger block.
+        // Parked TP/SL-LIMIT row: full trigger block. It is neither a ladder
+        // leg nor a trailing leg, so both of those keys stay absent.
         assert_eq!(f.orders[2].tif.as_deref(), Some("trigger"));
         let parked = f.orders[2].trigger.as_ref().unwrap();
         assert_eq!(parked.is_parked, Some(true));
         assert_eq!(parked.is_market, Some(false));
         assert_eq!(parked.limit_px.as_deref(), Some("60950"));
+        assert_eq!(parked.group, None);
+        assert_eq!(parked.trail_px, None);
+    }
+
+    /// A scaled TP/SL LADDER: three or more `positionTpsl` legs share one
+    /// `group`, and a trailing leg adds `trail_px`. Both keys are absent on
+    /// every other row, so the older shapes must keep decoding unchanged.
+    #[test]
+    fn open_orders_reads_the_ladder_handle_and_the_trailing_callback() {
+        let leg = |oid: u64, group: serde_json::Value, trail: serde_json::Value| {
+            let mut t = serde_json::json!({
+                "trigger_px": "61000", "trigger_above": false,
+                "is_parked": true, "is_market": true, "limit_px": null
+            });
+            let o = t.as_object_mut().unwrap();
+            if !group.is_null() {
+                o.insert("group".into(), group);
+            }
+            if !trail.is_null() {
+                o.insert("trail_px".into(), trail);
+            }
+            serde_json::json!({
+                "oid": oid, "coin": "BTC", "side": "A", "px": "61000", "sz": "0.25",
+                "orig_sz": null, "tif": "trigger", "reduce_only": true,
+                "cloid": null, "trigger": t, "inserted_at": oid
+            })
+        };
+        let data = serde_json::json!({
+            "address": "0x4242424242424242424242424242424242424242",
+            "orders": [
+                leg(7, serde_json::json!(7u64), serde_json::Value::Null),
+                leg(8, serde_json::json!(7u64), serde_json::Value::Null),
+                leg(9, serde_json::json!(7u64), serde_json::json!("120.25")),
+            ]
+        });
+        let f: OpenOrders = serde_json::from_value(data).unwrap();
+        let groups: Vec<Option<u64>> = f
+            .orders
+            .iter()
+            .map(|o| o.trigger.as_ref().unwrap().group)
+            .collect();
+        // Every leg of one ladder shares the handle of its first leg.
+        assert_eq!(groups, vec![Some(7), Some(7), Some(7)]);
+        assert_eq!(f.orders[0].trigger.as_ref().unwrap().trail_px, None);
+        assert_eq!(
+            f.orders[2].trigger.as_ref().unwrap().trail_px.as_deref(),
+            Some("120.25")
+        );
     }
 
     /// `active_asset_data`: `[buy, sell]` pairs as `[String; 2]`, margin_mode,

@@ -174,6 +174,13 @@ pub enum TpSl {
 }
 
 /// Trigger block riding inside a stop-loss / take-profit order.
+///
+/// There is deliberately NO `trail_px` here. The node serves `trail_px` on the
+/// read side, but the frozen `SubmitOrder` / `BatchOrder` EIP-712 type strings
+/// do not bind it, so `/exchange` refuses any order that carries one:
+/// `trail_px is not bound by the order signing type yet; a trailing stop cannot
+/// be submitted over the typed path`. Adding the field here would only produce
+/// orders the chain rejects. It arrives when a versioned type string binds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Trigger {

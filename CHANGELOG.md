@@ -66,6 +66,28 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Added
 
+- **`OrderTrigger.group` / `TriggerOrderStatus.group`** — the scaled-TP/SL
+  LADDER handle, `Option<u64>`. A `positionTpsl` batch of three or more
+  protective legs parks a ladder; its legs share this handle and are NOT OCO — a
+  fill of one leg does not cancel the others. One or two legs keep the older
+  shapes and read `None`.
+
+- **`OrderTrigger.trail_px` / `TriggerOrderStatus.trail_px`** — the TRAILING
+  callback as a decimal string, `Option<String>`. When it is present,
+  `trigger_px` is the RATCHETED level, not the level the owner sent.
+
+  READ ONLY. `types::order::Trigger` deliberately has no `trail_px`: the frozen
+  `SubmitOrder` / `BatchOrder` EIP-712 type strings do not bind the field, so
+  `/exchange` refuses any order that carries it. The write side arrives when a
+  versioned type string binds it.
+
+- **`AccountDetail::Adl` and `AccountPosition.adl_lamps`** — the ADL queue
+  indicator, `0..=4` lamps, served only at the new depth. More lamps = sooner in
+  the auto-deleveraging queue. It is a RANKING against the other seats on the
+  same side, not a probability. `Some(0)` is a real answer: the position is not
+  in the queue, which includes a hedge account whose only opposing leg is its
+  own.
+
 - **`AccountState.total_raw_usd`** — settled cash equity as a decimal string.
   It EXCLUDES unrealised PnL, so it differs from `account_value` by exactly the
   open PnL. Served at both `detail` depths.
