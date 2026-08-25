@@ -18,7 +18,7 @@
 //!
 //! ## Plane bridge
 //!
-//! [`MarketInfo`] reports `mark_px` in whole USDC and `step_size` / `min_order`
+//! [`MarketMeta`] reports `mark_px` in whole USDC and `step_size` / `min_order`
 //! in whole base units, both as canonical decimal strings. The wire `size` is
 //! raw lots (`whole × 10^sz_decimals`). The USD amount and the mark are parsed
 //! into the shared 1e8 integer plane, where the scale cancels, and only the lot
@@ -26,7 +26,7 @@
 //! digit that `usd / mark` in an `f64` would drop.
 
 use crate::grid::{GridError, decimal_to_scaled};
-use crate::rest::info::MarketInfo;
+use crate::rest::info::MarketMeta;
 
 /// The 1e8 fixed-point plane both the USD amount and the mark are parsed into.
 const USD_PLANE_DECIMALS: u32 = 8;
@@ -61,7 +61,7 @@ pub struct TwapDurationRequest<'a> {
     pub mark_px: Option<&'a str>,
     /// Market the size is snapped against (`step_size`, `min_order`,
     /// `sz_decimals`).
-    pub market: Option<&'a MarketInfo>,
+    pub market: Option<&'a MarketMeta>,
     /// Governed minimum inter-slice delay in ms.
     pub min_delay_ms: u64,
     /// Slice-count ceiling.
@@ -222,7 +222,7 @@ pub fn twap_from_duration(req: &TwapDurationRequest<'_>) -> Result<TwapPlan, Twa
 pub fn usd_to_wire_size(
     total_usd: &str,
     mark_px: &str,
-    market: &MarketInfo,
+    market: &MarketMeta,
 ) -> Result<u64, TwapPlanError> {
     let usd = decimal_to_scaled(total_usd, USD_PLANE_DECIMALS).ok_or(TwapPlanError::BadUsd)?;
     let mark = decimal_to_scaled(mark_px, USD_PLANE_DECIMALS)
@@ -255,10 +255,11 @@ mod tests {
     use super::*;
     use crate::rest::info::{Funding, MarketKind};
 
-    fn mkt(step: &str, min: &str, sz_decimals: u8) -> MarketInfo {
-        MarketInfo {
+    fn mkt(step: &str, min: &str, sz_decimals: u8) -> MarketMeta {
+        MarketMeta {
             coin: "BTC".into(),
-            asset_id: 0,
+            signing_id: 0,
+            risk_override: None,
             kind: MarketKind::Perp,
             sz_decimals,
             mark_px: "0".into(),

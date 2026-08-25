@@ -139,28 +139,29 @@ use metaflux_client::CandleType;
 
 // Live price / funding / OI for every perp. `markets` is the DYNAMIC half:
 // it carries no precision grid and no margin-tier ladder.
-let markets = client.rest().info().markets().await?;
+let markets = client.rest().info().markets(None).await?;
 for m in &markets {
     println!("{}: mark {} oi {}", m.coin, m.mark_px, m.open_interest);
 }
 
 // The STATIC half — precision grids, leverage, the margin-tier ladder and the
 // open/close trade-control flags. Cache it and merge by `coin`.
-let meta = client.rest().info().markets_meta().await?;
+let meta = client.rest().info().markets_meta(None).await?;
 for m in &meta {
     println!("{}: tiers {} tick {}", m.coin, m.margin_tiers.len(), m.tick_size);
 }
 
-// Depth, a bounded window of recent prints, and the single candle query.
+// Depth, the trade tape, and the single candle query. `trades` answers both
+// asks: no window for the recent ring, a window to reach the archive.
 // A candle bar folds a PRICE series, never executions: pick `mark` (the node
 // default, perp + spot) or `oracle` (perp only). The trade candle is retired,
-// so read executions from the trade prints above.
+// so read executions from the trade prints.
 let book = client.rest().info().l2_book("BTC", 20).await?;
-let trades = client.rest().info().recent_trades("BTC").await?;
-let recent = client
+let trades = client.rest().info().trades("BTC", None, None).await?;
+let windowed = client
     .rest()
     .info()
-    .trades_by_time("BTC", 0, u64::MAX)
+    .trades("BTC", Some(0), Some(u64::MAX))
     .await?;
 let bars = client
     .rest()
@@ -168,13 +169,13 @@ let bars = client
     .candle_snapshot("BTC", "1m", CandleType::Mark, 0, u64::MAX)
     .await?;
 
-// Predicted per-asset funding — the clamped rate charged at the next boundary.
-for pf in client.rest().info().predicted_fundings().await? {
-    println!("{}: {} @ {}", pf.coin, pf.predicted_rate, pf.next_funding_ts);
+// The charged funding rate and its next boundary ride each `markets` row.
+for m in &markets {
+    println!("{}: {} @ {}", m.coin, m.funding.rate_per_hr, m.funding.next_payment_ts);
 }
 println!(
     "book {}x{}, {} recent, {} windowed, {} bars",
-    book.bids.len(), book.asks.len(), trades.len(), recent.len(), bars.len()
+    book.bids.len(), book.asks.len(), trades.len(), windowed.len(), bars.len()
 );
 ```
 
@@ -184,7 +185,8 @@ The spot CLOB is a separate book from the perp engine, keyed by a numeric **pair
 id**. `tif` accepts `ioc`, `gtc` and `alo`; a `gtc` / `alo` residual rests
 against escrowed funds. `limit_px` must be `> 0`, on the 1e8 price plane.
 Discover pairs via `spot_meta()`, trade with `spot_order` / `spot_cancel`, and
-read balances back with `spot_clearinghouse_state(address)`:
+read balances back from `account_state(address, None).balances` — that array is
+the whole token ledger, USDC and spot tokens alike:
 
 ```rust,ignore
 use metaflux_client::types::{
@@ -209,12 +211,12 @@ let resp = client.exchange().spot_order(&wallet, &order).await?;
 println!("spot order: {resp:?}");
 
 // 3. Read balances back.
-let bals = client
+let acct = client
     .rest()
     .info()
-    .spot_clearinghouse_state(wallet.address())
+    .account_state(wallet.address(), None)
     .await?;
-for b in &bals.balances {
+for b in &acct.balances {
     println!("{} ({}) total={} hold={}", b.name, b.asset, b.total, b.hold);
 }
 
@@ -328,7 +330,7 @@ borrowed / idle / share_value, plus your shares when `user` is supplied).
 
 Runnable examples live under [`examples/`](./examples/):
 
-- `submit_limit_order.rs` — fetches `markets()`, signs a limit order, posts to `/exchange`.
+- `submit_limit_order.rs` — fetches `markets(None)`, signs a limit order, posts to `/exchange`.
 - `stream_trades.rs` — opens a WS connection, subscribes to BTC-PERP trades, prints first 10.
 - `create_vault.rs` — creates a vault, queries its state.
 

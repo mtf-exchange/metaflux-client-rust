@@ -9,6 +9,27 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Removed
 
+- **Breaking: five `/info` reads are deleted.** The official surface gives each
+  question exactly ONE read, so a read that duplicated or narrowed another is
+  gone. There is no deprecation window.
+
+  - `pm_summary` / `Info::pm_summary` / `PmSummary` — read `account_state`. It
+    serves `pm_maint_margin`, `pm_net_value` and `pm_concentration_penalty` on
+    the same plane. The figures are meaningful when `abstraction ==
+    "portfolio"`.
+  - `bridge_chain_configs` / `Info::bridge_chain_configs` / `BridgeChainConfigs`
+    — read `Info::bridge_user_outbox`. `BridgeUserOutbox` now carries
+    `withdrawals_halted` and `configs`. The rows DEFINE the `message_id` the
+    entries carry, so one read serves both. An address with no withdrawal gets
+    the rows and an empty `entries`.
+  - `account_overview` — `Info::account_overview` keeps its name and its
+    `AccountOverview` shape, but now posts `account_state` with
+    `detail: "overview"`.
+  - `evm_contract_bindings` — the SDK never typed it. Its `variant` tag folds
+    into `TokenEvmContract` on the `markets_meta` token rows.
+  - `oracle_sources` — the SDK never typed it. The `OracleSource` MIP-3
+    write-side enum is untouched.
+
 - **Breaking: the WS `web_data` channel is retired.** `Subscription::WebData`,
   `WsMessage::WebData` and `WsClient::subscribe_web_data` are gone. The node
   refuses a `web_data` subscribe at the next release.

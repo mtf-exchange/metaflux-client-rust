@@ -210,7 +210,7 @@ fn build_crosses(
 /// `/exchange` admits actions ASYNCHRONOUSLY — a `batch_order` returns an ack
 /// (`{accepted, action_hash, mempool_depth, nonce}`), and the orders match in a
 /// later block. So success here means "admitted to the mempool", and fills are
-/// observed out-of-band via `recent_trades` / `candle_snapshot`, not this response.
+/// observed out-of-band via `trades` / `candle_snapshot`, not this response.
 fn accepted(v: &Value) -> bool {
     v.get("accepted").and_then(Value::as_bool).unwrap_or(false)
 }

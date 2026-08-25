@@ -8,31 +8,35 @@
 //! `0x` hex). The older numeric `market_id` / `asset_id` / `account_id` request
 //! params are gone — pass a `coin` or an `address`.
 //!
-//! - **Market reads** — [`Info::markets`], [`Info::market_info`],
-//!   [`Info::l2_book`], [`Info::recent_trades`], [`Info::trades_by_time`],
-//!   [`Info::candle_snapshot`], [`Info::predicted_fundings`],
+//! Each question has exactly ONE read. A read that merely filtered or
+//! projected another was removed and its ask became a PARAMETER on the read it
+//! duplicated — `market_info` is `markets` / `markets_meta` with a `coin`,
+//! `margin_summary` is [`Info::account_state`] with
+//! [`AccountDetail::Margin`], `account_overview` is [`Info::account_state`]
+//! with `detail: "overview"`, `recent_trades` / `trades_by_time` are
+//! [`Info::trades`] with and without a window.
+//!
+//! - **Market reads** — [`Info::markets`], [`Info::markets_meta`],
+//!   [`Info::l2_book`], [`Info::trades`], [`Info::candle_snapshot`],
 //!   [`Info::funding_history`].
-//! - **Account reads** — [`Info::account_state`], [`Info::open_orders`],
-//!   [`Info::web_data`], [`Info::spot_clearinghouse_state`],
-//!   [`Info::staking_state`], [`Info::pm_summary`], [`Info::order_status_by_oid`],
+//! - **Account reads** — [`Info::account_state`], [`Info::account_overview`],
+//!   [`Info::open_orders`],
+//!   [`Info::staking_state`], [`Info::order_status_by_oid`],
 //!   [`Info::historical_orders`], [`Info::user_funding`],
 //!   [`Info::spot_margin_state`], [`Info::earn_state`], [`Info::user_fills`],
-//!   [`Info::user_fills_by_time`], [`Info::user_position_history`],
-//!   [`Info::user_position_history_by_time`], [`Info::rfq_user`],
-//!   [`Info::active_asset_data`], [`Info::agents`], [`Info::sub_accounts`].
+//!   [`Info::user_position_history`],
+//!   [`Info::user_position_history_by_time`],
+//!   [`Info::active_asset_data`].
 //! - **Static / misc** — [`Info::node_info`], [`Info::spot_meta`],
-//!   [`Info::fee_schedule`], [`Info::vault_state`], [`Info::rfq_open`],
-//!   [`Info::encode_action`].
-//! - **Bridge reads** — [`Info::bridge_chain_configs`],
-//!   [`Info::bridge_user_outbox`].
+//!   [`Info::fee_schedule`], [`Info::vault_state`], [`Info::encode_action`].
+//! - **Bridge reads** — [`Info::bridge_user_outbox`].
 //! - **Peer discovery** — [`Info::gossip_root_ips`].
 
 mod bridge;
 mod discovery;
 
 pub use bridge::{
-    BridgeChainConfigRow, BridgeChainConfigs, BridgeOutboxEntry, BridgeOutboxStatus,
-    BridgeScanPolicy, BridgeUserOutbox,
+    BridgeChainConfigRow, BridgeOutboxEntry, BridgeOutboxStatus, BridgeScanPolicy, BridgeUserOutbox,
 };
 pub use discovery::{AdvertisedPeer, GossipRootIps};
 
@@ -117,8 +121,7 @@ pub struct L2BookParams {
 /// Order side as the read wire spells it: the one-letter tokens `"B"` (buy /
 /// bid) and `"A"` (sell / ask).
 ///
-/// The same token pair is used by `open_orders`, `order_status`, `rfq_open` and
-/// `fba_batch_state`. It is NOT the position leg label — see [`PositionSide`],
+/// The same token pair is used by `open_orders` and `order_status`. It is NOT the position leg label — see [`PositionSide`],
 /// which spells `"long"` / `"short"`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OrderSide {
@@ -289,7 +292,7 @@ pub struct Candle {
     pub num_samples: u64,
 }
 
-/// One public trade print from [`Info::recent_trades`] / [`Info::trades_by_time`].
+/// One public trade print from [`Info::trades`].
 ///
 /// Prints render the market **symbol** in `coin` (`"BTC"`). `px` / `sz` are
 /// canonical decimal strings; `side` is the aggressor taker side, `"A"` (a
@@ -323,24 +326,7 @@ pub struct Trade {
     pub time: u64,
 }
 
-/// One entry from [`Info::predicted_fundings`].
-///
-/// `predicted_rate` is the CLAMPED rate actually charged at the boundary (bounded
-/// by the per-asset cap, sign preserved); `next_funding_ts` is the next aligned
-/// per-asset settlement boundary (unix ms). Funding settles discretely at those
-/// boundaries (1h default).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct PredictedFunding {
-    /// Market symbol (e.g. `"BTC"`).
-    pub coin: String,
-    /// Clamped funding rate charged at the boundary, fixed-point decimal string.
-    pub predicted_rate: String,
-    /// Next aligned per-asset settlement boundary (unix ms).
-    pub next_funding_ts: u64,
-}
-
-/// One leverage / margin band inside a [`MarketInfo::margin_tiers`] ladder.
+/// One leverage / margin band inside a [`MarketMeta::margin_tiers`] ladder.
 ///
 /// Bands are upper-bound: a position with open interest at or below
 /// `max_open_interest` may use up to `max_leverage` and is charged
@@ -404,8 +390,8 @@ pub struct FeeSchedule {
 /// The staking facet body, without the account address.
 ///
 /// The standalone `staking_state` read carries the address beside these fields;
-/// the `web_data` read nests the same body under `staking.state` and drops the
-/// address (it is carried once at the top). One type serves both.
+/// [`Info::account_overview`] nests the same body under `staking.state` and
+/// drops the address (it is carried once at the top). One type serves both.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct StakingSnapshot {
@@ -433,75 +419,26 @@ pub struct StakingSnapshot {
     /// Queued undelegations awaiting maturity.
     #[serde(default)]
     pub pending_unstakes: Vec<PendingUnstake>,
-}
-
-/// A per-asset amount row inside [`ProtocolMetrics`].
-///
-/// These rows arrive as a JSON ARRAY in ascending `asset`, not as an object: a
-/// JSON object carries no ordering guarantee across clients, and the rows must
-/// stay ordered.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct AssetAmount {
-    /// Asset id.
-    pub asset: u32,
-    /// The amount for this asset, decimal string.
-    pub amount: String,
-}
-
-/// A per-asset signed-position-sum row inside [`ProtocolMetrics`].
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct AssetSignedSum {
-    /// Asset id.
-    pub asset: u32,
-    /// Sum of `size_signed` over every position row on this market, a signed
-    /// decimal string on the market's own raw committed lot plane.
-    pub sum_signed: String,
-}
-
-/// Native MTF held on the EVM side, inside [`ProtocolMetrics`].
-///
-/// This mirrors the Core-side view only. The authoritative EVM state root is
-/// separate.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct ProtocolMetricsEvm {
-    /// Total native balance in WEI, decimal string.
-    pub native_balance_wei: String,
-    /// EVM accounts holding a non-zero native balance.
-    pub n_nonzero_holders: u64,
-    /// EVM accounts with any committed state.
-    pub n_accounts: u64,
-}
-
-/// `protocol_metrics` — protocol-wide committed accumulators.
-///
-/// Only the fields this SDK types are listed; the read serves more. Unknown keys
-/// are ignored, so a newer node stays decodable.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct ProtocolMetrics {
-    /// Native-MTF-on-EVM mirror.
+    /// What funds the staking reward. `None` on a node that predates the field.
     #[serde(default)]
-    pub evm: Option<ProtocolMetricsEvm>,
-    /// Per-market open interest as a whole-unit size string on that market's own
-    /// size plane, ascending `asset`.
-    ///
-    /// There is deliberately no cross-market total. Each market keeps its own
-    /// `sz_decimals` lot plane, so summing raw lots across markets adds
-    /// quantities with no common unit. Convert each market to notional first.
-    ///
-    /// `None` on a node that predates the field.
-    #[serde(default)]
-    pub open_interest_by_asset: Option<Vec<AssetAmount>>,
-    /// Per market, the sum of `size_signed` over EVERY position row.
-    ///
-    /// Every long leg has a short leg, so the honest value is `"0"` on each
-    /// asset. A non-zero entry marks a committed one-sided write to a position
-    /// row, which the open-interest figure cannot show.
-    #[serde(default)]
-    pub position_size_signed_sum_by_asset: Option<Vec<AssetSignedSum>>,
+    pub reward_pool: Option<RewardPool>,
+}
+
+/// What funds the staking reward — the committed inputs, and NO rate.
+///
+/// The emission era is over: rewards come from fees, not from a curve, so there
+/// is no annual rate to publish and none to derive. The pending pool is a
+/// snapshot of accrued fees, and it depends on volume that has not happened yet.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RewardPool {
+    /// Total staked MTF across the chain, canonical decimal string.
+    pub total_stake: String,
+    /// Fees accrued to the validator pool and not yet distributed, whole USDC.
+    pub pending_validator_pool_usdc: String,
+    /// Always `"fee_funded_on_book_buy"` — a constant that tells a fee-funded
+    /// chain from an emission-funded one without inferring it.
+    pub reward_source: String,
 }
 
 /// `staking_state` response.
@@ -683,6 +620,10 @@ pub struct DexPositions {
 ///
 /// The USDC row is always first. A token row with neither a spendable balance
 /// nor an escrow hold is skipped, so absence means zero.
+///
+/// `total - hold` is NOT the spendable amount. `hold` counts spot order escrow
+/// only: USDC that margins an open perpetual position stays in `total` and
+/// never enters `hold`. Read [`AccountState::withdrawable`] for the budget.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TokenBalance {
@@ -694,6 +635,21 @@ pub struct TokenBalance {
     pub total: String,
     /// Amount held in escrow by resting orders, decimal string.
     pub hold: String,
+    /// Weighted-average acquisition cost, whole USDC PER WHOLE TOKEN. A price,
+    /// not a total: `(mark_px - avg_entry_px) * total` is the unrealized spot
+    /// PnL. `total` includes the part held behind resting orders, so multiply
+    /// by the quantity you mean rather than one the server picked for you.
+    ///
+    /// `None` means UNKNOWN, never zero. The chain rolls the basis on spot BUYS
+    /// only — a sell keeps the standing per-unit average, and a deposit (bridge
+    /// credit, Core-EVM credit, spot transfer, governance adjustment) writes no
+    /// basis at all. Render nothing rather than a PnL against a `None` basis:
+    /// that error is the whole notional reported as gain.
+    ///
+    /// The USDC row always reads `None` — a cost basis on the quote asset in
+    /// terms of itself has no meaning.
+    #[serde(default)]
+    pub avg_entry_px: Option<String>,
 }
 
 /// `account_state` response — rich per-account snapshot keyed by `address`.
@@ -706,9 +662,10 @@ pub struct TokenBalance {
 /// 0x-hex address. `height` / `time` stamp the committed block the snapshot was
 /// read at, so a client can reject a stale snapshot.
 ///
-/// Only `health_deferred` is optional. Every other field is one the node always
-/// emits, so decoding FAILS if the server drops or renames one. A missing money
-/// field must never read as an empty account.
+/// Every money field the requested depth serves is required, so decoding FAILS
+/// if the server drops or renames one — a missing money field must never read
+/// as an empty account. The depth-conditional fields (`maint_margin`,
+/// `clearinghouse_state`, `balances`) and `health_deferred` are the exceptions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct AccountState {
@@ -740,10 +697,19 @@ pub struct AccountState {
     pub abstraction: Abstraction,
     /// Position mode (one-way / hedge).
     pub position_mode: PositionMode,
+    /// Maintenance margin, whole-USDC decimal string. Served ONLY at
+    /// [`AccountDetail::Margin`]; the full depth carries the per-leg
+    /// `maint_margin` on each position row instead.
+    #[serde(default)]
+    pub maint_margin: Option<String>,
     /// Open positions grouped by dex key. `BTreeMap` for deterministic key
-    /// ordering.
+    /// ordering. Empty at [`AccountDetail::Margin`], which skips the walk.
+    #[serde(default)]
     pub clearinghouse_state: std::collections::BTreeMap<String, DexPositions>,
-    /// Token balances; the USDC row is first.
+    /// The account's WHOLE token ledger — the unified USDC pool in row 0, then
+    /// every spot token. Empty at [`AccountDetail::Margin`], which skips the
+    /// scan.
+    #[serde(default)]
     pub balances: Vec<TokenBalance>,
     /// Portfolio-margin maintenance margin, whole-USDC decimal string. Always
     /// present; `"0"` when the account is not enrolled.
@@ -777,6 +743,10 @@ impl AccountState {
 /// deployer merely declared at `register_token` is never served.
 /// `evm_extra_wei_decimals` is that declared value, signed. It does NOT change a
 /// credit: a credit lands in the token's `wei_decimals`.
+///
+/// NEVER copy `address` into config or a constant. A `finalizeEvmContract`
+/// quorum vote rotates it, and a frozen address sends a credit to a retired
+/// contract. Read it here each time.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct TokenEvmContract {
@@ -784,9 +754,14 @@ pub struct TokenEvmContract {
     pub address: String,
     /// Deployer-declared signed offset. Metadata only — see the type doc.
     pub evm_extra_wei_decimals: i32,
+    /// Binding-registry variant tag, from the retired `evm_contract_bindings`
+    /// read. `None` for the built-in USDC binding, which the credit path
+    /// answers with no registry row behind it.
+    #[serde(default)]
+    pub variant: Option<u8>,
 }
 
-/// The registered underlying-token block on a perp [`MarketInfo`].
+/// The registered underlying-token block on a perp [`MarketMeta`].
 ///
 /// OMITTED entirely (the `token` field is `None`) when the perp has no
 /// registered underlying token — the node ABSENTS the key rather than emitting
@@ -822,7 +797,7 @@ pub enum MarketKind {
     Spot,
 }
 
-/// Per-market funding parameters inside a [`MarketInfo`].
+/// Per-market funding parameters inside a [`MarketMeta`].
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Funding {
@@ -836,12 +811,12 @@ pub struct Funding {
     pub next_payment_ts: u64,
 }
 
-/// `market_info` response — rich per-market metadata.
+/// `markets_meta` response row — the STATIC per-market metadata.
 ///
-/// Per the `/info` contract (`market_info`). Magnitudes (`tick_size`,
-/// `step_size`, `min_order`, ratios, `open_interest`) are CANONICAL decimal
-/// **string** numerics — NOT the raw 1e8 / raw-lot planes; `max_leverage` is a
-/// JSON number. Resolved by `coin` (the market symbol) — see [`Info::market_info`].
+/// Magnitudes (`tick_size`, `step_size`, `min_order`, ratios) are CANONICAL
+/// decimal **string** numerics — NOT the raw 1e8 / raw-lot planes;
+/// `max_leverage` is a JSON number. Narrow to one market with the `coin`
+/// argument of [`Info::markets_meta`].
 ///
 /// PLANE BRIDGE: `tick_size` is whole USDC while an order's `limit_px` is on the
 /// 1e8 plane, and `step_size` / `min_order` are whole base units while an
@@ -849,13 +824,18 @@ pub struct Funding {
 /// [`crate::round_order_to_grid`] to snap a desired price / size onto this grid.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct MarketInfo {
+pub struct MarketMeta {
     /// Market symbol (e.g. `"BTC"`) — the canonical market key.
     pub coin: String,
-    /// DEPRECATED numeric asset id, retained only as a temporary indexer shim.
-    /// Not a stable field: prefer `coin`. May be removed without a major bump.
+    /// The uint32 to put in the EIP-712 `market` field when SIGNING an order
+    /// for this market. It has no other meaning: every read keys by `coin`, so
+    /// never sort, join or identify a market by this number.
+    ///
+    /// The signing type string is consensus-frozen at `uint32 market`, so a
+    /// signer needs a number. Publishing it here keeps that number on the wire
+    /// instead of making it knowledge the client carries out of band.
     #[serde(default)]
-    pub asset_id: u32,
+    pub signing_id: u32,
     /// Market kind (`"perp"` / `"spot"`).
     pub kind: MarketKind,
     /// Size precision: raw order/position `size` = `whole_units × 10^sz_decimals`.
@@ -901,7 +881,7 @@ pub struct MarketInfo {
     #[serde(default)]
     pub open_interest: String,
     /// Registered underlying-token block for this perp. Present on the
-    /// `markets_meta` / `market_info` reads when the perp has a registered
+    /// `markets_meta` read when the perp has a registered
     /// underlying token; OMITTED (→ `None`) otherwise. Carries the token's
     /// EVM binding + `circulating_supply`.
     #[serde(default)]
@@ -912,7 +892,7 @@ pub struct MarketInfo {
     #[serde(default)]
     pub open: Option<bool>,
     /// Whether CLOSING a position is PERMITTED. Same presence rule as
-    /// [`MarketInfo::open`].
+    /// [`MarketMeta::open`].
     #[serde(default)]
     pub close: Option<bool>,
     /// Whether the market is mode-2 only (cross opens rejected).
@@ -956,22 +936,54 @@ pub struct MarketInfo {
     /// is a LOWER BOUND; absent ⇒ the figure covers the whole 24h window.
     #[serde(default)]
     pub day_ntl_vlm_lower_bound_from: Option<u64>,
+    /// The governance risk override in force on this market.
+    ///
+    /// `None` means NO override exists. `Some` with every inner field `None`
+    /// means an override record exists and overrides nothing — a different
+    /// fact, and the one that used to be invisible.
+    #[serde(default)]
+    pub risk_override: Option<RiskOverride>,
+}
+
+/// A governance risk override on one market, from [`MarketMeta::risk_override`].
+///
+/// Every field is optional: an override that moves only `max_leverage` carries
+/// only `max_leverage`. An absent field is NOT overridden — the market's
+/// default (the sibling field on the same [`MarketMeta`]) applies.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RiskOverride {
+    /// Overridden maximum leverage multiple.
+    #[serde(default)]
+    pub max_leverage: Option<u32>,
+    /// Overridden maintenance margin ratio, decimal bps string.
+    #[serde(default)]
+    pub maint_margin_ratio: Option<String>,
+    /// Overridden initial margin ratio, decimal bps string.
+    #[serde(default)]
+    pub init_margin_ratio: Option<String>,
+    /// Overridden per-period funding-rate cap, decimal fraction string.
+    #[serde(default)]
+    pub funding_rate_cap: Option<String>,
+    /// Overridden open-interest cap, whole base units as a decimal string.
+    #[serde(default)]
+    pub oi_cap: Option<String>,
 }
 
 /// One perp row of the DYNAMIC `markets` read.
 ///
-/// This is NOT [`MarketInfo`]. The node splits the market surface in two:
-/// `markets` serves `dynamic_record` (live price / funding / OI / 24h ticker),
-/// `markets_meta` serves `static_record` (precision grids, leverage ladder,
-/// trade-control flags), and only `market_info` serves the union. Decoding a
-/// `markets` row into [`MarketInfo`] fails outright — `sz_decimals`,
+/// This is NOT [`MarketMeta`]. The node splits the market surface in two:
+/// `markets` serves the dynamic record (live price / funding / OI / 24h
+/// ticker) and `markets_meta` the static record (precision grids, leverage
+/// ladder, trade-control flags). Decoding a
+/// `markets` row into [`MarketMeta`] fails outright — `sz_decimals`,
 /// `tick_size`, `step_size`, `min_order`, `max_leverage`, the margin ratios,
 /// `mark_source` and `fba_enabled` are all absent from it. Merge by `coin` when
 /// a view needs both halves.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct MarketDynamic {
-    /// Market symbol (e.g. `"BTC"`) — the join key onto [`MarketInfo`].
+    /// Market symbol (e.g. `"BTC"`) — the join key onto [`MarketMeta`].
     pub coin: String,
     /// Market kind (`"perp"`).
     pub kind: MarketKind,
@@ -1104,53 +1116,6 @@ pub struct SpotMeta {
     pub pairs: Vec<SpotPair>,
     /// Token registry with per-token decimals.
     pub tokens: Vec<SpotToken>,
-}
-
-/// One spot balance inside a [`SpotClearinghouseState`].
-///
-/// Same `{asset, name, total, hold}` token-row shape the `account_state`
-/// `balances` array uses. Unlike that array this read keeps a token whose
-/// balance is entirely zero.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct SpotBalance {
-    /// Spot asset id.
-    pub asset: u32,
-    /// Human name for the asset, else `asset:<id>`.
-    pub name: String,
-    /// Total balance (spendable + hold), decimal string.
-    pub total: String,
-    /// Amount held in escrow by resting orders, decimal string.
-    pub hold: String,
-    /// Weighted-average acquisition cost, whole USDC PER WHOLE TOKEN. A price,
-    /// not a total: `(mark_px - avg_entry_px) * total` is the unrealized spot
-    /// PnL. `total` includes the part held behind resting orders, so multiply
-    /// by the quantity you mean rather than one the server picked for you.
-    ///
-    /// `None` means UNKNOWN, never zero. The chain rolls the basis on spot BUYS
-    /// only — a sell keeps the standing per-unit average, and a deposit (bridge
-    /// credit, Core⇄EVM credit, spot transfer, governance adjustment) writes no
-    /// basis at all. A holding that arrived by any of those paths therefore has
-    /// no entry, and the wire says `null` rather than a plausible wrong number.
-    /// Served on `spot_clearinghouse_state` rows only: `account_state.balances`
-    /// carries the unified USDC pool, where a basis on the quote asset has no
-    /// meaning.
-    #[serde(default)]
-    pub avg_entry_px: Option<String>,
-}
-
-/// `spot_clearinghouse_state` response — per-account spot token balances.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct SpotClearinghouseState {
-    /// Echo of the requested address.
-    pub address: Address,
-    /// Spot balances held by the account.
-    pub balances: Vec<SpotBalance>,
-    /// Committed block height the snapshot was read at.
-    pub height: u64,
-    /// Committed block timestamp the snapshot was read at (unix ms).
-    pub time: u64,
 }
 
 /// One canonical fill record.
@@ -1610,37 +1575,6 @@ pub struct EarnState {
     pub pools: Vec<EarnPool>,
 }
 
-/// `pm_summary` response — portfolio-margin enrollment + last-computed figures.
-///
-/// The request key is `address` (0x hex; an internal account id is rejected). An
-/// unknown address answers 200 with `enrolled: false` and zeroed figures.
-///
-/// PLANE: the three money figures are WHOLE-USDC decimal strings, the same
-/// plane `account_state` serves. They were once USD-CENTS integers under the
-/// names `pm_maint_margin_cents` / `net_value_cents` /
-/// `concentration_penalty_cents`. The node serves NEITHER those names NOR that
-/// plane now. The old names are deliberately NOT aliased onto the new fields:
-/// the rename carried a 100× plane change with it, so a silent alias would
-/// decode a cents-era caller's number one hundred times too large.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct PmSummary {
-    /// Echo of the resolved account address.
-    pub address: Address,
-    /// Whether the account is enrolled in portfolio margin.
-    pub enrolled: bool,
-    /// Enrollment timestamp (unix ms; `0` when not enrolled).
-    pub enrolled_at: u64,
-    /// Block height of the last PM computation.
-    pub last_computed_block: u64,
-    /// Maintenance-margin requirement, WHOLE-USDC decimal string.
-    pub pm_maint_margin: String,
-    /// Net account value, WHOLE-USDC decimal string.
-    pub pm_net_value: String,
-    /// Concentration penalty, WHOLE-USDC decimal string.
-    pub pm_concentration_penalty: String,
-}
-
 /// `user_fills` response — account-scoped fill history, newest first.
 ///
 /// The gateway merges deep archive history into the node's own fill ring and
@@ -1653,27 +1587,15 @@ pub struct PmSummary {
 pub struct UserFills {
     /// Echo of the resolved account address.
     pub address: Address,
-    /// Fills, newest first.
-    #[serde(default)]
-    pub fills: Vec<Fill>,
-}
-
-/// `user_fills_by_time` response — fill history filtered to an inclusive
-/// `[start_time, end_time]` window over each record's consensus `time`. Records
-/// are oldest first (ring order), the reverse of [`UserFills`]. Same [`Fill`]
-/// record shape.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct UserFillsByTime {
-    /// Echo of the resolved account address.
-    pub address: Address,
-    /// Echo of the request `start_time` (unix ms); `null` when absent.
+    /// Echo of the request `start_time` (unix ms); `None` when the ask carried
+    /// no lower bound.
     #[serde(default)]
     pub start_time: Option<u64>,
-    /// Echo of the request `end_time` (unix ms); `null` when absent.
+    /// Echo of the request `end_time` (unix ms); `None` when the ask carried no
+    /// upper bound.
     #[serde(default)]
     pub end_time: Option<u64>,
-    /// In-window fills, oldest first.
+    /// Fills. Newest first on an un-ranged ask, oldest first on a ranged one.
     #[serde(default)]
     pub fills: Vec<Fill>,
 }
@@ -1844,7 +1766,7 @@ pub struct ActiveAssetData {
     pub has_position: bool,
 }
 
-/// One approved agent inside an [`Agents`] response.
+/// One approved agent inside [`AccountOverview::agents`].
 ///
 /// `expires_at` is `null` for a never-expiring approval; `name` is `null`
 /// when the approval carried no label.
@@ -1861,18 +1783,7 @@ pub struct AgentEntry {
     pub expires_at: Option<u64>,
 }
 
-/// `agents` response — approved agent / API wallets for an account.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct Agents {
-    /// Echo of the resolved master address.
-    pub address: Address,
-    /// Approved agents.
-    #[serde(default)]
-    pub agents: Vec<AgentEntry>,
-}
-
-/// One sub-account inside a [`SubAccounts`] response.
+/// One sub-account inside [`AccountOverview::sub_accounts`].
 ///
 /// `equity` is the sub-account's whole-USDC cross-account value (settled-PnL
 /// inclusive), decimal string; `"0"` for a sub with no committed user state.
@@ -1887,18 +1798,7 @@ pub struct SubAccountEntry {
     pub equity: String,
 }
 
-/// `sub_accounts` response — sub-accounts of an account.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct SubAccounts {
-    /// Echo of the resolved parent address.
-    pub address: Address,
-    /// Sub-accounts, in index order.
-    #[serde(default)]
-    pub sub_accounts: Vec<SubAccountEntry>,
-}
-
-/// One follower stake in a vault, inside [`WebDataVault::equities`].
+/// One follower stake in a vault, inside [`AccountOverviewVault::equities`].
 ///
 /// `shares` is on the WHOLE-share plane (already divided by the share scale) and
 /// `equity` is whole USDC — neither needs client-side scaling.
@@ -1915,10 +1815,10 @@ pub struct VaultEquity {
     pub equity: String,
 }
 
-/// The vault facet of a [`WebData`] snapshot.
+/// The vault facet of an [`AccountOverview`] snapshot.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct WebDataVault {
+pub struct AccountOverviewVault {
     /// Stakes the account holds as a follower.
     #[serde(default)]
     pub equities: Vec<VaultEquity>,
@@ -1927,7 +1827,11 @@ pub struct WebDataVault {
     pub vaults: Vec<VaultState>,
 }
 
-/// Aggregate delegator figures — the `delegator_summary` body.
+/// Aggregate delegator figures, inside [`AccountOverviewStaking`].
+///
+/// The three balances are DISJOINT — add them for the whole staked holding.
+/// `undelegated` is the free pool a `token_delegate` draws from, and the only
+/// one `staking_withdraw` returns to spot with no unbonding window.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct DelegatorSummary {
@@ -1941,18 +1845,17 @@ pub struct DelegatorSummary {
     pub n_delegations: u64,
 }
 
-/// The staking facet of a [`WebData`] snapshot.
+/// The staking facet of an [`AccountOverview`] snapshot.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct WebDataStaking {
+pub struct AccountOverviewStaking {
     /// Per-delegation staking detail.
     pub state: StakingSnapshot,
     /// Aggregate delegator figures.
     pub summary: DelegatorSummary,
 }
 
-/// The multisig facet of a [`WebData`] snapshot — the `user_to_multi_sig_signers`
-/// body without its address.
+/// The multisig facet of an [`AccountOverview`] snapshot.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct MultiSigSigners {
@@ -1965,26 +1868,36 @@ pub struct MultiSigSigners {
     pub signers: Vec<String>,
 }
 
-/// `web_data` response — the consolidated account snapshot.
+/// The `account_state` `detail: "overview"` shape — the account's full
+/// NON-TRADING state.
 ///
-/// One read for the account facets `account_state` does NOT carry: vaults,
-/// staking, sub-accounts, the multisig signer set, and agent (API) wallets.
-/// Each facet is the same body the standalone read returns, minus the redundant
-/// per-facet address.
+/// The companion shape to [`AccountState`]: the default depth owns margin,
+/// positions and balances, this one owns vaults, staking, sub-accounts, the
+/// multisig signer set, agent (API) wallets and the derived role. Every
+/// sub-object is honest-empty rather than absent.
+///
+/// The standalone `account_overview` `/info` type was REMOVED server-side.
+/// [`Info::account_overview`] now posts the `detail` parameter and returns this
+/// same shape. The WS `account_state` frame carries the DEFAULT depth only —
+/// these facets are REST-read, not pushed.
 ///
 /// `height` / `time` stamp the committed block the snapshot was read at, flat at
 /// the top level.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct WebData {
+pub struct AccountOverview {
     /// Echo of the requested address.
     pub address: Address,
+    /// Derived role: `"missing"` / `"user"` / `"agent"` / `"vault"` /
+    /// `"sub_account"`. `None` on a node that predates the field.
+    #[serde(default)]
+    pub role: Option<String>,
     /// Vault follower stakes + followed / led vault states.
     #[serde(default)]
-    pub vault: WebDataVault,
+    pub vault: AccountOverviewVault,
     /// Staking detail + aggregate delegator figures.
     #[serde(default)]
-    pub staking: WebDataStaking,
+    pub staking: AccountOverviewStaking,
     /// Sub-accounts, in index order.
     #[serde(default)]
     pub sub_accounts: Vec<SubAccountEntry>,
@@ -2000,79 +1913,28 @@ pub struct WebData {
     pub time: u64,
 }
 
-/// One maker quote inside an [`RfqSession`].
+/// Response depth for [`Info::account_state`].
 ///
-/// `price` / `max_size` keep those names — the `px` / `sz` short keys are the
-/// order-book dialect and do NOT apply to RFQ quotes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// The node accepts a third value, `"overview"`. It answers with the
+/// [`AccountOverview`] shape, which [`AccountState`] cannot decode, so
+/// [`Info::account_overview`] serves it instead of a variant here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct RfqQuote {
-    /// Maker address (`0x`-hex).
-    pub maker: String,
-    /// Maker self-trade-prevention group.
-    #[serde(default)]
-    pub maker_stp_group: Option<u32>,
-    /// Quoted price, tick-snapped whole-USDC decimal string.
-    pub price: String,
-    /// Largest size the maker will take, size-plane decimal string.
-    pub max_size: String,
-    /// Quote validity deadline (unix ms).
-    pub valid_until: u64,
-    /// Quote submission timestamp (unix ms).
-    pub submitted_at: u64,
+pub enum AccountDetail {
+    /// Margin scalars, positions and the whole token ledger. The default.
+    Full,
+    /// Margin scalars only — no position walk, no balance scan. Adds
+    /// [`AccountState::maint_margin`].
+    Margin,
 }
 
-/// One open RFQ session plus its maker quotes.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct RfqSession {
-    /// Request id.
-    pub rfq_id: u64,
-    /// Market symbol.
-    pub coin: String,
-    /// Side the requester intends to take, `"B"` / `"A"`.
-    pub side: OrderSide,
-    /// Requested size, size-plane decimal string.
-    pub sz: String,
-    /// Requester address (`0x`-hex).
-    pub requester: String,
-    /// Requester self-trade-prevention group.
-    #[serde(default)]
-    pub requester_stp_group: Option<u32>,
-    /// Request expiry (unix ms).
-    pub expiry: u64,
-    /// Requester limit price, decimal string; `null` when the request is
-    /// unpriced.
-    #[serde(default)]
-    pub limit_px: Option<String>,
-    /// Request creation timestamp (unix ms).
-    pub created_at: u64,
-    /// Maker quotes submitted so far.
-    #[serde(default)]
-    pub quotes: Vec<RfqQuote>,
-}
-
-/// `rfq_open` response — every open RFQ request. No request parameters.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct RfqOpen {
-    /// Open requests, in request-id order.
-    #[serde(default)]
-    pub rfqs: Vec<RfqSession>,
-}
-
-/// `rfq_user` response — the open RFQ requests one account takes part in.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct RfqUser {
-    /// Echo of the resolved account address.
-    pub address: Address,
-    /// Requests the account raised.
-    #[serde(default)]
-    pub requested: Vec<RfqSession>,
-    /// Requests the account quoted on.
-    #[serde(default)]
-    pub quoted: Vec<RfqSession>,
+/// Insert `coin` into a request body only when present — an absent `coin` asks
+/// for every market, which is a different question from one unknown market.
+fn insert_coin(body: &mut Value, coin: Option<&str>) {
+    if let Some(c) = coin {
+        let obj = body.as_object_mut().expect("json! produced an object");
+        obj.insert("coin".into(), json!(c));
+    }
 }
 
 /// Insert `start_time` / `end_time` into a request body only when present — the
@@ -2094,59 +1956,95 @@ impl<'a> Info<'a> {
     /// Returns the perp [`MarketDynamic`] records — live price, funding, open
     /// interest and the 24h ticker. This read carries NO precision grid, NO
     /// leverage ladder and NO trade-control flag; read [`Info::markets_meta`]
-    /// for those and merge by `coin`, or read [`Info::market_info`] for the
-    /// union on one market.
+    /// for those and merge by `coin`.
+    ///
+    /// `coin` narrows the answer to ONE market. It narrows the same rows and
+    /// does not change the shape, so a caller that wants one market pays one
+    /// round trip and parses one shape. `None` returns every market.
     ///
     /// The deployed gateway serves `markets.data` as an OBJECT
     /// `{ "perp": [...], "spot": { pairs, tokens } }`, NOT a flat array. We
     /// decode that wrapper and return the `perp` markets (use
-    /// [`Info::spot_meta`] for spot). Decoding `data` straight into a sequence
-    /// (the old behaviour) failed with `invalid type: map, expected a sequence`.
+    /// [`Info::spot_meta`] for spot).
     ///
     /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn markets(&self) -> Result<Vec<MarketDynamic>, ClientError> {
+    /// HTTP / decode / protocol errors per [`crate::ClientError`]. A `coin` the
+    /// node does not know answers 404.
+    pub async fn markets(&self, coin: Option<&str>) -> Result<Vec<MarketDynamic>, ClientError> {
         #[derive(serde::Deserialize)]
         struct MarketsResp {
             #[serde(default)]
             perp: Vec<MarketDynamic>,
         }
-        let resp: MarketsResp = self
-            .client
-            .post_json("/info", &json!({ "type": "markets" }))
-            .await?;
+        let mut body = json!({ "type": "markets" });
+        insert_coin(&mut body, coin);
+        let resp: MarketsResp = self.client.post_json("/info", &body).await?;
         Ok(resp.perp)
     }
 
     /// List the STATIC per-market metadata (`markets_meta`).
     ///
-    /// The long-cacheable subset of [`Info::markets`] — precision grids
+    /// The long-cacheable half of [`Info::markets`] — precision grids
     /// (`sz_decimals` / `tick_size` / `step_size`), the leverage + `margin_tiers`
-    /// ladder, `min_order`, trade-control flags, `mark_source`, and the
-    /// deprecated `asset_id` shim. These fields were split OFF the dynamic
-    /// `markets` read (which now carries only live price / funding / OI), so a
-    /// consumer that needs per-market precision must read `markets_meta` and
-    /// merge by `coin`. Same `{ perp, spot }` envelope as `markets`; the returned
-    /// perp records OMIT the dynamic price/funding/OI fields. Static → cache hard.
+    /// ladder, `min_order`, trade-control flags, `mark_source`, the
+    /// [`MarketMeta::signing_id`] write handle, and the
+    /// [`MarketMeta::risk_override`] governance override. These fields are split
+    /// OFF the dynamic `markets` read (which carries only live price / funding /
+    /// OI), so a consumer that needs per-market precision reads `markets_meta`
+    /// and merges by `coin`. Same `{ perp, spot }` envelope as `markets`; the
+    /// returned perp records OMIT the dynamic price/funding/OI fields.
+    /// Static → cache hard.
     ///
-    /// A perp row now carries an optional [`MarketInfo::token`] block (the
+    /// `coin` narrows the answer to ONE market; `None` returns every market.
+    ///
+    /// A perp row carries an optional [`MarketMeta::token`] block (the
     /// registered underlying token — EVM binding + `circulating_supply`),
     /// omitted when no underlying token is registered. Spot token rows carry
     /// `total_supply`; use [`Info::spot_meta`] for the `spot` sub-object.
     ///
     /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn markets_meta(&self) -> Result<Vec<MarketInfo>, ClientError> {
+    /// HTTP / decode / protocol errors per [`crate::ClientError`]. A `coin` the
+    /// node does not know answers 404.
+    pub async fn markets_meta(&self, coin: Option<&str>) -> Result<Vec<MarketMeta>, ClientError> {
         #[derive(serde::Deserialize)]
         struct MarketsResp {
             #[serde(default)]
-            perp: Vec<MarketInfo>,
+            perp: Vec<MarketMeta>,
         }
-        let resp: MarketsResp = self
-            .client
-            .post_json("/info", &json!({ "type": "markets_meta" }))
-            .await?;
+        let mut body = json!({ "type": "markets_meta" });
+        insert_coin(&mut body, coin);
+        let resp: MarketsResp = self.client.post_json("/info", &body).await?;
         Ok(resp.perp)
+    }
+
+    /// Public trade prints for one market (`trades`), recent or windowed.
+    ///
+    /// One read answers both asks. Pass `None` / `None` for the recent tape,
+    /// newest-first, from the node's bounded ring. Pass a bound to filter by
+    /// consensus `time`; a RANGED ask reaches the gateway archive, and its rows
+    /// come back oldest-first. An un-ranged ask always answers from the ring.
+    ///
+    /// An archive-served print OMITS `hash` rather than sending `""`: on a node
+    /// print `""` means "there was no signed taker action", and the archive
+    /// stores no trace hash at all. Absent is unknown, `""` is a known absence.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn trades(
+        &self,
+        coin: &str,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> Result<Vec<Trade>, ClientError> {
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            #[serde(default)]
+            trades: Vec<Trade>,
+        }
+        let mut body = json!({ "type": "trades", "coin": coin });
+        insert_time_window(&mut body, start_time, end_time);
+        let resp: Resp = self.client.post_json("/info", &body).await?;
+        Ok(resp.trades)
     }
 
     /// Fetch the L2 book snapshot for a market or spot pair.
@@ -2184,70 +2082,6 @@ impl<'a> Info<'a> {
         self.client.post_json("/info", &body).await
     }
 
-    /// Fetch the most recent public trade prints for a market (bounded window).
-    ///
-    /// Keyed by `coin` (the market symbol). Deep history is served by the
-    /// gateway archive; this read returns the recent tape, newest-first.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn recent_trades(&self, coin: &str) -> Result<Vec<Trade>, ClientError> {
-        #[derive(serde::Deserialize)]
-        struct Resp {
-            #[serde(default)]
-            trades: Vec<Trade>,
-        }
-        let resp: Resp = self
-            .client
-            .post_json("/info", &json!({ "type": "recent_trades", "coin": coin }))
-            .await?;
-        Ok(resp.trades)
-    }
-
-    /// Fetch public trade prints for a market within a time window (unix ms).
-    ///
-    /// Keyed by `coin` (the market symbol); `start_time` / `end_time` bound a
-    /// recent window. For deep history use the gateway archive query types.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn trades_by_time(
-        &self,
-        coin: &str,
-        start_time: u64,
-        end_time: u64,
-    ) -> Result<Vec<Trade>, ClientError> {
-        #[derive(serde::Deserialize)]
-        struct Resp {
-            #[serde(default)]
-            trades: Vec<Trade>,
-        }
-        let resp: Resp = self
-            .client
-            .post_json(
-                "/info",
-                &json!({
-                    "type": "trades_by_time",
-                    "coin": coin,
-                    "start_time": start_time,
-                    "end_time": end_time,
-                }),
-            )
-            .await?;
-        Ok(resp.trades)
-    }
-
-    /// Fetch the predicted per-asset funding rates and their next settlement
-    /// boundaries. No parameters; returns one entry per active market.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn predicted_fundings(&self) -> Result<Vec<PredictedFunding>, ClientError> {
-        self.client
-            .post_json("/info", &json!({ "type": "predicted_fundings" }))
-            .await
-    }
-
     /// `vault_state` — snapshot of one vault, keyed by the vault ADDRESS.
     ///
     /// Values are on the human whole-USDC plane; see [`VaultState`] for the
@@ -2275,16 +2109,6 @@ impl<'a> Info<'a> {
             .await
     }
 
-    /// `protocol_metrics` — protocol-wide committed accumulators. No parameters.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn protocol_metrics(&self) -> Result<ProtocolMetrics, ClientError> {
-        self.client
-            .post_json("/info", &json!({ "type": "protocol_metrics" }))
-            .await
-    }
-
     // ── node-native queries (keyed by internal numeric ids) ──
 
     /// `node_info` — chain identity + sync state. No parameters.
@@ -2297,21 +2121,31 @@ impl<'a> Info<'a> {
             .await
     }
 
-    /// `account_state` — rich per-account snapshot keyed by `address`.
+    /// `account_state` — the account's full TRADING state, keyed by `address`.
     ///
-    /// Per the `/info` contract (`account_state`): the request carries the 20-byte
-    /// `address`; the response is the rich [`AccountState`] (equity, margins,
-    /// tier, positions, balances).
+    /// [`AccountDetail::Full`] (or `None`) answers with equity, margins, tier,
+    /// positions and the whole token ledger. [`AccountDetail::Margin`] answers
+    /// with the margin scalars only — it skips the position walk and the
+    /// balance scan, which is the right ask for a frequent liquidation-health
+    /// poll. Both depths compute the scalars with one shared helper, so the two
+    /// can never disagree.
+    ///
+    /// [`AccountState::maint_margin`] is served ONLY at
+    /// [`AccountDetail::Margin`].
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn account_state(&self, addr: Address) -> Result<AccountState, ClientError> {
-        self.client
-            .post_json(
-                "/info",
-                &json!({ "type": "account_state", "address": addr }),
-            )
-            .await
+    pub async fn account_state(
+        &self,
+        addr: Address,
+        detail: Option<AccountDetail>,
+    ) -> Result<AccountState, ClientError> {
+        let mut body = json!({ "type": "account_state", "address": addr });
+        if let Some(d) = detail {
+            let obj = body.as_object_mut().expect("json! produced an object");
+            obj.insert("detail".into(), json!(d));
+        }
+        self.client.post_json("/info", &body).await
     }
 
     /// `open_orders` — open orders for an account, keyed by `address`.
@@ -2382,17 +2216,6 @@ impl<'a> Info<'a> {
         Ok(resp.candles)
     }
 
-    /// `market_info` — rich single-market snapshot keyed by `coin` (the market
-    /// symbol, e.g. `"BTC"`).
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn market_info(&self, coin: &str) -> Result<MarketInfo, ClientError> {
-        self.client
-            .post_json("/info", &json!({ "type": "market_info", "coin": coin }))
-            .await
-    }
-
     /// Fetch the global fee schedule.
     ///
     /// # Errors
@@ -2430,23 +2253,6 @@ impl<'a> Info<'a> {
         Ok(resp.spot)
     }
 
-    /// `spot_clearinghouse_state` — per-account spot token balances keyed by
-    /// `address` (0x hex).
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn spot_clearinghouse_state(
-        &self,
-        addr: Address,
-    ) -> Result<SpotClearinghouseState, ClientError> {
-        self.client
-            .post_json(
-                "/info",
-                &json!({ "type": "spot_clearinghouse_state", "address": addr }),
-            )
-            .await
-    }
-
     /// List active delegations for an account. Convenience wrapper that
     /// extracts the `delegations` field from [`Info::staking_state`].
     ///
@@ -2454,20 +2260,6 @@ impl<'a> Info<'a> {
     /// See [`Info::staking_state`].
     pub async fn delegations(&self, addr: Address) -> Result<Vec<Delegation>, ClientError> {
         Ok(self.staking_state(addr).await?.state.delegations)
-    }
-
-    /// `pm_summary` — portfolio-margin enrollment + last-computed figures for an
-    /// account, keyed by `address` (0x hex).
-    ///
-    /// The cents fields are USD-CENTS-plane integer strings. An unknown address
-    /// answers with `enrolled:false` and zeroed figures.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn pm_summary(&self, addr: Address) -> Result<PmSummary, ClientError> {
-        self.client
-            .post_json("/info", &json!({ "type": "pm_summary", "address": addr }))
-            .await
     }
 
     /// `order_status` — single-order lifecycle lookup by `oid`.
@@ -2625,35 +2417,18 @@ impl<'a> Info<'a> {
         Ok(resp.action_json)
     }
 
-    /// `rfq_open` — every open RFQ request with its maker quotes. No parameters.
+    /// `user_fills` — account-scoped fill history, keyed by `address`.
     ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn rfq_open(&self) -> Result<RfqOpen, ClientError> {
-        self.client
-            .post_json("/info", &json!({ "type": "rfq_open" }))
-            .await
-    }
-
-    /// `rfq_user` — the open RFQ requests one account raised or quoted on,
-    /// keyed by `address`.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn rfq_user(&self, addr: Address) -> Result<RfqUser, ClientError> {
-        self.client
-            .post_json("/info", &json!({ "type": "rfq_user", "address": addr }))
-            .await
-    }
-
-    /// `user_fills` — account-scoped fill history, keyed by `address`, newest
-    /// first. Optional `limit` caps the most-recent records (absent = the full
-    /// ring).
+    /// One read, two asks. Pass no window for the recent records, newest first;
+    /// `limit` then caps the most-recent records (absent = the full ring). Pass
+    /// `start_time` / `end_time` to filter the same records by consensus `time`,
+    /// which returns them oldest first. Each bound is sent only when `Some`; an
+    /// absent bound is open, and the response echoes both.
     ///
     /// The gateway merges deep archive history into the node fill serializer's
     /// own response and re-applies `limit`. A SPOT `sz` rides the raw integer
-    /// plane today; the human plane is the owner-ruled target, flipping under a
-    /// fork-gated node-tape fix. A merged archive-normalized fill may omit `block`.
+    /// plane today; the human plane is the owner-ruled target. A merged
+    /// archive-normalized fill may omit `block`.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -2661,30 +2436,14 @@ impl<'a> Info<'a> {
         &self,
         addr: Address,
         limit: Option<u32>,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
     ) -> Result<UserFills, ClientError> {
         let mut body = json!({ "type": "user_fills", "address": addr });
         if let Some(l) = limit {
             let obj = body.as_object_mut().expect("json! produced an object");
             obj.insert("limit".into(), json!(l));
         }
-        self.client.post_json("/info", &body).await
-    }
-
-    /// `user_fills_by_time` — fill history filtered to an inclusive
-    /// `[start_time, end_time]` window over each record's consensus `time`,
-    /// keyed by `address`. Records are oldest first (the reverse of
-    /// [`Info::user_fills`]). Each bound is inserted only when `Some`; an absent
-    /// bound is open.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn user_fills_by_time(
-        &self,
-        addr: Address,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-    ) -> Result<UserFillsByTime, ClientError> {
-        let mut body = json!({ "type": "user_fills_by_time", "address": addr });
         insert_time_window(&mut body, start_time, end_time);
         self.client.post_json("/info", &body).await
     }
@@ -2748,17 +2507,23 @@ impl<'a> Info<'a> {
             .await
     }
 
-    /// `web_data` — the consolidated account snapshot (vaults / staking /
-    /// sub-accounts / multisig / agents), keyed by `address`.
+    /// The account's full NON-TRADING state (vaults / staking / sub-accounts /
+    /// multisig / agents / role), keyed by `address`.
     ///
-    /// One round trip replaces five facet reads. The same body streams on the
-    /// `web_data` WS channel.
+    /// One round trip for every facet the default [`Info::account_state`] depth
+    /// does not carry. The standalone `account_overview` `/info` type was
+    /// REMOVED server-side; this posts
+    /// `{"type":"account_state","detail":"overview"}` and returns the same
+    /// [`AccountOverview`] shape.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn web_data(&self, addr: Address) -> Result<WebData, ClientError> {
+    pub async fn account_overview(&self, addr: Address) -> Result<AccountOverview, ClientError> {
         self.client
-            .post_json("/info", &json!({ "type": "web_data", "address": addr }))
+            .post_json(
+                "/info",
+                &json!({ "type": "account_state", "address": addr, "detail": "overview" }),
+            )
             .await
     }
 
@@ -2778,29 +2543,6 @@ impl<'a> Info<'a> {
                 "/info",
                 &json!({ "type": "active_asset_data", "address": addr, "coin": coin }),
             )
-            .await
-    }
-
-    /// `agents` — approved agent / API wallets for an account, keyed by
-    /// `address`. A `null` `expires_at` is a never-expiring approval.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn agents(&self, addr: Address) -> Result<Agents, ClientError> {
-        self.client
-            .post_json("/info", &json!({ "type": "agents", "address": addr }))
-            .await
-    }
-
-    /// `sub_accounts` — sub-accounts of an account, keyed by `address`. Each
-    /// entry carries the sub's `equity` (whole-USDC, `"0"` for a sub with no
-    /// committed user state).
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn sub_accounts(&self, addr: Address) -> Result<SubAccounts, ClientError> {
-        self.client
-            .post_json("/info", &json!({ "type": "sub_accounts", "address": addr }))
             .await
     }
 
@@ -2886,34 +2628,6 @@ mod tests {
         assert_eq!(s.undelegated_pool_balance.as_deref(), Some("250"));
     }
 
-    /// `open_interest_by_asset` is a per-asset ARRAY of whole-unit size strings.
-    /// A node that predates it answers neither key.
-    #[test]
-    fn protocol_metrics_decodes_open_interest_by_asset() {
-        let data = serde_json::json!({
-            "open_interest_by_asset": [
-                { "asset": 0, "amount": "0.015" },
-                { "asset": 3, "amount": "1200" },
-            ],
-            "position_size_signed_sum_by_asset": [ { "asset": 0, "sum_signed": "0" } ],
-            "evm": {
-                "native_balance_wei": "12000000000000000000",
-                "n_nonzero_holders": 3u64,
-                "n_accounts": 11u64,
-            },
-        });
-        let m: ProtocolMetrics = serde_json::from_value(data).unwrap();
-        let oi = m.open_interest_by_asset.as_ref().unwrap();
-        assert_eq!(oi.len(), 2);
-        assert_eq!(oi[0].asset, 0);
-        assert_eq!(oi[0].amount, "0.015");
-        assert_eq!(oi[1].asset, 3, "rows stay in ascending asset order");
-        assert_eq!(m.evm.as_ref().unwrap().n_accounts, 11);
-
-        let older: ProtocolMetrics = serde_json::from_value(serde_json::json!({})).unwrap();
-        assert_eq!(older.open_interest_by_asset, None);
-    }
-
     /// Decode the exact `node_info.data` payload from the `/info` contract.
     #[test]
     fn node_info_decodes_doc_fixture() {
@@ -2936,63 +2650,11 @@ mod tests {
         assert_eq!(n, dec);
     }
 
-    /// Decode the exact `market_info.data` payload from the `/info` contract.
-    #[test]
-    fn market_info_decodes_doc_fixture() {
-        let data = serde_json::json!({
-            "coin": "BTC",
-            "asset_id": 0,
-            "kind": "perp",
-            "sz_decimals": 5,
-            "mark_px": "50000",
-            "oracle_px": "50000",
-            "tick_size": "0.01",
-            "step_size": "0.1",
-            "min_order": "0.1",
-            "max_leverage": 50,
-            "maint_margin_ratio": "5000",
-            "init_margin_ratio": "10000",
-            "funding": {
-                "rate_per_hr": "1000",
-                "cap_per_hr": "50000",
-                "interval_ms": 3600000u64,
-                "next_payment_ts": 1735693200000u64
-            },
-            "margin_tiers": [
-                { "max_open_interest": "100000", "max_leverage": 50, "maint_margin_ratio": "100" },
-                { "max_open_interest": null, "max_leverage": 5, "maint_margin_ratio": "1000" }
-            ],
-            "mark_source": "MedianOfOraclesAndMid",
-            "fba_enabled": false,
-            "open_interest": "5000000000"
-        });
-        let m: MarketInfo = serde_json::from_value(data).unwrap();
-        assert_eq!(m.coin, "BTC");
-        assert_eq!(m.asset_id, 0);
-        assert_eq!(m.kind, MarketKind::Perp);
-        assert_eq!(m.sz_decimals, 5);
-        assert_eq!(m.mark_px, "50000");
-        assert_eq!(m.oracle_px, "50000");
-        assert_eq!(m.tick_size, "0.01");
-        assert_eq!(m.max_leverage, 50);
-        assert_eq!(m.funding.interval_ms, 3_600_000);
-        assert_eq!(m.mark_source, "MedianOfOraclesAndMid");
-        assert_eq!(m.open_interest, "5000000000");
-        // Inline maintenance-margin ladder; `null` upper bound = unbounded top.
-        assert_eq!(m.margin_tiers.len(), 2);
-        assert_eq!(
-            m.margin_tiers[0].max_open_interest.as_deref(),
-            Some("100000")
-        );
-        assert_eq!(m.margin_tiers[0].max_leverage, 50);
-        assert!(m.margin_tiers[1].max_open_interest.is_none());
-        // Fixed-point magnitudes serialize back as strings; kind is lowercase.
-        let j = serde_json::to_value(&m).unwrap();
-        assert_eq!(j["kind"], "perp");
-        assert_eq!(j["coin"], "BTC");
-        assert!(j["sz_decimals"].is_number());
-        assert!(j["tick_size"].is_string());
-        assert!(j["open_interest"].is_string());
+    /// Stamp the committed as-of block onto an overview-shape fixture.
+    fn with_as_of(mut body: serde_json::Value) -> serde_json::Value {
+        body["height"] = serde_json::json!(562u64);
+        body["time"] = serde_json::json!(1_700_000_000_555u64);
+        body
     }
 
     /// The wire-v2 `account_state.data` body, exactly as the node serializes it.
@@ -3127,11 +2789,12 @@ mod tests {
     /// A dropped or renamed field on the money path must FAIL the decode. With
     /// `#[serde(default)]` a rename decoded fine and reported an account that
     /// holds nothing.
+    ///
+    /// `clearinghouse_state` and `balances` are NOT in this list: the margin
+    /// depth omits both by design, so the type cannot demand them.
     #[test]
     fn account_state_rejects_a_dropped_or_renamed_field() {
         for key in [
-            "clearinghouse_state",
-            "balances",
             "abstraction",
             "position_mode",
             "account_value",
@@ -3170,6 +2833,28 @@ mod tests {
         assert!(serde_json::from_value::<AccountState>(account_state_fixture()).is_ok());
     }
 
+    /// The margin depth answers the scalars alone: it omits the position walk
+    /// and the balance scan, and it is the ONLY depth that carries
+    /// `maint_margin`. Both collections must read empty, never as a decode
+    /// failure and never as a fabricated row.
+    #[test]
+    fn account_state_margin_depth_drops_the_walks_and_adds_maint_margin() {
+        let mut body = account_state_fixture();
+        let obj = body.as_object_mut().unwrap();
+        obj.remove("clearinghouse_state");
+        obj.remove("balances");
+        obj.insert("maint_margin".into(), serde_json::json!("90000000"));
+
+        let a: AccountState = serde_json::from_value(body).unwrap();
+        assert_eq!(a.maint_margin.as_deref(), Some("90000000"));
+        assert!(a.clearinghouse_state.is_empty());
+        assert!(a.balances.is_empty());
+
+        // The full depth is the other half of the contract: no `maint_margin`.
+        let full: AccountState = serde_json::from_value(account_state_fixture()).unwrap();
+        assert!(full.maint_margin.is_none());
+    }
+
     #[test]
     fn account_state_reads_a_portfolio_margin_account() {
         let mut body = account_state_fixture();
@@ -3181,14 +2866,14 @@ mod tests {
     }
 
     /// Decode the DEPLOYED gateway `markets.data` shape: an object
-    /// `{ "perp": [...], "spot": {...} }`, not a flat array. markets() must
+    /// `{ "perp": [...], "spot": {...} }`, not a flat array. `markets` must
     /// return the perp records (pre-fix: `invalid type: map, expected sequence`).
     #[test]
     fn markets_meta_decodes_perp_spot_object() {
         #[derive(serde::Deserialize)]
         struct MarketsResp {
             #[serde(default)]
-            perp: Vec<MarketInfo>,
+            perp: Vec<MarketMeta>,
         }
         let data = serde_json::json!({
             "perp": [{
@@ -3243,7 +2928,7 @@ mod tests {
     ///
     /// It carries no `sz_decimals` / `tick_size` / `step_size` / `min_order` /
     /// `max_leverage` / margin ratios / `mark_source` / `fba_enabled`, so
-    /// [`MarketInfo`] cannot decode it. The old hand-written fixture above did
+    /// [`MarketMeta`] cannot decode it. The old hand-written fixture above did
     /// carry them, which is why the mismatch went unseen — pin the real reply.
     #[test]
     fn markets_dynamic_row_decodes_live_reply() {
@@ -3264,7 +2949,7 @@ mod tests {
             "prev_day_px": "64251.1"
         });
         assert!(
-            serde_json::from_value::<MarketInfo>(row.clone()).is_err(),
+            serde_json::from_value::<MarketMeta>(row.clone()).is_err(),
             "the static type must not silently accept a dynamic row"
         );
 
@@ -3278,36 +2963,6 @@ mod tests {
         // A healthy market omits both markers; neither may read as a value.
         assert!(m.px_stale.is_none());
         assert!(m.day_ntl_vlm_lower_bound_from.is_none());
-    }
-
-    /// The `market_info` union row from chain 114514 on 2026-08-08. It serves
-    /// `open` / `close` / `halted` / `impact_pxs` / `strict_isolated`, all of
-    /// which the type used to drop.
-    #[test]
-    fn market_info_decodes_live_reply() {
-        let data = serde_json::json!({
-            "asset_id": 0, "change_24h": "0.01186438", "close": true, "coin": "BTC",
-            "day_ntl_vlm": "0", "fba_enabled": false,
-            "funding": { "cap_per_hr": "400", "interval_ms": 3_600_000u64,
-                         "next_payment_ts": 1_786_165_200_000u64, "rate_per_hr": "-3" },
-            "halted": false, "impact_pxs": ["64998", "65030.7"],
-            "init_margin_ratio": "500", "kind": "perp", "maint_margin_ratio": "300",
-            "margin_tiers": [{ "maint_margin_ratio": "300", "max_leverage": 20,
-                               "max_open_interest": null }],
-            "mark_px": "65013.4", "mark_source": "oracle_median", "max_leverage": 20,
-            "mid_px": "65014.4", "min_order": "0.00001", "open": true,
-            "open_interest": "0.7895", "oracle_px": "65033.7", "premium": "-0.00031233",
-            "prev_day_px": "64251.1", "step_size": "0.00001", "strict_isolated": false,
-            "sz_decimals": 5, "tick_size": "0.1"
-        });
-        let m: MarketInfo = serde_json::from_value(data).unwrap();
-        assert_eq!(m.open, Some(true));
-        assert_eq!(m.close, Some(true));
-        assert_eq!(m.halted, Some(false));
-        assert_eq!(m.strict_isolated, Some(false));
-        assert_eq!(m.impact_pxs.unwrap(), vec!["64998", "65030.7"]);
-        // Uncapped OI omits the key; an absent cap is not a cap of zero.
-        assert!(m.oi_cap.is_none());
     }
 
     /// `user_position_history`: the envelope is address + rows, and a degraded
@@ -3366,23 +3021,19 @@ mod tests {
         assert_eq!(h.positions[0].closed_sz, "0.80");
     }
 
-    /// `spot_clearinghouse_state`: a row with no recorded basis says `null`, and
+    /// `account_state.balances`: a row with no recorded basis says `null`, and
     /// a bought row carries the whole-row cost.
     #[test]
-    fn spot_balance_carries_optional_avg_entry_px() {
-        let data = serde_json::json!({
-            "address": "0x0c4ec1cba7310669b08145f17a29b1048d9196ab",
-            "balances": [
-                { "asset": 100, "name": "USDC", "total": "390548", "hold": "390548" },
-                { "asset": 104, "name": "MTF", "total": "10000039.5196599",
-                  "hold": "3000000", "avg_entry_px": "412.5" }
-            ],
-            "height": 6_845_318u64, "time": 1_786_164_224_330u64
-        });
-        let s: SpotClearinghouseState = serde_json::from_value(data).unwrap();
+    fn token_balance_carries_optional_avg_entry_px() {
+        let rows = serde_json::json!([
+            { "asset": 100, "name": "USDC", "total": "390548", "hold": "390548" },
+            { "asset": 104, "name": "MTF", "total": "10000039.5196599",
+              "hold": "3000000", "avg_entry_px": "412.5" }
+        ]);
+        let b: Vec<TokenBalance> = serde_json::from_value(rows).unwrap();
         // Deposited / pre-basis holdings carry no entry — never a zero.
-        assert!(s.balances[0].avg_entry_px.is_none());
-        assert_eq!(s.balances[1].avg_entry_px.as_deref(), Some("412.5"));
+        assert!(b[0].avg_entry_px.is_none());
+        assert_eq!(b[1].avg_entry_px.as_deref(), Some("412.5"));
     }
 
     /// Decode the exact `l2_book.data` payload from the `/info` contract.
@@ -3546,37 +3197,6 @@ mod tests {
         assert_eq!(b.coin, "BTC/USDC");
         assert_eq!(b.bids.len(), 1);
         assert_eq!(b.asks[0].px, "61551");
-    }
-
-    /// Decode the exact `spot_clearinghouse_state.data` payload the node serves.
-    #[test]
-    fn spot_clearinghouse_state_decodes_node_fixture() {
-        let data = serde_json::json!({
-            "address": "0x4242424242424242424242424242424242424242",
-            "balances": [
-                { "asset": 101, "name": "BTC", "total": "500", "hold": "20" }
-            ],
-            "height": 8_416_000u64,
-            "time": 1_783_011_600_000u64
-        });
-        let s: SpotClearinghouseState = serde_json::from_value(data).unwrap();
-        assert_eq!(s.balances.len(), 1);
-        assert_eq!(s.balances[0].asset, 101);
-        assert_eq!(s.balances[0].name, "BTC");
-        assert_eq!(s.balances[0].total, "500");
-        assert_eq!(s.balances[0].hold, "20");
-        assert_eq!(s.height, 8_416_000);
-        assert_eq!(s.time, 1_783_011_600_000);
-        // Magnitudes stay strings on the wire.
-        let j = serde_json::to_value(&s).unwrap();
-        assert!(j["balances"][0]["total"].is_string());
-        assert!(j["balances"][0]["hold"].is_string());
-        assert!(j["balances"][0]["asset"].is_number());
-        assert!(j["balances"][0].get("balance").is_none());
-        // Round-trips.
-        let dec: SpotClearinghouseState =
-            serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
-        assert_eq!(s, dec);
     }
 
     /// Decode the deployed gateway `fee_schedule.data`: string bps + tiers[].
@@ -3811,20 +3431,6 @@ mod tests {
         });
         let a: Trade = serde_json::from_value(archived).unwrap();
         assert_eq!(a.hash, None, "not recorded is not the same as empty");
-    }
-
-    /// Decode a `predicted_fundings` entry: clamped rate + next boundary.
-    #[test]
-    fn predicted_funding_decodes() {
-        let data = serde_json::json!({
-            "coin": "ETH",
-            "predicted_rate": "0.0087084893337279276017913756",
-            "next_funding_ts": 1783011600000u64
-        });
-        let p: PredictedFunding = serde_json::from_value(data).unwrap();
-        assert_eq!(p.coin, "ETH");
-        assert_eq!(p.next_funding_ts, 1_783_011_600_000);
-        assert!(p.predicted_rate.starts_with("0.008"));
     }
 
     // ── P2 wave-1: typed /info read decodes (fixtures pinned to the node
@@ -4176,48 +3782,6 @@ mod tests {
         assert_eq!(e2.pools[0].user_value, None);
     }
 
-    /// `pm_summary`: an enrolled account and the zeroed unknown-address shape.
-    ///
-    /// The keys are the WHOLE-USDC ones chain 114514 served on 2026-08-08. The
-    /// cents-plane names are gone from the node; a reply that still carries them
-    /// must NOT decode, or a cents number would be read as whole USDC.
-    #[test]
-    fn pm_summary_decodes_enrolled_and_zeroed() {
-        let enrolled = serde_json::json!({
-            "address": "0x4242424242424242424242424242424242424242",
-            "enrolled": true, "enrolled_at": 1_700_000_000_000u64,
-            "last_computed_block": 8_416_000u64,
-            "pm_maint_margin": "1234.56", "pm_net_value": "100000",
-            "pm_concentration_penalty": "2.5"
-        });
-        let p: PmSummary = serde_json::from_value(enrolled).unwrap();
-        assert!(p.enrolled);
-        assert_eq!(p.enrolled_at, 1_700_000_000_000);
-        assert_eq!(p.pm_maint_margin, "1234.56");
-        assert_eq!(p.pm_net_value, "100000");
-        assert_eq!(p.pm_concentration_penalty, "2.5");
-        // Zeroed unknown address.
-        let zeroed = serde_json::json!({
-            "address": "0x0000000000000000000000000000000000000000",
-            "enrolled": false, "enrolled_at": 0u64, "last_computed_block": 0u64,
-            "pm_maint_margin": "0", "pm_net_value": "0",
-            "pm_concentration_penalty": "0"
-        });
-        let z: PmSummary = serde_json::from_value(zeroed).unwrap();
-        assert!(!z.enrolled);
-        assert_eq!(z.pm_maint_margin, "0");
-
-        // The retired cents plane is not aliased back in: the rename carried a
-        // 100x plane change, so accepting it would decode a 100x-wrong number.
-        let cents = serde_json::json!({
-            "address": "0x4242424242424242424242424242424242424242",
-            "enrolled": true, "enrolled_at": 0u64, "last_computed_block": 0u64,
-            "pm_maint_margin_cents": "123456", "net_value_cents": "10000000",
-            "concentration_penalty_cents": "250"
-        });
-        assert!(serde_json::from_value::<PmSummary>(cents).is_err());
-    }
-
     /// `user_fills`: a node-ring perp fill WITH `block` + `0x` hash, and a spot
     /// fill (raw-plane integer `sz`) WITHOUT `block` (archive-normalized). The
     /// canonical perp values mirror `order_status_filled_decodes_canonical_fill`.
@@ -4264,27 +3828,6 @@ mod tests {
             j.get("address").and_then(Value::as_str),
             Some("0x4242424242424242424242424242424242424242")
         );
-    }
-
-    /// `user_fills_by_time`: echoed window bounds (`null` when absent), oldest
-    /// first, same `Fill` record shape.
-    #[test]
-    fn user_fills_by_time_decodes_window() {
-        let data = serde_json::json!({
-            "address": "0x4242424242424242424242424242424242424242",
-            "start_time": 100u64, "end_time": null,
-            "fills": [
-                { "coin": "MTF", "side": "B", "px": "0.1", "sz": "1",
-                  "time": 150u64, "oid": 1u64, "tid": 1u64, "fee": "0",
-                  "closed_pnl": "0", "dir": "Open Long", "start_position": "0",
-                  "block": 5u64, "hash": "" }
-            ]
-        });
-        let f: UserFillsByTime = serde_json::from_value(data).unwrap();
-        assert_eq!(f.start_time, Some(100));
-        assert_eq!(f.end_time, None);
-        assert_eq!(f.fills.len(), 1);
-        assert_eq!(f.fills[0].block, Some(5));
     }
 
     /// `funding_history`: one unclamped sample (`premium == funding_rate`) and
@@ -4401,7 +3944,7 @@ mod tests {
                   "name": "bot-1", "expires_at": 1_800_000_000_000u64 }
             ]
         });
-        let a: Agents = serde_json::from_value(data).unwrap();
+        let a: AccountOverview = serde_json::from_value(with_as_of(data)).unwrap();
         assert_eq!(a.agents.len(), 2);
         // Never-expiring, unnamed.
         assert_eq!(a.agents[0].name, None);
@@ -4426,7 +3969,7 @@ mod tests {
                   "equity": "0" }
             ]
         });
-        let s: SubAccounts = serde_json::from_value(data).unwrap();
+        let s: AccountOverview = serde_json::from_value(with_as_of(data)).unwrap();
         assert_eq!(s.sub_accounts.len(), 2);
         assert_eq!(s.sub_accounts[0].index, 1);
         assert_eq!(s.sub_accounts[0].equity, "1234.5");

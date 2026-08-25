@@ -7,7 +7,7 @@
 //!
 //! ## Plane bridge
 //!
-//! [`MarketInfo`] reports `tick_size` / `step_size` / `min_order` as CANONICAL
+//! [`MarketMeta`] reports `tick_size` / `step_size` / `min_order` as CANONICAL
 //! decimal strings: `tick_size` in whole USDC (e.g. `"0.01"`), `step_size` /
 //! `min_order` in whole base units (e.g. `"0.001"`). The order wire lives on two
 //! different integer planes — `limit_px` is 1e8 fixed-point and `size` is raw
@@ -16,7 +16,7 @@
 //! plane (`× 10^sz_decimals`) before snapping. No floating point is used: the
 //! canonical decimal strings are parsed straight into scaled integers.
 
-use crate::rest::info::MarketInfo;
+use crate::rest::info::MarketMeta;
 
 /// The order wire `limit_px` plane is 1e8 fixed-point, so a whole-USDC tick
 /// scales by `10^8`.
@@ -68,14 +68,14 @@ impl std::error::Error for GridError {}
 /// `size` down to a `step_size` multiple — and the snapped size is checked
 /// against `min_order`.
 ///
-/// See the [module docs](self) for the plane bridge between `MarketInfo`'s
+/// See the [module docs](self) for the plane bridge between `MarketMeta`'s
 /// canonical decimal strings and the integer wire planes.
 ///
 /// # Errors
 /// [`GridError`] when the market reports no usable grid, the price rounds below
 /// one tick, or the snapped size is below the market minimum.
 pub fn round_order_to_grid(
-    market: &MarketInfo,
+    market: &MarketMeta,
     limit_px: u64,
     size: u64,
 ) -> Result<GridOrder, GridError> {
@@ -147,12 +147,13 @@ pub(crate) fn decimal_to_scaled(s: &str, scale: u32) -> Option<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rest::info::{Funding, MarketInfo, MarketKind};
+    use crate::rest::info::{Funding, MarketKind, MarketMeta};
 
-    fn mkt(tick: &str, step: &str, min: &str, sz_decimals: u8) -> MarketInfo {
-        MarketInfo {
+    fn mkt(tick: &str, step: &str, min: &str, sz_decimals: u8) -> MarketMeta {
+        MarketMeta {
             coin: "BTC".into(),
-            asset_id: 0,
+            signing_id: 0,
+            risk_override: None,
             kind: MarketKind::Perp,
             sz_decimals,
             mark_px: "0".into(),

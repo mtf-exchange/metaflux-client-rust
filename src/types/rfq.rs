@@ -2,8 +2,9 @@
 //!
 //! A taker opens an RFQ session; market makers quote it; the taker crosses
 //! against the best quote, or the window expires. These types model the ACTIONS
-//! a client submits. The read side lives on the `/info` `rfq_open` / `rfq_user`
-//! reads — see [`crate::rest::info::RfqSession`].
+//! a client submits. The read side is OPERATOR LANE: the RFQ engine is not
+//! reachable from the public `/exchange` yet, so its `rfq_open` / `rfq_user`
+//! reads do not ship publicly and this SDK types no response for them.
 
 use serde::{Deserialize, Serialize};
 

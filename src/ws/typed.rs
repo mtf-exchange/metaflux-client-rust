@@ -187,11 +187,8 @@ impl WsMessage {
             Self::L2Book(_) => "l2_book",
             Self::Trades(_) => "trades",
             Self::Bbo(_) => "bbo",
-            Self::ActiveAssetCtx(_) => "active_asset_ctx",
             Self::Candles(_) => "candles",
-            Self::AllMids(_) => "all_mids",
             Self::Fills(_) => "fills",
-            Self::UserEvents(_) => "user_events",
             Self::OrderUpdates(_) => "order_updates",
             Self::Notifications(_) => "notifications",
             Self::LedgerUpdates(_) => "ledger_updates",
@@ -551,7 +548,7 @@ mod tests {
             let v = if tag == "subscriptionResponse" {
                 json!({ "channel": tag, "data": {
                     "method": "subscribe",
-                    "subscription": { "type": "all_mids" }
+                    "subscription": { "type": "markets" }
                 }})
             } else {
                 json!({ "channel": tag, "data": [] })

@@ -268,20 +268,6 @@ impl WsClient {
         .await
     }
 
-    /// Subscribe to per-market mark / oracle / funding context.
-    ///
-    /// # Errors
-    /// See [`WsClient::subscribe`].
-    pub async fn subscribe_active_asset_ctx(
-        &self,
-        market: crate::types::MarketId,
-    ) -> Result<(), ClientError> {
-        self.subscribe(Subscription::ActiveAssetCtx {
-            coin: market.0.to_string(),
-        })
-        .await
-    }
-
     /// Subscribe to rolling PRICE bars for one market, one interval token
     /// (`"1m"`/`"5m"`/`"15m"`/`"1h"`/`"4h"`/`"1d"`) and one price series.
     ///
@@ -308,14 +294,6 @@ impl WsClient {
         .await
     }
 
-    /// Subscribe to the global all-market mids stream.
-    ///
-    /// # Errors
-    /// See [`WsClient::subscribe`].
-    pub async fn subscribe_all_mids(&self) -> Result<(), ClientError> {
-        self.subscribe(Subscription::AllMids).await
-    }
-
     /// Subscribe to per-user fills.
     ///
     /// # Errors
@@ -333,17 +311,6 @@ impl WsClient {
         user: crate::wallet::Address,
     ) -> Result<(), ClientError> {
         self.subscribe(Subscription::OrderUpdates { user }).await
-    }
-
-    /// Subscribe to per-user account / margin events.
-    ///
-    /// # Errors
-    /// See [`WsClient::subscribe`].
-    pub async fn subscribe_user_events(
-        &self,
-        user: crate::wallet::Address,
-    ) -> Result<(), ClientError> {
-        self.subscribe(Subscription::UserEvents { user }).await
     }
 
     /// Subscribe to the per-user live account-state stream.

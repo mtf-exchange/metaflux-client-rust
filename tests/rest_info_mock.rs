@@ -29,12 +29,12 @@ fn envelope(ty: &str, data: Value) -> Value {
 }
 
 #[tokio::test]
-async fn markets_meta_decodes_array_of_market_info() {
+async fn markets_meta_decodes_the_static_row() {
     let server = MockServer::start().await;
-    let market = |asset_id: u32, coin: &str, max_lev: u32| {
+    let market = |signing_id: u32, coin: &str, max_lev: u32| {
         json!({
             "coin": coin,
-            "asset_id": asset_id,
+            "signing_id": signing_id,
             "kind": "perp",
             "sz_decimals": 5,
             "mark_px": "50000",
@@ -57,7 +57,8 @@ async fn markets_meta_decodes_array_of_market_info() {
             ],
             "mark_source": "MedianOfOraclesAndMid",
             "fba_enabled": false,
-            "open_interest": "5000000000"
+            "open_interest": "5000000000",
+            "risk_override": null
         })
     };
     Mock::given(method("POST"))
@@ -73,10 +74,12 @@ async fn markets_meta_decodes_array_of_market_info() {
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let markets = client.rest().info().markets_meta().await.unwrap();
+    let markets = client.rest().info().markets_meta(None).await.unwrap();
     assert_eq!(markets.len(), 2);
     assert_eq!(markets[0].coin, "BTC");
-    assert_eq!(markets[0].asset_id, 0);
+    // The write handle rides the read; a null override is "no override".
+    assert_eq!(markets[0].signing_id, 0);
+    assert!(markets[0].risk_override.is_none());
     assert_eq!(markets[0].kind, MarketKind::Perp);
     assert_eq!(markets[0].margin_tiers.len(), 2);
     assert!(markets[0].margin_tiers[1].max_open_interest.is_none());
@@ -86,7 +89,7 @@ async fn markets_meta_decodes_array_of_market_info() {
 
 /// The DYNAMIC `markets` read, shaped as chain 114514 served it on 2026-08-08.
 /// It carries no precision grid and no leverage ladder, so it decodes into
-/// `MarketDynamic`, not `MarketInfo`.
+/// `MarketDynamic`, not `MarketMeta`.
 #[tokio::test]
 async fn markets_decodes_the_dynamic_row() {
     let server = MockServer::start().await;
@@ -113,7 +116,7 @@ async fn markets_decodes_the_dynamic_row() {
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let markets = client.rest().info().markets().await.unwrap();
+    let markets = client.rest().info().markets(None).await.unwrap();
     assert_eq!(markets.len(), 1);
     assert_eq!(markets[0].coin, "BTC");
     assert_eq!(markets[0].kind, MarketKind::Perp);
@@ -169,7 +172,7 @@ async fn user_position_history_decodes_the_fills_style_envelope() {
 }
 
 /// `user_position_history_by_time` sends the window and does NOT get it echoed
-/// back — unlike `user_fills_by_time`, whose reply carries the bounds.
+/// back — unlike a ranged `user_fills`, whose reply carries the bounds.
 #[tokio::test]
 async fn user_position_history_by_time_sends_the_window() {
     let server = MockServer::start().await;
@@ -323,7 +326,7 @@ async fn spot_meta_decodes_pairs_and_tokens() {
                           "token_id": "0x00000000000000000000000000000000000000000000000000000000000000aa",
                           "system_address": "0x0000000000000000000000000000000000000200",
                           "evm_contract": { "address": "0x0000000000000000000000000000000000012345",
-                                            "evm_extra_wei_decimals": -2 },
+                                            "evm_extra_wei_decimals": -2, "variant": 2 },
                           "is_canonical": true, "total_supply": "21000000" },
                         { "id": 100, "name": "USDC", "sz_decimals": 2, "wei_decimals": 6 }
                     ]
@@ -359,48 +362,13 @@ async fn spot_meta_decodes_pairs_and_tokens() {
             .evm_extra_wei_decimals,
         -2
     );
+    // `variant` folds in from the retired `evm_contract_bindings` read.
+    assert_eq!(m.tokens[0].evm_contract.as_ref().unwrap().variant, Some(2));
     assert_eq!(m.tokens[0].total_supply, "21000000");
     assert_eq!(m.tokens[1].name, "USDC");
     assert_eq!(m.tokens[1].wei_decimals, 6);
     // Minimal token row (no evm block) still decodes via defaults.
     assert!(m.tokens[1].evm_contract.is_none());
-}
-
-#[tokio::test]
-async fn spot_clearinghouse_state_decodes_balances_by_address() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "spot_clearinghouse_state",
-            json!({
-                "address": "0x4242424242424242424242424242424242424242",
-                "balances": [
-                    { "asset": 101, "name": "BTC", "total": "500", "hold": "20" }
-                ],
-                "height": 8_416_000u64,
-                "time": 1_783_011_600_000u64
-            }),
-        )))
-        .mount(&server)
-        .await;
-
-    let client = Client::new(server.uri()).unwrap();
-    let addr = Address::from_hex("0x4242424242424242424242424242424242424242").unwrap();
-    let s = client
-        .rest()
-        .info()
-        .spot_clearinghouse_state(addr)
-        .await
-        .unwrap();
-    assert_eq!(s.address, addr);
-    assert_eq!(s.balances.len(), 1);
-    assert_eq!(s.balances[0].asset, 101);
-    assert_eq!(s.balances[0].name, "BTC");
-    assert_eq!(s.balances[0].total, "500");
-    assert_eq!(s.balances[0].hold, "20");
-    assert_eq!(s.height, 8_416_000);
-    assert_eq!(s.time, 1_783_011_600_000);
 }
 
 #[tokio::test]
@@ -415,7 +383,7 @@ async fn error_envelope_surfaces_as_protocol_error() {
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let err = client.rest().info().markets().await.unwrap_err();
+    let err = client.rest().info().markets(None).await.unwrap_err();
     match err {
         metaflux_client::ClientError::ProtocolError { code, msg } => {
             assert_eq!(code, 400);
@@ -492,7 +460,12 @@ async fn account_state_decodes_rich_shape_by_address() {
 
     let client = Client::new(server.uri()).unwrap();
     let addr = Address::from_hex("0x000000000000000000000000000000000000beef").unwrap();
-    let a = client.rest().info().account_state(addr).await.unwrap();
+    let a = client
+        .rest()
+        .info()
+        .account_state(addr, None)
+        .await
+        .unwrap();
     assert_eq!(a.account_value, "100000000");
     assert_eq!(a.withdrawable, "80000000");
     assert_eq!(a.tier, Tier::Safe);
@@ -508,56 +481,6 @@ async fn account_state_decodes_rich_shape_by_address() {
     assert_eq!(a.balances[1].total, "5000000000");
     assert_eq!(a.pm_net_value, "0");
     assert_eq!(a.height, 8_416_000);
-}
-
-#[tokio::test]
-async fn market_info_decodes_rich_shape_by_coin() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "market_info",
-            json!({
-                "coin": "BTC",
-                "asset_id": 0,
-                "kind": "perp",
-                "sz_decimals": 5,
-                "mark_px": "50000",
-                "oracle_px": "50000",
-                "tick_size": "0.01",
-                "step_size": "0.1",
-                "min_order": "0.1",
-                "max_leverage": 50,
-                "maint_margin_ratio": "5000",
-                "init_margin_ratio": "10000",
-                "funding": {
-                    "rate_per_hr": "1000",
-                    "cap_per_hr": "50000",
-                    "interval_ms": 3_600_000u64,
-                    "next_payment_ts": 1_735_693_200_000u64
-                },
-                "margin_tiers": [
-                    { "max_open_interest": "100000", "max_leverage": 50, "maint_margin_ratio": "100" },
-                    { "max_open_interest": null, "max_leverage": 5, "maint_margin_ratio": "1000" }
-                ],
-                "mark_source": "MedianOfOraclesAndMid",
-                "fba_enabled": false,
-                "open_interest": "5000000000"
-            }),
-        )))
-        .mount(&server)
-        .await;
-
-    let client = Client::new(server.uri()).unwrap();
-    let m = client.rest().info().market_info("BTC").await.unwrap();
-    assert_eq!(m.coin, "BTC");
-    assert_eq!(m.sz_decimals, 5);
-    assert_eq!(m.mark_px, "50000");
-    assert_eq!(m.tick_size, "0.01");
-    assert_eq!(m.open_interest, "5000000000");
-    assert_eq!(m.funding.interval_ms, 3_600_000);
-    assert_eq!(m.margin_tiers.len(), 2);
-    assert_eq!(m.margin_tiers[0].maint_margin_ratio, "100");
 }
 
 #[tokio::test]
@@ -721,12 +644,12 @@ async fn candle_snapshot_sends_the_requested_candle_type() {
 }
 
 #[tokio::test]
-async fn trades_by_time_decodes_symbol_prints() {
+async fn ranged_trades_decode_symbol_prints() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "trades_by_time",
+            "trades",
             json!({
                 "coin": "BTC",
                 "start_time": 0u64,
@@ -746,7 +669,7 @@ async fn trades_by_time_decodes_symbol_prints() {
     let trades = client
         .rest()
         .info()
-        .trades_by_time("BTC", 0, 9_999_999_999_999)
+        .trades("BTC", Some(0), Some(9_999_999_999_999))
         .await
         .unwrap();
     assert_eq!(trades.len(), 1);
@@ -759,29 +682,6 @@ async fn trades_by_time_decodes_symbol_prints() {
             .as_deref()
             .is_some_and(|h| h.starts_with("0x"))
     );
-}
-
-#[tokio::test]
-async fn predicted_fundings_decodes_entries() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "predicted_fundings",
-            json!([
-                { "coin": "BTC", "predicted_rate": "0.00176", "next_funding_ts": 1_783_011_600_000u64 },
-                { "coin": "ETH", "predicted_rate": "-0.0087", "next_funding_ts": 1_783_011_600_000u64 }
-            ]),
-        )))
-        .mount(&server)
-        .await;
-
-    let client = Client::new(server.uri()).unwrap();
-    let pf = client.rest().info().predicted_fundings().await.unwrap();
-    assert_eq!(pf.len(), 2);
-    assert_eq!(pf[0].coin, "BTC");
-    assert_eq!(pf[0].next_funding_ts, 1_783_011_600_000);
-    assert_eq!(pf[1].predicted_rate, "-0.0087");
 }
 
 // ── P2 wave-1: typed /info reads (request-body + envelope round-trip) ──
@@ -1175,38 +1075,6 @@ async fn earn_state_without_user_omits_key() {
     assert_eq!(e.pools[0].name, "USDC");
 }
 
-/// `pm_summary` posts the `address` key (NOT `user`) — asserted by an EXACT body
-/// match — and decodes the enrolled shape.
-#[tokio::test]
-async fn pm_summary_posts_address_key() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/info"))
-        .and(body_json(json!({ "type": "pm_summary", "address": ADDR })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "pm_summary",
-            json!({
-                "address": ADDR, "enrolled": true,
-                "enrolled_at": 1_700_000_000_000u64, "last_computed_block": 8_416_000u64,
-                "pm_maint_margin": "1234.56", "pm_net_value": "100000",
-                "pm_concentration_penalty": "2.5"
-            }),
-        )))
-        .mount(&server)
-        .await;
-
-    let client = Client::new(server.uri()).unwrap();
-    let p = client.rest().info().pm_summary(test_addr()).await.unwrap();
-    assert!(p.enrolled);
-    assert_eq!(p.address, test_addr());
-    assert_eq!(p.enrolled_at, 1_700_000_000_000);
-    // pm_summary and account_state render the SAME three figures on the SAME
-    // whole-USDC plane. The `*_cents` names this read once used are gone.
-    assert_eq!(p.pm_maint_margin, "1234.56");
-    assert_eq!(p.pm_net_value, "100000");
-    assert_eq!(p.pm_concentration_penalty, "2.5");
-}
-
 /// `encode_action` posts `{type, action}` and returns the `action_json` STRING.
 #[tokio::test]
 async fn encode_action_returns_action_json_string() {
@@ -1278,16 +1146,19 @@ async fn open_orders_decodes_the_enriched_canonical_row() {
     assert!(t.limit_px.is_none());
 }
 
-/// The `web_data` read: one round trip for the vault / staking / sub-account /
-/// multisig / agent facets, plus the flat `height` / `time` stamp.
+/// The `detail: "overview"` shape of `account_state`: one round trip for the
+/// vault / staking / sub-account / multisig / agent facets, plus the flat
+/// `height` / `time` stamp. The EXACT body match pins the folded parameter.
 #[tokio::test]
-async fn web_data_decodes_every_facet() {
+async fn account_overview_decodes_every_facet() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
-        .and(body_json(json!({ "type": "web_data", "address": ADDR })))
+        .and(body_json(
+            json!({ "type": "account_state", "address": ADDR, "detail": "overview" }),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "web_data",
+            "account_state",
             json!({
                 "address": ADDR,
                 "vault": {
@@ -1342,7 +1213,12 @@ async fn web_data_decodes_every_facet() {
         .await;
 
     let client = Client::new(server.uri()).unwrap();
-    let w = client.rest().info().web_data(test_addr()).await.unwrap();
+    let w = client
+        .rest()
+        .info()
+        .account_overview(test_addr())
+        .await
+        .unwrap();
     assert_eq!(w.address, test_addr());
 
     // Vault facet: whole-share equity + the full vault body on the human plane.
@@ -1372,7 +1248,7 @@ async fn web_data_decodes_every_facet() {
     assert_eq!(w.time, 1_783_011_600_000);
 }
 
-/// `funding_history` samples key on `ts`, and `predicted_fundings` keys on
+/// `funding_history` samples key on `ts`, and the `markets` funding block keys on
 /// `next_funding_ts` — the `_ms` suffix is gone from every /info timestamp.
 #[tokio::test]
 async fn funding_history_sample_keys_on_ts() {
@@ -1401,46 +1277,6 @@ async fn funding_history_sample_keys_on_ts() {
     assert_eq!(fh.samples[0].premium, "0.01");
 }
 
-/// `rfq_open` takes NO parameters and answers `{rfqs:[…]}`. The old SDK posted
-/// an `rfq_id` into a DTO the node never emits.
-#[tokio::test]
-async fn rfq_open_posts_no_params_and_decodes_sessions() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/info"))
-        .and(body_json(json!({ "type": "rfq_open" })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "rfq_open",
-            json!({
-                "rfqs": [
-                    { "rfq_id": 3u64, "coin": "BTC", "side": "B", "sz": "1.5",
-                      "requester": ADDR, "requester_stp_group": null,
-                      "expiry": 1_783_011_600_000u64, "limit_px": "62500",
-                      "created_at": 1_783_011_500_000u64,
-                      "quotes": [
-                          { "maker": "0x00000000000000000000000000000000000000ff",
-                            "maker_stp_group": null, "price": "62490",
-                            "max_size": "1", "valid_until": 1_783_011_560_000u64,
-                            "submitted_at": 1_783_011_510_000u64 }
-                      ] }
-                ]
-            }),
-        )))
-        .mount(&server)
-        .await;
-
-    let client = Client::new(server.uri()).unwrap();
-    let r = client.rest().info().rfq_open().await.unwrap();
-    assert_eq!(r.rfqs.len(), 1);
-    assert_eq!(r.rfqs[0].side, OrderSide::Bid);
-    assert_eq!(r.rfqs[0].sz, "1.5");
-    // An RFQ quote keys on `price` / `max_size` — NOT the `px` / `sz` book
-    // dialect.
-    assert_eq!(r.rfqs[0].quotes[0].price, "62490");
-    assert_eq!(r.rfqs[0].quotes[0].max_size, "1");
-    assert_eq!(r.rfqs[0].quotes[0].valid_until, 1_783_011_560_000);
-}
-
 /// The node answers an unknown `/info` kind with 400. `frontend_open_orders`
 /// was removed, so the SDK must no longer expose a method for it — this test
 /// pins the server behavior a caller now sees.
@@ -1465,4 +1301,65 @@ async fn retired_frontend_open_orders_kind_is_rejected() {
         .await
         .unwrap_err();
     assert!(format!("{err}").contains("frontend_open_orders"));
+}
+
+/// `bridge_user_outbox` carries the folded deployment rows: a depositor with no
+/// in-flight withdrawal still gets `withdrawals_halted` + `configs`, so the
+/// retired `bridge_chain_configs` ask costs one round trip here too.
+#[tokio::test]
+async fn bridge_user_outbox_carries_the_folded_configs() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(
+            json!({ "type": "bridge_user_outbox", "address": ADDR }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "bridge_user_outbox",
+            json!({
+                "entries": [],
+                "truncated": false,
+                "withdrawals_halted": true,
+                "configs": [{
+                    "chain": 1u8,
+                    "contract_address": "0x0000000000000000000000000000000000000000000000000000000000000abc",
+                    "validator_quorum_threshold_bps": "6700",
+                    "replay_nonce": 42u64,
+                    "paused": false,
+                    "evm_chain_id": 8453u64,
+                    "evm_contract_address": "0x0000000000000000000000000000000000000abc",
+                    "validator_set_epoch": 7u64,
+                    "release_retention_ms": 0u64,
+                    "effective_release_retention_ms": 86_400_000u64,
+                    "scan_policy": {
+                        "confirmations_only": false,
+                        "confirmations": 0u64,
+                        "effective_confirmations": 5u64,
+                        "confirmations_only_depth": 0u64,
+                        "usdc_token": "0x0000000000000000000000000000000000000def",
+                        "raw_transfer_credit": true
+                    }
+                }]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let o = client
+        .rest()
+        .info()
+        .bridge_user_outbox(test_addr(), None)
+        .await
+        .unwrap();
+    assert!(o.entries.is_empty());
+    assert!(o.withdrawals_halted);
+    assert_eq!(o.configs.len(), 1);
+    let row = &o.configs[0];
+    assert_eq!(row.chain, 1);
+    assert_eq!(row.evm_chain_id, 8453);
+    assert_eq!(row.validator_set_epoch, 7);
+    // Read the effective window, never the 0-as-unset raw one.
+    assert_eq!(row.effective_release_retention_ms, 86_400_000);
+    assert_eq!(row.scan_policy.effective_confirmations, 5);
 }

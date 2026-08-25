@@ -1,7 +1,8 @@
 //! `/info` — custody bridge reads.
 //!
-//! Two PUBLIC queries: [`Info::bridge_chain_configs`] and
-//! [`Info::bridge_user_outbox`]. The node also serves `bridge_outbox` and
+//! ONE PUBLIC query: [`Info::bridge_user_outbox`]. It serves a user's own
+//! in-flight withdrawals AND the committed deployment rows, because the rows
+//! DEFINE the id the entries carry. The node also serves `bridge_outbox` and
 //! `bridge_finalized_cosignatures`, but the public gateway REFUSES both (they
 //! are operator reads), so this SDK does not type them.
 //!
@@ -81,7 +82,8 @@ pub struct BridgeOutboxEntry {
     pub released_at_ms: Option<u64>,
 }
 
-/// One user's pending bridge withdrawals (`bridge_user_outbox`).
+/// One user's pending bridge withdrawals, plus the deployment rows that define
+/// their ids (`bridge_user_outbox`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct BridgeUserOutbox {
@@ -92,6 +94,14 @@ pub struct BridgeUserOutbox {
     /// `true` if the 256-entry cap truncated the list.
     #[serde(default)]
     pub truncated: bool,
+    /// Chain-wide refusal of NEW withdrawals, all chains, until governance
+    /// clears it. A bridge can be unable to PAY while still able to ACCEPT; this
+    /// flag stops the accept.
+    #[serde(default)]
+    pub withdrawals_halted: bool,
+    /// One committed deployment row per configured chain.
+    #[serde(default)]
+    pub configs: Vec<BridgeChainConfigRow>,
 }
 
 /// The governed deposit-scan policy on one chain.
@@ -159,41 +169,22 @@ pub struct BridgeChainConfigRow {
     pub scan_policy: BridgeScanPolicy,
 }
 
-/// Every committed bridge deployment row (`bridge_chain_configs`).
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct BridgeChainConfigs {
-    /// Chain-wide refusal of NEW withdrawals, all chains, until governance
-    /// clears it. A bridge can be unable to PAY while still able to ACCEPT; this
-    /// flag stops the accept.
-    #[serde(default)]
-    pub withdrawals_halted: bool,
-    /// One row per configured chain.
-    #[serde(default)]
-    pub configs: Vec<BridgeChainConfigRow>,
-}
-
 impl Info<'_> {
-    /// Read every committed bridge deployment row (`bridge_chain_configs`).
-    ///
-    /// Each field is independently verifiable against the deployed contract on
-    /// Base or Arbitrum. Read the `effective_*` fields, not the raw ones: the
-    /// raw values are 0-as-unset sentinels.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn bridge_chain_configs(&self) -> Result<BridgeChainConfigs, ClientError> {
-        self.client
-            .post_json("/info", &json!({ "type": "bridge_chain_configs" }))
-            .await
-    }
-
-    /// Read one account's pending bridge withdrawals (`bridge_user_outbox`).
+    /// Read one account's pending bridge withdrawals, plus the committed
+    /// deployment rows (`bridge_user_outbox`).
     ///
     /// `chain` restricts the answer to `1` (Base) or `2` (Arbitrum); `None`
     /// reads every chain. Check [`BridgeOutboxEntry::status`] on each entry —
     /// [`BridgeOutboxStatus::StrandedOnRetiredDomain`] is terminal and needs
     /// operator action, not a retry.
+    ///
+    /// [`BridgeUserOutbox::configs`] carries one row per configured chain. Read
+    /// the `effective_*` fields, not the raw ones: the raw values are
+    /// 0-as-unset sentinels. NEVER freeze a row into config — an
+    /// `mbConfigureChain` vote replaces the whole row, and a stale
+    /// `evm_contract_address` points deposits at a retired custody contract. An
+    /// address that holds no withdrawal still gets the rows, with empty
+    /// `entries`.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

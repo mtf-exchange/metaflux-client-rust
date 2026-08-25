@@ -16,7 +16,7 @@
 //!   count as two subscriptions to the same market.
 //! - **Per-account** channels carry `user` — a `0x`-hex address. (The node also
 //!   accepts the legacy alias `address`.)
-//! - `active_asset_data` carries both `coin` and `user`. `all_mids` is global
+//! - `active_asset_data` carries both `coin` and `user`. `markets` is global
 //!   (no field).
 //! - The subscribe ack returns on channel `subscriptionResponse` (camelCase);
 //!   errors on `error` with `data.error`; the ping reply is a bare
@@ -77,12 +77,6 @@ pub enum Subscription {
         /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
         coin: String,
     },
-    /// Per-market mark/oracle/funding/open-interest context, one per commit
-    /// (replaces the old `mark` + funding channels).
-    ActiveAssetCtx {
-        /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
-        coin: String,
-    },
     /// Rolling PRICE bars for one market, one series, one bar size. The routing
     /// key is `(coin, interval, candle_type)`, so `1m` and `5m` — or `mark` and
     /// `oracle` at the same interval — are independent subscriptions. The ack
@@ -99,15 +93,8 @@ pub enum Subscription {
         /// Price or executed-trade series. All three values are served.
         candle_type: CandleType,
     },
-    /// Global `{coin: mid}` snapshot, one per commit.
-    AllMids,
     /// Per-account fill stream.
     Fills {
-        /// User `0x` address.
-        user: Address,
-    },
-    /// Per-account order/fill/funding/liquidation events.
-    UserEvents {
         /// User `0x` address.
         user: Address,
     },
@@ -182,9 +169,11 @@ pub enum Subscription {
         /// User `0x` address.
         user: Address,
     },
-    /// GLOBAL per-market dynamic-state tape (MTF-native). Coinless / userless
-    /// like `all_mids`: an on-subscribe full snapshot, then per-commit
-    /// changed-row deltas.
+    /// GLOBAL per-market dynamic-state tape (MTF-native). Coinless and
+    /// userless: an on-subscribe full snapshot, then per-commit changed-row
+    /// deltas. Every row carries mid, mark, oracle, funding and open interest,
+    /// so this ONE subscription answers what the retired `all_mids` and
+    /// `active_asset_ctx` channels each answered in part.
     Markets,
 }
 
@@ -223,16 +212,10 @@ pub enum WsMessage {
     Trades(serde_json::Value),
     /// BBO tick.
     Bbo(serde_json::Value),
-    /// Per-market context (mark/oracle/funding/OI).
-    ActiveAssetCtx(serde_json::Value),
     /// OHLCV bar.
     Candles(serde_json::Value),
-    /// Global mids snapshot.
-    AllMids(serde_json::Value),
     /// Per-account fill frame.
     Fills(serde_json::Value),
-    /// Per-account events.
-    UserEvents(serde_json::Value),
     /// Per-account order lifecycle — an ARRAY of records. Decode with
     /// [`WsMessage::as_order_updates`].
     OrderUpdates(serde_json::Value),
@@ -401,13 +384,6 @@ mod tests {
     }
 
     #[test]
-    fn subscription_all_mids_is_bare_type() {
-        let j = serde_json::to_value(Subscription::AllMids).unwrap();
-        assert_eq!(j["type"], "all_mids");
-        assert!(j.get("coin").is_none() && j.get("user").is_none());
-    }
-
-    #[test]
     fn subscription_active_asset_data_carries_coin_and_user() {
         let s = Subscription::ActiveAssetData {
             coin: "2".into(),
@@ -477,8 +453,6 @@ mod tests {
             "l2_book",
             "trades",
             "bbo",
-            "active_asset_ctx",
-            "all_mids",
             "fills",
             "order_updates",
             "account_state",
@@ -498,11 +472,18 @@ mod tests {
     }
 
     #[test]
-    fn spot_state_and_web_data_channels_are_retired() {
-        // The node dropped the WS `spot_state` and `web_data` channels; a
-        // subscribe now answers an error envelope. Keep the SDK from
-        // re-declaring either. The REST `web_data` read is unaffected.
-        for chan in ["spot_state", "web_data"] {
+    fn retired_channels_do_not_decode() {
+        // Each of these duplicated a channel the SDK still carries, so the node
+        // refuses a subscribe with an error envelope. `markets` answers what
+        // `all_mids` and `active_asset_ctx` answered; `fills` / `order_updates`
+        // / `ledger_updates` / `notifications` answer what `user_events` did.
+        for chan in [
+            "spot_state",
+            "web_data",
+            "all_mids",
+            "active_asset_ctx",
+            "user_events",
+        ] {
             let raw = serde_json::json!({ "channel": chan, "data": { "x": 1 } });
             assert!(
                 serde_json::from_value::<WsMessage>(raw).is_err(),
