@@ -1080,28 +1080,6 @@ async fn earn_state_without_user_omits_key() {
     assert_eq!(e.pools[0].name, "USDC");
 }
 
-/// `encode_action` posts `{type, action}` and returns the `action_json` STRING.
-#[tokio::test]
-async fn encode_action_returns_action_json_string() {
-    let action = json!({ "type": "cancel_all_orders", "params": {} });
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/info"))
-        .and(body_partial_json(json!({
-            "type": "encode_action", "action": action
-        })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "encode_action",
-            json!({ "action_json": "{\"CancelAllOrders\":{}}" }),
-        )))
-        .mount(&server)
-        .await;
-
-    let client = Client::new(server.uri()).unwrap();
-    let blob = client.rest().info().encode_action(&action).await.unwrap();
-    assert_eq!(blob, "{\"CancelAllOrders\":{}}");
-}
-
 /// `open_orders` decodes ONE canonical row set: a perp resting order, a spot
 /// resting order, and a parked TP / SL trigger. The trigger detail the retired
 /// `frontend_open_orders` read carried now rides this row.

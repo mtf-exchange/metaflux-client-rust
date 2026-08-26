@@ -28,7 +28,7 @@
 //!   [`Info::user_position_history_by_time`],
 //!   [`Info::active_asset_data`].
 //! - **Static / misc** — [`Info::node_info`], [`Info::spot_meta`],
-//!   [`Info::fee_schedule`], [`Info::vault_state`], [`Info::encode_action`].
+//!   [`Info::fee_schedule`], [`Info::vault_state`].
 //! - **Bridge reads** — [`Info::bridge_user_outbox`].
 //! - **Peer discovery** — [`Info::gossip_root_ips`].
 
@@ -2472,31 +2472,6 @@ impl<'a> Info<'a> {
             obj.insert("user".into(), json!(u));
         }
         self.client.post_json("/info", &body).await
-    }
-
-    /// `encode_action` — lower a wire action to its canonical core `Action` JSON.
-    ///
-    /// The returned STRING's exact bytes are the `inner_action_blob` every
-    /// `multi_sig` member signs. The node lowers via the SAME `into_action` path
-    /// admission uses, so the bytes a member signs match the bytes the `multi_sig`
-    /// handler verifies. Pass `action` in the familiar `{type, params}` wire form.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`]; the node
-    /// returns 400 on an unknown / missing action.
-    pub async fn encode_action(&self, action: &Value) -> Result<String, ClientError> {
-        #[derive(serde::Deserialize)]
-        struct Resp {
-            action_json: String,
-        }
-        let resp: Resp = self
-            .client
-            .post_json(
-                "/info",
-                &json!({ "type": "encode_action", "action": action }),
-            )
-            .await?;
-        Ok(resp.action_json)
     }
 
     /// `user_fills` — account-scoped fill history, keyed by `address`.
