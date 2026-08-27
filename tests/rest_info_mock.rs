@@ -8,8 +8,8 @@
 //! REST layer's envelope-unwrap path.
 
 use metaflux_client::{
-    CandleType, Client,
-    rest::info::{Abstraction, MarketKind, OrderSide, OrderStatus, Tier},
+    CandleType, Client, MarketId,
+    rest::info::{Abstraction, MarketKind, OptionKind, OrderSide, OrderStatus, Tier},
     wallet::Address,
 };
 use serde_json::{Value, json};
@@ -418,6 +418,41 @@ async fn node_info_decodes() {
     assert_eq!(n.chain_id, 31337);
     assert_eq!(n.protocol_version, "1.0.0");
     assert_eq!(n.validator_index, 3);
+}
+
+#[tokio::test]
+async fn option_series_posts_the_bare_type_and_decodes_both_kinds() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(json!({ "type": "option_series" })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "option_series",
+            json!({
+                "series": [
+                    { "signing_id": 2_147_483_649u32, "underlying": "BTC", "kind": "put",
+                      "strike": "100000", "expiry": 1_735_689_600_000u64, "sz_decimals": 5,
+                      "escrow_per_unit": "100000" },
+                    { "signing_id": 2_147_483_650u32, "underlying": "BTC", "kind": "capped_call",
+                      "strike": "100000", "cap": "130000", "expiry": 1_735_689_600_000u64,
+                      "sz_decimals": 5, "escrow_per_unit": "30000" }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let r = client.rest().info().option_series().await.unwrap();
+    assert_eq!(r.series.len(), 2);
+    // The signing id is served whole — it is the number an RFQ action carries.
+    assert_eq!(r.series[0].signing_id, MarketId(2_147_483_649));
+    assert_eq!(r.series[0].kind, OptionKind::Put);
+    assert_eq!(r.series[0].cap, None);
+    // A capped call escrows the WIDTH, not the strike.
+    assert_eq!(r.series[1].kind, OptionKind::CappedCall);
+    assert_eq!(r.series[1].cap.as_deref(), Some("130000"));
+    assert_eq!(r.series[1].escrow_per_unit, "30000");
 }
 
 #[tokio::test]

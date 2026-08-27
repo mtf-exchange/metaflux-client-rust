@@ -1,27 +1,31 @@
 //! RFQ — Request-for-Quote WRITE types.
 //!
-//! # RFQ IS OPTIONS-ONLY, AND EVERY MARKET IS REFUSED TODAY
+//! # RFQ IS THE OPTION TRADE PATH
 //!
-//! All three actions reach the node and are rejected:
+//! All three actions clear OPTION series and nothing else. A market that is not
+//! a live option series is rejected:
 //!
 //! ```text
 //! precondition failed: rfq is options-only: market <n> is not an option series
 //! ```
 //!
-//! No market is an option series, so the refusal is total. No parameter and no
-//! permission gets past it. A request-for-quote lane beside a public order book
-//! lets size trade away from the price everyone else posts against, so MetaFlux
-//! offers RFQ only where there is no continuous book to undercut. That means
-//! options, and options are not built.
+//! A request-for-quote lane beside a public order book lets size trade away from
+//! the price everyone else posts against, so MetaFlux offers RFQ only where
+//! there is no continuous book to undercut. Options have none.
 //!
-//! These types stay because the actions keep this shape when option series land.
-//! Do not build against them yet.
+//! `market` takes the `signing_id` of a live series, from
+//! [`Info::option_series`](crate::rest::info::Info::option_series). Serve that
+//! number; do not derive it.
 //!
-//! A taker opens an RFQ session; market makers quote it; the taker crosses
-//! against the best quote, or the window expires. These types model the ACTIONS
-//! a client submits. The read side is OPERATOR LANE: the RFQ engine is not
-//! reachable from the public `/exchange` yet, so its `rfq_open` / `rfq_user`
-//! reads do not ship publicly and this SDK types no response for them.
+//! A taker opens an RFQ session; market makers quote it; the taker accepts one
+//! quote, or the window expires. An accept moves the premium from the buyer to
+//! the writer and locks the writer's escrow. It opens no perpetual position,
+//! charges no fee, and reserves no margin.
+//!
+//! These types model the ACTIONS a client submits. The session reads
+//! `rfq_open` and `rfq_user` are public, and this SDK does not type them yet, so
+//! a caller reads them raw to find its own `rfq_id` and the `quote_idx` an
+//! accept must name. No WS channel carries an RFQ event, so both are polled.
 
 use serde::{Deserialize, Serialize};
 
@@ -59,9 +63,9 @@ pub enum CoreSide {
 /// keys must always be present — `None` serializes as JSON `null` (the SDK does
 /// not skip them).
 ///
-/// Forward-compat: the node currently answers this tag with `UnsupportedAction`
-/// on the public `/exchange` path; the SDK emits the byte-correct shape the
-/// core handler will accept once the bridge lands.
+/// The signed typed path is [`Exchange::rfq_request_typed`](crate::rest::exchange::Exchange::rfq_request_typed),
+/// which posts the action under `params`. This struct models the older
+/// envelope shape and is kept for callers that build the body themselves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct RfqRequest {
@@ -86,7 +90,7 @@ pub struct RfqRequest {
 /// the key **`accept`** — note the family inconsistency (`rfq_request` uses
 /// `rfq`, `rfq_accept` uses `accept`).
 ///
-/// Forward-compat: see [`RfqRequest`].
+/// Envelope note: see [`RfqRequest`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct RfqAccept {

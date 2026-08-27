@@ -29,16 +29,19 @@
 //!   [`Info::active_asset_data`].
 //! - **Static / misc** — [`Info::node_info`], [`Info::spot_meta`],
 //!   [`Info::fee_schedule`], [`Info::vault_state`].
+//! - **Option reads** — [`Info::option_series`].
 //! - **Bridge reads** — [`Info::bridge_user_outbox`].
 //! - **Peer discovery** — [`Info::gossip_root_ips`].
 
 mod bridge;
 mod discovery;
+mod options;
 
 pub use bridge::{
     BridgeChainConfigRow, BridgeOutboxEntry, BridgeOutboxStatus, BridgeScanPolicy, BridgeUserOutbox,
 };
 pub use discovery::{AdvertisedPeer, GossipRootIps};
+pub use options::{OptionKind, OptionSeries, OptionSeriesRegistry};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

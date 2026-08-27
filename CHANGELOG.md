@@ -53,6 +53,17 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Changed
 
+- **RFQ is live as the option trade path.** The `types::rfq` doc comments said
+  every market was refused because no option series existed. Series exist now,
+  so the three actions clear them. A market that is not a LIVE series is still
+  refused with `rfq is options-only: market <n> is not an option series`. **No
+  signing type changed** — the RFQ EIP-712 type strings are untouched.
+
+  The session reads `rfq_open` and `rfq_user` are PUBLIC, which is what makes an
+  accept completable: a taker finds its own `rfq_id` there and a maker finds a
+  request to answer. This SDK does not type them yet — read them raw. No WS
+  channel carries an RFQ event, so both are polled.
+
 - **Breaking: `AccountState` renames its two account-level margin scalars.**
   `init_margin` is now `total_margin_used`, and `maint_margin` is now
   `cross_maintenance_margin_used`. The names now say the SCOPE: the maintenance
@@ -76,6 +87,29 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   hash. `Some("")` means recorded, and there was no signed taker action.
 
 ### Added
+
+- **`Info::option_series`, and the `OptionSeriesRegistry` / `OptionSeries` /
+  `OptionKind` types.** The read serves every live option series: the
+  `signing_id` an RFQ action signs against, the underlying, the kind, the
+  strike, the cap, the expiry, the size precision, and the escrow a writer
+  locks.
+
+  `signing_id` is a `MarketId` and it goes straight into `RfqRequest.market`.
+  The registry serves it WHOLE. There is no formula, no base and no arithmetic
+  that derives it — the encoding behind the number is internal to the node and
+  may move.
+
+  `escrow_per_unit` is what a WRITER locks per whole unit. On a `CappedCall` it
+  is `cap − strike`, not `strike`: a $100,000 strike capped at $130,000 locks
+  $30,000 per unit. Reading `strike` as the lock overstates it by the whole
+  strike.
+
+  `cap` is `None` on a put — the node omits the key. An empty registry is a
+  `200` with an empty `series`, not an error.
+
+  The read carries no option price and no implied volatility, because the chain
+  computes neither. There is still NO public read for an option position: the
+  visible effect of a fill is the USDC balance change on `account_state`.
 
 - **`OrderTrigger.group` / `TriggerOrderStatus.group`** — the scaled-TP/SL
   LADDER handle, `Option<u64>`. A `positionTpsl` batch of three or more
