@@ -1684,6 +1684,13 @@ fn keccak(input: &[u8]) -> [u8; 32] {
 /// `is_market` and `limit_px` were always in the signed order.
 fn check_trigger_limit(o: &Order) -> Result<(), ClientError> {
     if let Some(t) = o.trigger {
+        // A zero callback is refused on admission, and the refusal burns the
+        // nonce. `None` is how a static leg is expressed.
+        if t.trail_px == Some(0) {
+            return Err(ClientError::Validation(
+                "a trailing callback must be > 0; drop trail_px for a static level".into(),
+            ));
+        }
         if !t.is_market {
             if o.limit_px == 0 {
                 return Err(ClientError::Validation(

@@ -20,6 +20,11 @@
 //! Optional fields flatten to sentinels (matching the server's wire→typed map):
 //! cloid absent → `""`; no builder → fee 0 + zero address; one-way → position_side
 //! `""`; no trigger → px 0, is_market false, tpsl `""`.
+//!
+//! `trail_px` is the ONE field that does not flatten: its PRESENCE selects a
+//! longer type string instead (`TY_SUBMIT_ORDER_TRAIL` / `TY_BATCH_ORDER_TRAIL`),
+//! so an absent trail keeps the frozen digest byte-for-byte and `Some(0)` stays
+//! distinct from `None`.
 
 use tiny_keccak::{Hasher, Keccak};
 
@@ -192,6 +197,22 @@ const TY_BATCH_ORDER: &[u8] = b"MetaFluxTransaction:BatchOrder(string metafluxCh
 const TY_BATCH_CANCEL: &[u8] =
     b"MetaFluxTransaction:BatchCancel(string metafluxChain,bytes32 cancels,uint64 nonce)";
 
+// ===== TRAILING encodeType strings — CONSENSUS-FROZEN, byte-identical to the
+// node's `SUBMIT_ORDER_TRAIL_TYPE` / `BATCH_ORDER_WITH_OWNER_TRAIL_TYPE`.
+//
+// Selected on PRESENCE of a leg's `trail_px`, never on its value: `SubmitOrder`
+// when the order trails, `BatchOrder` when ANY leg does. No trail selects the
+// frozen string above and reproduces the pre-trail digest to the byte.
+//
+// `trailPxs` is a SECOND `T[]`-style hash over the SAME leg slice `orders`
+// hashes — two fixed-width words per leg, `(present, value)`. The legs stay
+// fixed-width inside `orders` itself: a variable-length leg inside that flat
+// unprefixed concatenation would let a split / merge of two legs reproduce one
+// signed word stream.
+
+const TY_SUBMIT_ORDER_TRAIL: &[u8] = b"MetaFluxTransaction:SubmitOrder(string metafluxChain,uint32 market,string side,string kind,uint64 size,uint64 limitPx,string tif,string stpMode,bool reduceOnly,string cloid,uint16 builderFee,address builderUser,string positionSide,uint64 triggerPx,bool triggerIsMarket,string triggerTpsl,uint64 trailPx,uint64 nonce)";
+const TY_BATCH_ORDER_TRAIL: &[u8] = b"MetaFluxTransaction:BatchOrder(string metafluxChain,address owner,bytes32 orders,string grouping,bytes32 trailPxs,uint64 nonce)";
+
 // ===== `*_WITH_OWNER` encodeType strings (agent-resolved owner; operator / vault
 // trading) — CONSENSUS-FROZEN, byte-identical to the node's `*_WITH_OWNER_TYPE`.
 //
@@ -264,6 +285,27 @@ fn order_words(o: &Order) -> Vec<[u8; 32]> {
         enc_bool(trigger_is_market),
         enc_string(trigger_tpsl),
     ]
+}
+
+/// The leg's TRAILING callback, or `None` when it is static (a leg with no
+/// trigger never trails).
+fn trail_of(o: &Order) -> Option<u64> {
+    o.trigger.and_then(|t| t.trail_px)
+}
+
+/// The `bytes32 trailPxs` field: `keccak256` over TWO fixed-width words per leg,
+/// a presence `bool` and the callback value. The presence word keeps `Some(0)`
+/// distinct from `None`; deriving it from the same slice as `orders` keeps leg i
+/// of one hash aligned with leg i of the other.
+fn hash_trail_pxs(orders: &[Order]) -> [u8; 32] {
+    let words: Vec<[u8; 32]> = orders
+        .iter()
+        .flat_map(|o| {
+            let t = trail_of(o);
+            [enc_bool(t.is_some()), enc_u64(t.unwrap_or(0))]
+        })
+        .collect();
+    hash_items(&words)
 }
 
 /// `address` → 20 bytes right-aligned in a 32-byte word.
@@ -343,6 +385,7 @@ impl TypedTradingAction<'_> {
     #[must_use]
     pub fn type_string(&self) -> &'static [u8] {
         match self {
+            Self::SubmitOrder(o) if trail_of(o).is_some() => TY_SUBMIT_ORDER_TRAIL,
             Self::SubmitOrder(_) => TY_SUBMIT_ORDER,
             Self::CancelOrder(_) => TY_CANCEL_ORDER,
             Self::SpotOrder(_) => TY_SPOT_ORDER,
@@ -355,6 +398,9 @@ impl TypedTradingAction<'_> {
             Self::TwapOrder(p) if p.position_side.is_some() => TY_TWAP_ORDER_V2,
             Self::TwapOrder(_) => TY_TWAP_ORDER,
             Self::TwapCancel(_) => TY_TWAP_CANCEL,
+            Self::BatchOrder(p) if p.orders.iter().any(|o| trail_of(o).is_some()) => {
+                TY_BATCH_ORDER_TRAIL
+            }
             Self::BatchOrder(_) => TY_BATCH_ORDER,
             Self::BatchCancel(_) => TY_BATCH_CANCEL,
             Self::ScaleOrder(_) => TY_SCALE_ORDER,
@@ -456,7 +502,12 @@ impl TypedTradingAction<'_> {
             words.push(enc_addr_word(o));
         }
         match self {
-            Self::SubmitOrder(o) => words.extend(order_words(o)),
+            Self::SubmitOrder(o) => {
+                words.extend(order_words(o));
+                if let Some(trail) = trail_of(o) {
+                    words.push(enc_u64(trail));
+                }
+            }
             Self::CancelOrder(c) => words.extend(cancel_words(c)?),
             Self::SpotOrder(o) => {
                 words.push(enc_u32(o.pair));
@@ -501,6 +552,9 @@ impl TypedTradingAction<'_> {
                 let items: Vec<[u8; 32]> = p.orders.iter().flat_map(order_words).collect();
                 words.push(hash_items(&items));
                 words.push(enc_string(grouping_str(p.grouping)));
+                if p.orders.iter().any(|o| trail_of(o).is_some()) {
+                    words.push(hash_trail_pxs(&p.orders));
+                }
             }
             Self::BatchCancel(p) => {
                 let mut items: Vec<[u8; 32]> = Vec::new();
@@ -785,6 +839,7 @@ mod tests {
                 trigger_px: 4200,
                 is_market: true,
                 tpsl: TpSl::Tp,
+                trail_px: None,
             }),
         }
     }

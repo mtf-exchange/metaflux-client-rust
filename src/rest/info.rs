@@ -559,6 +559,9 @@ pub enum Abstraction {
     /// Cross-collateral margin (the default).
     #[default]
     Unified,
+    /// Per-product reservations: collateral one product has committed is not
+    /// available to another. Set with `user_set_abstraction`.
+    Standard,
     /// Portfolio margin (the account is enrolled).
     Portfolio,
 }

@@ -174,13 +174,6 @@ pub enum TpSl {
 }
 
 /// Trigger block riding inside a stop-loss / take-profit order.
-///
-/// There is deliberately NO `trail_px` here. The node serves `trail_px` on the
-/// read side, but the frozen `SubmitOrder` / `BatchOrder` EIP-712 type strings
-/// do not bind it, so `/exchange` refuses any order that carries one:
-/// `trail_px is not bound by the order signing type yet; a trailing stop cannot
-/// be submitted over the typed path`. Adding the field here would only produce
-/// orders the chain rejects. It arrives when a versioned type string binds it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Trigger {
@@ -192,6 +185,15 @@ pub struct Trigger {
     pub is_market: bool,
     /// Take-profit vs stop-loss.
     pub tpsl: TpSl,
+    /// TRAILING callback: an absolute price offset on the 1e8 plane. `Some(d)`
+    /// parks a stop whose level ratchets toward the mark by `d`; `None` is a
+    /// static level.
+    ///
+    /// PRESENCE selects the signing type string, so `Some(0)` and `None` are two
+    /// different digests — one signature covers exactly one wire form. The node
+    /// takes a trail only on the STOP-LOSS leg and only above zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trail_px: Option<u64>,
 }
 
 impl Trigger {
@@ -203,6 +205,7 @@ impl Trigger {
             trigger_px,
             is_market: true,
             tpsl: TpSl::Sl,
+            trail_px: None,
         }
     }
 
@@ -214,6 +217,7 @@ impl Trigger {
             trigger_px,
             is_market: true,
             tpsl: TpSl::Tp,
+            trail_px: None,
         }
     }
 
@@ -227,6 +231,7 @@ impl Trigger {
             trigger_px,
             is_market: false,
             tpsl: TpSl::Sl,
+            trail_px: None,
         }
     }
 
@@ -240,7 +245,16 @@ impl Trigger {
             trigger_px,
             is_market: false,
             tpsl: TpSl::Tp,
+            trail_px: None,
         }
+    }
+
+    /// Attach a TRAILING callback (absolute 1e8-plane offset) to this trigger.
+    /// The node accepts one only on the stop-loss leg, and only above zero.
+    #[must_use]
+    pub const fn with_trail(mut self, trail_px: u64) -> Self {
+        self.trail_px = Some(trail_px);
+        self
     }
 }
 

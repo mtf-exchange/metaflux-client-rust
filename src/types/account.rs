@@ -111,13 +111,24 @@ pub struct ConvertToMultiSigUser {
     pub threshold: u32,
 }
 
-/// Action — set a self-scoped abstraction config value.
+/// Action — set the account's margin mode, or a per-product reservation.
+///
+/// A reservation is a ceiling on ENCUMBRANCE, not on spending: it caps what a
+/// product may have committed at one time (perp margin, an option writer's
+/// escrow, a spot-margin borrow). An option premium and a plain spot buy are
+/// conversions, so no reservation bounds them.
+///
+/// Entering `standard` mode with no reservations admits nothing — every ceiling
+/// starts at zero. A mode change needs a flat account; a reservation change does
+/// not, and lowering one is always allowed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct UserSetAbstraction {
-    /// Sub-type tag (`0..=255`); interpretation is config-defined.
+    /// `0` sets the mode; `1` perp, `2` spot, `3` option reservation. Anything
+    /// else is rejected.
     pub kind: u8,
-    /// Setting value as a decimal string.
+    /// For `kind: 0`, `"0"` = unified or `"1"` = standard. For a reservation,
+    /// whole USDC as a decimal string; `"0"` removes it.
     pub value: String,
 }
 
