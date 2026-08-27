@@ -52,9 +52,8 @@ pub enum BridgeOutboxStatus {
 pub struct BridgeOutboxEntry {
     /// Destination chain: `1` = Base, `2` = Arbitrum.
     pub chain: u8,
-    /// MetaFlux asset id.
-    pub asset: u32,
-    /// Spot-token symbol for [`Self::asset`].
+    /// Spot-token symbol, resolved when the withdrawal was admitted — a later
+    /// token rename never rewrites what the user asked for.
     pub token: String,
     /// Amount in the destination chain's BASE UNITS, not whole coins — USDC has
     /// 6 decimals, so `"1000000"` is 1.0 USDC. A string because the value is a
@@ -185,6 +184,12 @@ impl Info<'_> {
     /// `evm_contract_address` points deposits at a retired custody contract. An
     /// address that holds no withdrawal still gets the rows, with empty
     /// `entries`.
+    ///
+    /// This read is served by the historical archive, not by a validator: a
+    /// validator prunes a released entry out of its outbox, so it could only
+    /// ever answer "in flight right now". A deployment whose archive is
+    /// unreachable answers `503` here. It NEVER answers an empty `entries`,
+    /// because that would say the withdrawal is not in flight.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
