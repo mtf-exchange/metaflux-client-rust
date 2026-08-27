@@ -7,6 +7,30 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+### Added
+
+- **`types::order::Trigger.trail_px`** — a trailing stop is now submittable. The
+  callback is an absolute offset on the 1e8 price plane, `Option<u64>`, and the
+  node ratchets the parked level toward the mark by it. `Trigger::with_trail`
+  attaches one to any of the four trigger constructors.
+
+  The field is SIGNED. Its PRESENCE selects a longer EIP-712 type string, so an
+  order with no trail keeps its old digest byte-for-byte, and `Some(0)` is a
+  different digest from `None` — one signature covers exactly one wire form.
+  A batch binds a second `bytes32 trailPxs` field, one fixed-width
+  `(present, value)` pair per leg, so WHICH leg trails is bound too. The legs
+  inside `orders` stay fixed-width and trail-blind.
+
+  ```text
+  SubmitOrder(...,string triggerTpsl,uint64 trailPx,uint64 nonce)
+  BatchOrder(string metafluxChain,address owner,bytes32 orders,string grouping,bytes32 trailPxs,uint64 nonce)
+  ```
+
+  The node takes a trail only on the STOP-LOSS leg, and only above zero; the
+  zero half is refused client-side, because the node's refusal burns the nonce.
+  The digests are pinned against the node's own KAT vectors in
+  `tests/trail_px_kat.rs`.
+
 ### Removed
 
 - **Breaking: `Info::encode_action` is deleted.** The node no longer serves the
@@ -141,10 +165,7 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   callback as a decimal string, `Option<String>`. When it is present,
   `trigger_px` is the RATCHETED level, not the level the owner sent.
 
-  READ ONLY. `types::order::Trigger` deliberately has no `trail_px`: the frozen
-  `SubmitOrder` / `BatchOrder` EIP-712 type strings do not bind the field, so
-  `/exchange` refuses any order that carries it. The write side arrives when a
-  versioned type string binds it.
+  The write side is `types::order::Trigger.trail_px` — see Added below.
 
 - **`AccountDetail::Adl` and `AccountPosition.adl_lamps`** — the ADL queue
   indicator, `0..=4` lamps, served only at the new depth. More lamps = sooner in
