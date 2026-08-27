@@ -456,6 +456,47 @@ async fn option_series_posts_the_bare_type_and_decodes_both_kinds() {
 }
 
 #[tokio::test]
+async fn option_positions_sends_the_address_and_keeps_the_two_planes_apart() {
+    let server = MockServer::start().await;
+    let who = "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(
+            json!({ "type": "option_positions", "address": who }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "option_positions",
+            json!({
+                "address": who,
+                "positions": [
+                    { "signing_id": 2_147_483_650u32, "underlying": "BTC",
+                      "kind": "capped_call", "strike": "100000",
+                      "expiry": 1_735_689_600_000u64,
+                      "long": "0", "short": "1.5", "escrow": "45000" }
+                ]
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let r = client
+        .rest()
+        .info()
+        .option_positions(Address::from_hex(who).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(r.positions.len(), 1);
+    assert_eq!(r.positions[0].signing_id, MarketId(2_147_483_650));
+    assert_eq!(r.positions[0].kind, OptionKind::CappedCall);
+    // `short` is a UNIT count on the series size scale ...
+    assert_eq!(r.positions[0].short, "1.5");
+    // ... and `escrow` is USDC. Reading one as the other is the failure the
+    // read documents; both are strings, so only the field name separates them.
+    assert_eq!(r.positions[0].escrow, "45000");
+}
+
+#[tokio::test]
 async fn account_state_decodes_rich_shape_by_address() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

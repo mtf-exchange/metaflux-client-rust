@@ -29,7 +29,7 @@
 //!   [`Info::active_asset_data`].
 //! - **Static / misc** — [`Info::node_info`], [`Info::spot_meta`],
 //!   [`Info::fee_schedule`], [`Info::vault_state`].
-//! - **Option reads** — [`Info::option_series`].
+//! - **Option reads** — [`Info::option_series`], [`Info::option_positions`].
 //! - **Bridge reads** — [`Info::bridge_user_outbox`].
 //! - **Peer discovery** — [`Info::gossip_root_ips`].
 
@@ -41,7 +41,9 @@ pub use bridge::{
     BridgeChainConfigRow, BridgeOutboxEntry, BridgeOutboxStatus, BridgeScanPolicy, BridgeUserOutbox,
 };
 pub use discovery::{AdvertisedPeer, GossipRootIps};
-pub use options::{OptionKind, OptionSeries, OptionSeriesRegistry};
+pub use options::{
+    OptionKind, OptionPosition, OptionPositions, OptionSeries, OptionSeriesRegistry,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
