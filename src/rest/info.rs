@@ -415,6 +415,82 @@ pub struct FeeSchedule {
     pub burn_ratio: String,
     /// Per-tier maker/taker schedule (authoritative carrier of maker/taker).
     pub tiers: Vec<FeeTier>,
+    /// The day the POOLED volume counter stops buying a discount and each
+    /// product reads only its own volume. `0` = not armed yet. A server that
+    /// predates per-product fees omits it.
+    #[serde(default)]
+    pub pooled_volume_sunset_day: Option<u64>,
+    /// The same instant in milliseconds, as a decimal string. `"0"` = not armed.
+    #[serde(default)]
+    pub pooled_volume_sunset_ms: Option<String>,
+    /// `true` while pooled volume still feeds a tier. On the sunset day this
+    /// goes false and a tier resting on cross-product volume DROPS.
+    #[serde(default)]
+    pub pooled_volume_counts: Option<bool>,
+    /// One account's RESOLVED rates. Present only when the request carried an
+    /// `address` (see [`Info::fee_schedule_for`]); `None` on the ladder-only read.
+    #[serde(default)]
+    pub user: Option<FeeScheduleUser>,
+}
+
+/// One product's resolved rates inside [`FeeScheduleUser`].
+///
+/// The four products price APART: each carries its own ladder, its own base
+/// rates and its own 30-day counters. Read the row for the product you are about
+/// to trade — the top-level [`FeeScheduleUser`] rates are the PERP ones.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ProductFeeRow {
+    /// `"perp"`, `"spot"`, `"spot_margin"` or `"option"`.
+    pub product: String,
+    /// The rate a fill on this product charges the taker, staking discount
+    /// applied. Decimal bps string.
+    pub taker_bps: String,
+    /// The rate a fill on this product charges the maker, rebate subtracted.
+    /// Decimal bps string; NEGATIVE means a credit paid to the maker.
+    ///
+    /// `None` on a product with NO maker leg. A maker rests on the shared spot
+    /// book and never carries a lane, so it is always priced as `spot` — which
+    /// leaves `spot_margin` and `option` with a taker leg only.
+    #[serde(default)]
+    pub maker_bps: Option<String>,
+    /// The trailing 30-day taker volume THIS product's tier reads.
+    pub taker_volume_30d: String,
+    /// The trailing 30-day maker volume THIS product's maker tier reads.
+    /// `None` on a product with no maker leg — see [`Self::maker_bps`].
+    #[serde(default)]
+    pub maker_volume_30d: Option<String>,
+}
+
+/// One account's resolved fee position, returned by [`Info::fee_schedule_for`].
+///
+/// Only the taker of a fill carries a product. A maker rests on the shared spot
+/// book, so a maker is always priced as `spot` whichever lane crosses it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct FeeScheduleUser {
+    /// The resolved account.
+    pub address: String,
+    /// POOLED trailing 30-day taker volume, every product together.
+    pub taker_volume_30d: String,
+    /// POOLED trailing 30-day maker volume.
+    pub maker_volume_30d: String,
+    /// The PERP base taker rate, before the discount. Decimal bps string.
+    pub taker_bps: String,
+    /// The PERP base maker rate, before the rebate. Decimal bps string.
+    pub maker_bps: String,
+    /// The PERP taker rate a fill charges, discount applied.
+    pub effective_taker_bps: String,
+    /// The PERP maker rate a fill charges, rebate subtracted.
+    pub effective_maker_bps: String,
+    /// Taker-only staking discount, per mille (`100` = 10%).
+    pub staking_discount_permille: u32,
+    /// The PERP maker rebate, before it is subtracted. Decimal bps string.
+    pub maker_rebate_bps: String,
+    /// Per-product resolved rates. A server that predates per-product fees sends
+    /// no rows, so an empty vector means "not served", NOT "no products".
+    #[serde(default)]
+    pub products: Vec<ProductFeeRow>,
 }
 
 /// The staking facet body, without the account address.
@@ -2284,6 +2360,24 @@ impl<'a> Info<'a> {
             .await
     }
 
+    /// Fetch the fee schedule WITH one account's resolved rates.
+    ///
+    /// The response `user` block carries the per-product rows. Use the row for
+    /// the product you are about to trade: `perp`, `spot`, `spot_margin` and
+    /// `option` price apart, and the top-level `effective_*_bps` fields are the
+    /// PERP ones.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn fee_schedule_for(&self, address: &str) -> Result<FeeSchedule, ClientError> {
+        self.client
+            .post_json(
+                "/info",
+                &json!({ "type": "fee_schedule", "address": address }),
+            )
+            .await
+    }
+
     /// Spot pair universe + token registry — convenience wrapper.
     ///
     /// The standalone `spot_meta` `/info` type was REMOVED server-side (it now
@@ -3288,6 +3382,71 @@ mod tests {
         });
         let f2: FeeSchedule = serde_json::from_value(data2).unwrap();
         assert!(f2.maker_bps.is_none() && f2.taker_bps.is_none());
+    }
+
+    /// The address form carries a `user` block with per-product rows.
+    #[test]
+    fn fee_schedule_decodes_the_per_product_user_block() {
+        let data = serde_json::json!({
+            "type": "fee_schedule",
+            "tiers": [],
+            "builder_rebate_bps": "0.2",
+            "burn_ratio": "0.30",
+            "referrer_share_bps": "1.0",
+            "user": {
+                "address": "0x00000000000000000000000000000000000000aa",
+                "taker_volume_30d": "12500000",
+                "maker_volume_30d": "3100000",
+                "taker_bps": "4.5",
+                "maker_bps": "1.5",
+                "effective_taker_bps": "4.05",
+                "effective_maker_bps": "1.2",
+                "staking_discount_permille": 100,
+                "maker_rebate_bps": "0.3",
+                "products": [
+                    { "product": "perp", "taker_bps": "4.05", "maker_bps": "1.2",
+                      "taker_volume_30d": "12500000", "maker_volume_30d": "3100000" },
+                    { "product": "spot_margin", "taker_bps": "9.0", "taker_volume_30d": "0" }
+                ]
+            }
+        });
+        let f: FeeSchedule = serde_json::from_value(data).unwrap();
+        let u = f.user.expect("the address form carries a user block");
+        assert_eq!(u.staking_discount_permille, 100);
+        assert_eq!(u.products.len(), 2);
+        // A maker rate CAN be negative — that is a credit, not a malformed rate.
+        assert_eq!(u.products[0].maker_bps.as_deref(), Some("1.2"));
+        // A product with no maker leg OMITS both maker keys. `None` here is
+        // "no maker leg", which is NOT the same fact as a maker rate of zero.
+        assert_eq!(u.products[1].product, "spot_margin");
+        assert_eq!(u.products[1].maker_bps, None);
+        assert_eq!(u.products[1].maker_volume_30d, None);
+    }
+
+    /// The ladder-only read carries no `user` key, and an older server carries
+    /// no `products`. Neither may fail the decode.
+    #[test]
+    fn fee_schedule_tolerates_an_absent_user_and_absent_products() {
+        let bare: FeeSchedule = serde_json::from_value(serde_json::json!({
+            "type": "fee_schedule", "tiers": [],
+            "builder_rebate_bps": "0.2", "burn_ratio": "0.30", "referrer_share_bps": "1.0"
+        }))
+        .unwrap();
+        assert!(bare.user.is_none());
+
+        let old: FeeSchedule = serde_json::from_value(serde_json::json!({
+            "type": "fee_schedule", "tiers": [],
+            "builder_rebate_bps": "0.2", "burn_ratio": "0.30", "referrer_share_bps": "1.0",
+            "user": {
+                "address": "0x00000000000000000000000000000000000000aa",
+                "taker_volume_30d": "0", "maker_volume_30d": "0",
+                "taker_bps": "4.5", "maker_bps": "1.5",
+                "effective_taker_bps": "4.5", "effective_maker_bps": "1.5",
+                "staking_discount_permille": 0, "maker_rebate_bps": "0"
+            }
+        }))
+        .unwrap();
+        assert!(old.user.expect("user present").products.is_empty());
     }
 
     /// A current server sends NO `builder_rebate_bps`. The response still
