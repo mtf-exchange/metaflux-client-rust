@@ -1362,19 +1362,19 @@ async fn retired_frontend_open_orders_kind_is_rejected() {
     assert!(format!("{err}").contains("frontend_open_orders"));
 }
 
-/// `bridge_user_outbox` carries the folded deployment rows: a depositor with no
+/// `bridge_withdrawal_history` carries the folded deployment rows: a depositor with no
 /// in-flight withdrawal still gets `withdrawals_halted` + `configs`, so the
 /// retired `bridge_chain_configs` ask costs one round trip here too.
 #[tokio::test]
-async fn bridge_user_outbox_carries_the_folded_configs() {
+async fn bridge_withdrawal_history_carries_the_folded_configs() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
         .and(body_json(
-            json!({ "type": "bridge_user_outbox", "address": ADDR }),
+            json!({ "type": "bridge_withdrawal_history", "address": ADDR }),
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "bridge_user_outbox",
+            "bridge_withdrawal_history",
             json!({
                 "entries": [],
                 "truncated": false,
@@ -1408,7 +1408,7 @@ async fn bridge_user_outbox_carries_the_folded_configs() {
     let o = client
         .rest()
         .info()
-        .bridge_user_outbox(test_addr(), None)
+        .bridge_withdrawal_history(test_addr(), None)
         .await
         .unwrap();
     assert!(o.entries.is_empty());

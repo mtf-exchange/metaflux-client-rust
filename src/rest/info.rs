@@ -30,7 +30,7 @@
 //! - **Static / misc** — [`Info::node_info`], [`Info::spot_meta`],
 //!   [`Info::fee_schedule`], [`Info::vault_state`].
 //! - **Option reads** — [`Info::option_series`], [`Info::option_positions`].
-//! - **Bridge reads** — [`Info::bridge_user_outbox`].
+//! - **Bridge reads** — [`Info::bridge_withdrawal_history`].
 //! - **Peer discovery** — [`Info::gossip_root_ips`].
 
 mod bridge;
@@ -38,7 +38,8 @@ mod discovery;
 mod options;
 
 pub use bridge::{
-    BridgeChainConfigRow, BridgeOutboxEntry, BridgeOutboxStatus, BridgeScanPolicy, BridgeUserOutbox,
+    BridgeChainConfigRow, BridgeOutboxEntry, BridgeOutboxStatus, BridgeScanPolicy,
+    BridgeWithdrawalHistory,
 };
 pub use discovery::{AdvertisedPeer, GossipRootIps};
 pub use options::{
@@ -779,6 +780,18 @@ pub struct AccountState {
     /// scan.
     #[serde(default)]
     pub balances: Vec<TokenBalance>,
+    /// Bridge withdrawals still IN FLIGHT — a withdrawal in flight is account
+    /// state. Empty for almost every account.
+    ///
+    /// This answers "is my withdrawal moving", never "where did it go": an entry
+    /// leaves once its retention window expires after release. The released
+    /// history is [`Info::bridge_withdrawal_history`], off the archive.
+    ///
+    /// No `economic_id` here on purpose — it is not a signing digest, and pairing
+    /// it with `message_id` on a public read is the confusion that stranded a
+    /// live withdrawal.
+    #[serde(default)]
+    pub bridge_withdrawals: Vec<BridgeOutboxEntry>,
     /// Portfolio-margin maintenance margin, whole-USDC decimal string. Always
     /// present; `"0"` when the account is not enrolled.
     pub pm_maint_margin: String,

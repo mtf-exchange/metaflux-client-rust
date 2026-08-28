@@ -1,6 +1,6 @@
 //! `/info` — custody bridge reads.
 //!
-//! ONE PUBLIC query: [`Info::bridge_user_outbox`]. It serves a user's own
+//! ONE PUBLIC query: [`Info::bridge_withdrawal_history`]. It serves a user's own
 //! in-flight withdrawals AND the committed deployment rows, because the rows
 //! DEFINE the id the entries carry. The node also serves `bridge_outbox` and
 //! `bridge_finalized_cosignatures`, but the public gateway REFUSES both (they
@@ -82,10 +82,10 @@ pub struct BridgeOutboxEntry {
 }
 
 /// One user's pending bridge withdrawals, plus the deployment rows that define
-/// their ids (`bridge_user_outbox`).
+/// their ids (`bridge_withdrawal_history`).
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct BridgeUserOutbox {
+pub struct BridgeWithdrawalHistory {
     /// Pending withdrawals, oldest first. Empty means no withdrawal is in
     /// flight — it does NOT mean a past withdrawal failed.
     #[serde(default)]
@@ -170,14 +170,18 @@ pub struct BridgeChainConfigRow {
 
 impl Info<'_> {
     /// Read one account's pending bridge withdrawals, plus the committed
-    /// deployment rows (`bridge_user_outbox`).
+    /// deployment rows (`bridge_withdrawal_history`).
+    ///
+    /// RENAMED at the 0.8.x swap, from `bridge_user_outbox`. The archive answers
+    /// both names through the swap window, so a client built against either works
+    /// until the old one is retired.
     ///
     /// `chain` restricts the answer to `1` (Base) or `2` (Arbitrum); `None`
     /// reads every chain. Check [`BridgeOutboxEntry::status`] on each entry —
     /// [`BridgeOutboxStatus::StrandedOnRetiredDomain`] is terminal and needs
     /// operator action, not a retry.
     ///
-    /// [`BridgeUserOutbox::configs`] carries one row per configured chain. Read
+    /// [`BridgeWithdrawalHistory::configs`] carries one row per configured chain. Read
     /// the `effective_*` fields, not the raw ones: the raw values are
     /// 0-as-unset sentinels. NEVER freeze a row into config — an
     /// `mbConfigureChain` vote replaces the whole row, and a stale
@@ -193,12 +197,12 @@ impl Info<'_> {
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn bridge_user_outbox(
+    pub async fn bridge_withdrawal_history(
         &self,
         address: Address,
         chain: Option<u8>,
-    ) -> Result<BridgeUserOutbox, ClientError> {
-        let mut body = json!({ "type": "bridge_user_outbox", "address": address });
+    ) -> Result<BridgeWithdrawalHistory, ClientError> {
+        let mut body = json!({ "type": "bridge_withdrawal_history", "address": address });
         if let Some(c) = chain {
             let obj = body.as_object_mut().expect("json! produced an object");
             obj.insert("chain".into(), Value::from(c));
