@@ -445,7 +445,11 @@ pub struct ProductFeeRow {
     pub product: String,
     /// The rate a fill on this product charges the taker, staking discount
     /// applied. Decimal bps string.
-    pub taker_bps: String,
+    ///
+    /// `None` on the `option` row, which does not price on a volume ladder —
+    /// read [`Self::option_taker_bps`] there instead.
+    #[serde(default)]
+    pub taker_bps: Option<String>,
     /// The rate a fill on this product charges the maker, rebate subtracted.
     /// Decimal bps string; NEGATIVE means a credit paid to the maker.
     ///
@@ -455,11 +459,25 @@ pub struct ProductFeeRow {
     #[serde(default)]
     pub maker_bps: Option<String>,
     /// The trailing 30-day taker volume THIS product's tier reads.
-    pub taker_volume_30d: String,
+    ///
+    /// `None` on the `option` row: an option does not price on a volume ladder.
+    #[serde(default)]
+    pub taker_volume_30d: Option<String>,
     /// The trailing 30-day maker volume THIS product's maker tier reads.
     /// `None` on a product with no maker leg — see [`Self::maker_bps`].
     #[serde(default)]
     pub maker_volume_30d: Option<String>,
+    /// OPTION ROW ONLY. The rate charged on the option's MAXIMUM PAYOUT —
+    /// `strike` for a put, `cap - strike` for a capped call. Decimal bps string.
+    ///
+    /// The fee is the SMALLER of this term and
+    /// [`Self::option_premium_cap_ppm`] of the premium. Both start unset, which
+    /// charges nothing.
+    #[serde(default)]
+    pub option_taker_bps: Option<String>,
+    /// OPTION ROW ONLY. The fee ceiling as a fraction of the premium, in ppm.
+    #[serde(default)]
+    pub option_premium_cap_ppm: Option<u32>,
 }
 
 /// One account's resolved fee position, returned by [`Info::fee_schedule_for`].
@@ -3406,21 +3424,31 @@ mod tests {
                 "products": [
                     { "product": "perp", "taker_bps": "4.05", "maker_bps": "1.2",
                       "taker_volume_30d": "12500000", "maker_volume_30d": "3100000" },
-                    { "product": "spot_margin", "taker_bps": "9.0", "taker_volume_30d": "0" }
+                    { "product": "spot_margin", "taker_bps": "9.0", "taker_volume_30d": "0" },
+                    { "product": "option", "option_taker_bps": "0.5",
+                      "option_premium_cap_ppm": 150000 }
                 ]
             }
         });
         let f: FeeSchedule = serde_json::from_value(data).unwrap();
         let u = f.user.expect("the address form carries a user block");
         assert_eq!(u.staking_discount_permille, 100);
-        assert_eq!(u.products.len(), 2);
+        assert_eq!(u.products.len(), 3);
         // A maker rate CAN be negative — that is a credit, not a malformed rate.
         assert_eq!(u.products[0].maker_bps.as_deref(), Some("1.2"));
+        assert_eq!(u.products[0].taker_bps.as_deref(), Some("4.05"));
         // A product with no maker leg OMITS both maker keys. `None` here is
         // "no maker leg", which is NOT the same fact as a maker rate of zero.
         assert_eq!(u.products[1].product, "spot_margin");
         assert_eq!(u.products[1].maker_bps, None);
         assert_eq!(u.products[1].maker_volume_30d, None);
+        // The option row is a DIFFERENT shape: no ladder tier, no volume, and
+        // the two rates that actually decide its fee.
+        assert_eq!(u.products[2].product, "option");
+        assert_eq!(u.products[2].taker_bps, None, "no ladder tier on an option");
+        assert_eq!(u.products[2].taker_volume_30d, None);
+        assert_eq!(u.products[2].option_taker_bps.as_deref(), Some("0.5"));
+        assert_eq!(u.products[2].option_premium_cap_ppm, Some(150_000));
     }
 
     /// The ladder-only read carries no `user` key, and an older server carries
