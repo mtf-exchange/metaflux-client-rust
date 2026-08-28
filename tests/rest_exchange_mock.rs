@@ -59,7 +59,8 @@ impl Respond for CapturingResponder {
         if let Ok(mut g) = last.try_lock() {
             *g = Some(body);
         }
-        ResponseTemplate::new(200).set_body_json(self.response.clone())
+        // The node wraps every success payload under `data`.
+        ResponseTemplate::new(200).set_body_json(json!({ "data": self.response }))
     }
 }
 
@@ -71,9 +72,9 @@ fn sample_wallet() -> Wallet {
 #[tokio::test]
 async fn submit_order_envelope_includes_valid_signature() {
     let server = MockServer::start().await;
-    // The /exchange order path returns the ExchangeResponse body DIRECTLY (NOT
-    // the `{type,data}` envelope — that is the /info read contract): the per-order
-    // status union is a top-level `statuses` array. One resting order here.
+    // The /exchange order path answers the shared envelope, so the per-order
+    // status union sits at `data.statuses`. The responder wraps `response` in
+    // `data`. One resting order here.
     let captor = CapturingResponder {
         last: Arc::new(Mutex::new(None)),
         response: json!({

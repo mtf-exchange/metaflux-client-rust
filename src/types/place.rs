@@ -224,8 +224,12 @@ impl PlaceRequest {
 pub enum LegStatus {
     /// A typed status: `resting`, `filled` or `error`.
     Known(OrderStatus),
-    /// Any other entry, verbatim. A `pending` handle lands here: the node
-    /// admitted the action but it had not committed when the node answered.
+    /// Any other entry, verbatim.
+    ///
+    /// REDUNDANT since `OrderStatus` gained its own catch-all: `from_value` can
+    /// no longer produce this, because the inner decode never fails. It is kept
+    /// so a caller holding one still compiles. Collapse the two layers when the
+    /// crate next takes a breaking change.
     Other(Value),
 }
 
@@ -473,11 +477,28 @@ mod tests {
 
     #[test]
     fn leg_status_keeps_an_unknown_entry_verbatim() {
-        // A `pending` handle must not fail the decode.
-        let v = serde_json::json!({ "pending": { "action_hash": "0xab", "nonce": 5 } });
+        // A status this version has never seen must not fail the decode. The
+        // sample used to be `pending`, which this SDK could not decode; it can
+        // now, so it belongs in the KNOWN test below and a genuinely unknown
+        // name is needed here.
+        let v = serde_json::json!({ "teleported": { "oid": 5 } });
         let s = LegStatus::from_value(v.clone());
-        assert_eq!(s, LegStatus::Other(v));
-        assert!(s.known().is_none());
+        // The inner decode no longer fails, so an unknown entry is KNOWN and
+        // carries its own catch-all. `LegStatus::Other` is unreachable through
+        // this constructor — one catch-all, not two.
+        assert!(matches!(s.known(), Some(OrderStatus::Other(inner)) if *inner == v));
+        assert_eq!(s.oid(), None);
+        assert!(!s.is_error());
+    }
+
+    #[test]
+    fn leg_status_decodes_a_pending_entry() {
+        // `pending` is an ADMITTED order whose commit was not observed inside
+        // the wait window. It carries no oid and it is not an error, so a
+        // caller must re-read rather than retry.
+        let v = serde_json::json!({ "pending": { "action_hash": "0xab", "nonce": 5 } });
+        let s = LegStatus::from_value(v);
+        assert!(s.known().is_some(), "pending decodes: {s:?}");
         assert_eq!(s.oid(), None);
         assert!(!s.is_error());
     }
@@ -486,7 +507,8 @@ mod tests {
     fn batch_placement_decodes_statuses_and_keeps_the_body() {
         let body = serde_json::json!({ "statuses": [
             { "resting": { "oid": 1, "cloid": "0x000102030405060708090a0b0c0d0e0f" } },
-            { "error": "size below market minimum" }
+            { "error": { "code": "ORDER_BELOW_MIN_NOTIONAL",
+                         "message": "size below market minimum" } }
         ]});
         let p = BatchPlacement::from_response(body.clone());
         assert_eq!(p.statuses.len(), 2);

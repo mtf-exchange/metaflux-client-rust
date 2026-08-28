@@ -529,7 +529,10 @@ impl WsClient {
                 .unwrap_or("unknown post error");
             return Err(ClientError::WebSocket(format!("ws post error: {msg}")));
         }
-        Ok(response.get("payload").cloned().unwrap_or(Value::Null))
+        // `payload` forwards the REST body verbatim, so it carries the same
+        // `{data}` / `{error}` envelope a `POST /info` or `/exchange` answers.
+        let payload = response.get("payload").cloned().unwrap_or(Value::Null);
+        crate::rest::decode_envelope(payload)
     }
 
     /// True if the background reconnect task is still running.

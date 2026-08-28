@@ -97,18 +97,33 @@ async fn ws_post_action_info_and_error() {
                                         let _ = captured_tx.send(payload.clone());
                                         json!({
                                             "type": "action",
-                                            "payload": {
+                                            "payload": { "data": {
                                                 "statuses": [
                                                     { "resting": { "oid": 1234, "cloid": "0x000102030405060708090a0b0c0d0e0f" } }
                                                 ]
-                                            }
+                                            }}
                                         })
                                     }
                                     "info" => {
-                                        if payload.get("type").and_then(Value::as_str) == Some("boom") {
-                                            json!({ "type": "error", "payload": "boom: not a real info type" })
-                                        } else {
-                                            json!({ "type": "info", "payload": { "echo": payload } })
+                                        match payload.get("type").and_then(Value::as_str) {
+                                            Some("boom") => json!({
+                                                "type": "error",
+                                                "payload": "boom: not a real info type"
+                                            }),
+                                            // A REJECTED read is a normal reply
+                                            // whose payload carries the error
+                                            // envelope, not an `error` frame.
+                                            Some("nope") => json!({
+                                                "type": "info",
+                                                "payload": { "error": {
+                                                    "code": "UNKNOWN_TYPE",
+                                                    "message": "unknown info type: nope"
+                                                }}
+                                            }),
+                                            _ => json!({
+                                                "type": "info",
+                                                "payload": { "data": { "echo": payload } }
+                                            }),
                                         }
                                     }
                                     _ => json!({ "type": "error", "payload": "unknown request type" }),
@@ -201,7 +216,19 @@ async fn ws_post_action_info_and_error() {
         "info payload should echo back"
     );
 
-    // 3. A node error reply surfaces as a WebSocket error (connection stays up).
+    // 3. A rejection rides the payload envelope, not an `error` frame.
+    let err = client
+        .post_info(json!({ "type": "nope" }))
+        .await
+        .expect_err("a rejection must not decode as a success");
+    match err {
+        ClientError::Api(e) => {
+            assert_eq!(e.code, metaflux_client::ErrorCode::UnknownType);
+        }
+        other => panic!("expected Api, got {other:?}"),
+    }
+
+    // 4. A node error reply surfaces as a WebSocket error (connection stays up).
     let err = client
         .post_info(json!({ "type": "boom" }))
         .await

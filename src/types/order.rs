@@ -26,6 +26,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::error::ApiError;
 use crate::types::{Cloid, MarketId, OrderId};
 use crate::wallet::Address;
 
@@ -403,12 +404,16 @@ pub struct CancelAllOrders {
 /// ```json
 /// {"resting": {"oid": 12345, "cloid": "0x..."}}
 /// {"filled":  {"total_sz": "100000000", "avg_px": "10050000000", "oid": 12345}}
-/// {"error":   "<reason>"}
+/// {"error":   {"code": "ORDER_INVALID_PRICE", "message": "...", "details": {…}}}
 /// ```
 ///
 /// `total_sz` / `avg_px` are CANONICAL decimal **strings** on the wire
 /// (string-typed so precision survives past 2^53); `oid` is a JSON number
 /// (uint64). The variant is selected by the single present key.
+///
+/// An `error` entry carries the SAME [`ApiError`] object the response
+/// envelope uses, so one error shape covers the whole request and one leg of
+/// it. Match on [`ApiError::code`], never on the message.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderStatus {
@@ -416,9 +421,36 @@ pub enum OrderStatus {
     Resting(RestingStatus),
     /// Crossed immediately for `total_sz` at `avg_px`.
     Filled(FilledStatus),
-    /// This entry was rejected at admission (the rest of the batch may still
-    /// have succeeded). Carries the reason string.
-    Error(String),
+    /// This entry was rejected at admission or at commit (the rest of the
+    /// batch may still have succeeded). Carries the typed rejection.
+    Error(ApiError),
+    /// A committed `chase_order`: the Chase registered and its first post-only
+    /// leg rests.
+    Chase {
+        /// The `cancel_chase` handle.
+        chase_oid: OrderId,
+        /// Current leg oid. It is re-stamped on every reprice.
+        leg_oid: OrderId,
+        /// Leg placed price, a fixed-point integer string.
+        leg_px: String,
+        /// Echoed client order id, if the Chase carried one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cloid: Option<String>,
+    },
+    /// Admitted, but no commit was observed inside the wait window. The order
+    /// MAY still commit, so re-read `open_orders`. It is not a failure and it
+    /// carries no oid.
+    Pending {
+        /// Deterministic action identifier, matching the commit events.
+        action_hash: String,
+        /// Per-account replay nonce, for client-side correlation.
+        nonce: u64,
+    },
+    /// A status this version does not know. It is kept verbatim so a server
+    /// that adds a variant does not break an older client — the gap that made
+    /// `pending` undecodable here for as long as it existed.
+    #[serde(untagged)]
+    Other(serde_json::Value),
 }
 
 impl OrderStatus {
@@ -429,7 +461,10 @@ impl OrderStatus {
         match self {
             OrderStatus::Resting(r) => Some(r.oid),
             OrderStatus::Filled(f) => Some(f.oid),
-            OrderStatus::Error(_) => None,
+            // A Chase's handle is `chase_oid`; `leg_oid` moves on every reprice,
+            // so it is not the id a caller cancels with.
+            OrderStatus::Chase { chase_oid, .. } => Some(*chase_oid),
+            OrderStatus::Error(_) | OrderStatus::Pending { .. } | OrderStatus::Other(_) => None,
         }
     }
 
@@ -702,12 +737,33 @@ mod tests {
 
     #[test]
     fn order_status_decodes_error() {
-        let j = serde_json::json!({ "error": "px not tick-aligned" });
+        let j = serde_json::json!({ "error": {
+            "code": "ORDER_INVALID_PRICE",
+            "message": "px not tick-aligned",
+            "details": { "field": "px", "limit": "100", "actual": "12345" }
+        }});
         let s: OrderStatus = serde_json::from_value(j).unwrap();
         assert!(s.is_error());
         assert_eq!(s.oid(), None);
         match s {
-            OrderStatus::Error(msg) => assert_eq!(msg, "px not tick-aligned"),
+            OrderStatus::Error(e) => {
+                assert_eq!(e.code, crate::error::ErrorCode::OrderInvalidPrice);
+                assert_eq!(e.message, "px not tick-aligned");
+                assert_eq!(e.details.unwrap().actual.as_deref(), Some("12345"));
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    /// An `error` entry with no bound must not decode `details` as empty.
+    #[test]
+    fn order_status_error_without_details() {
+        let j = serde_json::json!({ "error": {
+            "code": "ORDER_NOT_FOUND", "message": "order not found"
+        }});
+        let s: OrderStatus = serde_json::from_value(j).unwrap();
+        match s {
+            OrderStatus::Error(e) => assert!(e.details.is_none()),
             other => panic!("expected Error, got {other:?}"),
         }
     }
@@ -720,7 +776,8 @@ mod tests {
         let j = serde_json::json!({ "statuses": [
             { "resting": { "oid": 12345, "cloid": "0x000102030405060708090a0b0c0d0e0f" } },
             { "filled":  { "total_sz": "100000000", "avg_px": "10050000000", "oid": 12346 } },
-            { "error":   "size below market minimum" }
+            { "error":   { "code": "ORDER_BELOW_MIN_NOTIONAL",
+                           "message": "size below market minimum" } }
         ]});
         let resp: OrderResponse = serde_json::from_value(j).unwrap();
         assert_eq!(resp.statuses.len(), 3);
@@ -744,7 +801,11 @@ mod tests {
                     avg_px: "100".into(),
                     oid: OrderId(2),
                 }),
-                OrderStatus::Error("nope".into()),
+                OrderStatus::Error(ApiError {
+                    code: crate::error::ErrorCode::PreconditionFailed,
+                    message: "nope".into(),
+                    details: None,
+                }),
             ],
         };
         let j = serde_json::to_value(&resp).unwrap();
@@ -928,5 +989,48 @@ mod tests {
             digest(TypedTradingAction::SubmitOrder(&mkt_ioc), nonce),
             "tif must be part of the signed bytes"
         );
+    }
+}
+
+#[cfg(test)]
+mod order_status_coverage_tests {
+    use super::*;
+
+    /// Every status the server can send decodes. `pending` is the one that made
+    /// this gap reachable: it is the ordinary answer to a commit-wait timeout,
+    /// so a direct submit used to fail exactly when the caller most needed the
+    /// verdict.
+    #[test]
+    fn every_server_status_decodes() {
+        let cases = [
+            r#"{"resting":{"oid":42}}"#,
+            r#"{"filled":{"oid":42,"total_sz":"1","avg_px":"100"}}"#,
+            r#"{"error":{"code":"ORDER_ZERO_SIZE","message":"x"}}"#,
+            r#"{"chase":{"chase_oid":7,"leg_oid":8,"leg_px":"100"}}"#,
+            r#"{"pending":{"action_hash":"0xab","nonce":9}}"#,
+        ];
+        for c in cases {
+            serde_json::from_str::<OrderStatus>(c).unwrap_or_else(|e| panic!("{c}: {e}"));
+        }
+    }
+
+    /// A status this version has never seen is kept, not rejected. Without the
+    /// catch-all the next variant the server adds breaks every pinned client.
+    #[test]
+    fn an_unknown_status_is_kept_not_rejected() {
+        let v: OrderStatus =
+            serde_json::from_str(r#"{"teleported":{"oid":1}}"#).expect("unknown status decodes");
+        assert!(matches!(v, OrderStatus::Other(_)));
+        assert_eq!(v.oid(), None);
+    }
+
+    /// A Chase is cancelled by its handle, never by the leg oid — the leg is
+    /// re-stamped on every reprice.
+    #[test]
+    fn a_chase_reports_its_handle_not_its_leg() {
+        let v: OrderStatus =
+            serde_json::from_str(r#"{"chase":{"chase_oid":7,"leg_oid":8,"leg_px":"100"}}"#)
+                .unwrap();
+        assert_eq!(v.oid().map(|o| o.0), Some(7));
     }
 }

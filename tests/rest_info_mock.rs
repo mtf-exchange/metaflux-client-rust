@@ -3,9 +3,9 @@
 //! Spin up a `wiremock::MockServer`, register MTF-native shaped responses,
 //! and assert the SDK decodes them correctly. No real network involved.
 //!
-//! Every fixture is wrapped in the committed `{ "type": ..., "data": ... }`
-//! envelope (`api/rest/info.md` §Envelope) so these tests also exercise the
-//! REST layer's envelope-unwrap path.
+//! Every fixture is wrapped in the committed `{ "data": … }` envelope, with
+//! the `type` discriminator folded INSIDE `data`, so these tests also
+//! exercise the REST layer's envelope-split path.
 
 use metaflux_client::{
     CandleType, Client, MarketId,
@@ -23,9 +23,18 @@ fn test_addr() -> Address {
     Address::from_hex(ADDR).unwrap()
 }
 
-/// Wrap a payload in the committed `{ type, data }` info envelope.
+/// Wrap a payload in the committed info envelope. The `type` discriminator
+/// lives INSIDE `data`, next to the payload fields.
 fn envelope(ty: &str, data: Value) -> Value {
-    json!({ "type": ty, "data": data })
+    let mut payload = data;
+    match payload.as_object_mut() {
+        Some(map) => {
+            map.insert("type".into(), json!(ty));
+        }
+        // A non-object payload would lose the discriminator, so nest it.
+        None => payload = json!({ "type": ty, "data": payload }),
+    }
+    json!({ "data": payload })
 }
 
 #[tokio::test]
@@ -372,25 +381,74 @@ async fn spot_meta_decodes_pairs_and_tokens() {
 }
 
 #[tokio::test]
-async fn error_envelope_surfaces_as_protocol_error() {
+async fn error_envelope_surfaces_as_a_typed_api_error() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
-        .respond_with(
-            ResponseTemplate::new(400).set_body_json(json!({"error": "unknown info type: wat"})),
-        )
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "UNKNOWN_TYPE",
+                "message": "unknown info type: wat"
+            }
+        })))
         .mount(&server)
         .await;
 
     let client = Client::new(server.uri()).unwrap();
     let err = client.rest().info().markets(None).await.unwrap_err();
     match err {
-        metaflux_client::ClientError::ProtocolError { code, msg } => {
-            assert_eq!(code, 400);
-            assert!(msg.contains("unknown info type"));
+        metaflux_client::ClientError::Api(e) => {
+            assert_eq!(e.code, metaflux_client::ErrorCode::UnknownType);
+            assert!(e.message.contains("unknown info type"));
+            assert!(e.details.is_none());
         }
-        other => panic!("expected ProtocolError, got {other:?}"),
+        other => panic!("expected Api, got {other:?}"),
     }
+}
+
+/// A bound the caller must fix rides `details`, so no prose parsing is needed.
+#[tokio::test]
+async fn a_bounded_rejection_carries_typed_details() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "INVALID_REQUEST",
+                "message": "missing field `type`",
+                "details": { "field": "type" }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let err = client.rest().info().markets(None).await.unwrap_err();
+    let metaflux_client::ClientError::Api(e) = err else {
+        panic!("expected Api");
+    };
+    assert_eq!(e.code, metaflux_client::ErrorCode::InvalidRequest);
+    assert_eq!(e.details.unwrap().field.as_deref(), Some("type"));
+}
+
+/// A code this SDK build does not know must still decode.
+#[tokio::test]
+async fn an_unknown_code_from_a_newer_node_still_decodes() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": { "code": "MARKET_HALTED", "message": "trading is halted" }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let err = client.rest().info().markets(None).await.unwrap_err();
+    let metaflux_client::ClientError::Api(e) = err else {
+        panic!("expected Api");
+    };
+    assert_eq!(e.code.as_str(), "MARKET_HALTED");
 }
 
 #[tokio::test]
@@ -1318,10 +1376,12 @@ async fn retired_frontend_open_orders_kind_is_rejected() {
     Mock::given(method("POST"))
         .and(path("/info"))
         .and(body_partial_json(json!({ "type": "frontend_open_orders" })))
-        .respond_with(
-            ResponseTemplate::new(400)
-                .set_body_json(json!({ "error": "unknown info type: frontend_open_orders" })),
-        )
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+            "error": {
+                "code": "UNKNOWN_TYPE",
+                "message": "unknown info type: frontend_open_orders"
+            }
+        })))
         .mount(&server)
         .await;
 

@@ -73,9 +73,12 @@ impl Respond for BodyRecorder {
             g.len()
         };
         if seen > self.ok_calls {
-            return ResponseTemplate::new(500).set_body_json(json!({ "error": "boom" }));
+            return ResponseTemplate::new(500).set_body_json(json!({
+                "error": { "code": "INTERNAL", "message": "internal error" }
+            }));
         }
-        ResponseTemplate::new(200).set_body_json(self.response.clone())
+        // The node wraps every success payload under `data`.
+        ResponseTemplate::new(200).set_body_json(json!({ "data": self.response }))
     }
 }
 
@@ -169,7 +172,8 @@ async fn several_perp_legs_route_to_one_batch_order() {
     let (server, rec) = mock(json!({ "statuses": [
         { "resting": { "oid": 1 } },
         { "filled": { "oid": 2, "total_sz": "100000000", "avg_px": "5000000000000" } },
-        { "error": "size below market minimum" }
+        { "error": { "code": "ORDER_BELOW_MIN_NOTIONAL",
+                     "message": "size below market minimum" } }
     ]}))
     .await;
     let client = Client::new(server.uri()).unwrap();

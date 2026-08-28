@@ -61,7 +61,7 @@ pub mod types;
 pub mod wallet;
 pub mod ws;
 
-pub use error::ClientError;
+pub use error::{ApiError, ClientError, ErrorCode, ErrorDetails};
 pub use faucet::{FaucetResponse, request_faucet};
 pub use grid::{GridError, GridOrder, round_order_to_grid};
 pub use rest::RestClient;

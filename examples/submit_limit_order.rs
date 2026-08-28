@@ -67,8 +67,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     f.oid.0, f.total_sz, f.avg_px
                 );
             }
-            OrderStatus::Error(msg) => {
-                println!("order[{i}] rejected: {msg}");
+            OrderStatus::Error(e) => {
+                // Match on `e.code`; the message is prose and may change.
+                println!("order[{i}] rejected: {} — {}", e.code, e.message);
+            }
+            OrderStatus::Chase {
+                chase_oid, leg_px, ..
+            } => {
+                // Cancel with `chase_oid`. `leg_oid` is re-stamped on every
+                // reprice, so it is not a handle.
+                println!("order[{i}] chasing: handle={} leg_px={leg_px}", chase_oid.0);
+            }
+            OrderStatus::Pending { action_hash, nonce } => {
+                // ADMITTED. The commit was not observed inside the wait window,
+                // so re-read `open_orders` — this is NOT a rejection and it must
+                // not be retried, or the order lands twice.
+                println!("order[{i}] pending: action_hash={action_hash} nonce={nonce}");
+            }
+            OrderStatus::Other(v) => {
+                // A status added by a newer server. Treat it as unknown, not as
+                // a failure.
+                println!("order[{i}] unrecognised status: {v}");
             }
         }
     }
