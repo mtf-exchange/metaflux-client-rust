@@ -192,12 +192,12 @@ async fn ws_post_action_info_and_error() {
 
     // 2. post_info round-trips its payload through the echo.
     let info = client
-        .post_info(json!({ "type": "node_info" }))
+        .post_info(json!({ "type": "fee_schedule" }))
         .await
         .unwrap();
     assert_eq!(
         info.pointer("/echo/type").and_then(Value::as_str),
-        Some("node_info"),
+        Some("fee_schedule"),
         "info payload should echo back"
     );
 
@@ -265,7 +265,7 @@ async fn ws_post_times_out_when_node_never_replies() {
     .unwrap();
 
     let err = client
-        .post_info(json!({ "type": "node_info" }))
+        .post_info(json!({ "type": "fee_schedule" }))
         .await
         .expect_err("should time out");
     match err {

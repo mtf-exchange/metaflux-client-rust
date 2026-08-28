@@ -394,33 +394,6 @@ async fn error_envelope_surfaces_as_protocol_error() {
 }
 
 #[tokio::test]
-async fn node_info_decodes() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/info"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "node_info",
-            json!({
-                "network": "devnet",
-                "chain_id": 31337,
-                "protocol_version": "1.0.0",
-                "validator_index": 3,
-                "build_commit": "deadbeef",
-                "uptime_seconds": 123_456u64
-            }),
-        )))
-        .mount(&server)
-        .await;
-
-    let client = Client::new(server.uri()).unwrap();
-    let n = client.rest().info().node_info().await.unwrap();
-    assert_eq!(n.network, "devnet");
-    assert_eq!(n.chain_id, 31337);
-    assert_eq!(n.protocol_version, "1.0.0");
-    assert_eq!(n.validator_index, 3);
-}
-
-#[tokio::test]
 async fn option_series_posts_the_bare_type_and_decodes_both_kinds() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

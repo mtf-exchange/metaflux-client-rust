@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn peels_data_from_typed_envelope() {
         let env = serde_json::json!({
-            "type": "node_info",
+            "type": "fee_schedule",
             "data": { "chain_id": 114514, "epoch": 1 }
         });
         let inner = super::peel_envelope(env);

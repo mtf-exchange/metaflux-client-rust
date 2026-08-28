@@ -27,8 +27,8 @@
 //!   [`Info::user_position_history`],
 //!   [`Info::user_position_history_by_time`],
 //!   [`Info::active_asset_data`].
-//! - **Static / misc** — [`Info::node_info`], [`Info::spot_meta`],
-//!   [`Info::fee_schedule`], [`Info::vault_state`].
+//! - **Static / misc** — [`Info::spot_meta`], [`Info::fee_schedule`],
+//!   [`Info::vault_state`].
 //! - **Option reads** — [`Info::option_series`], [`Info::option_positions`].
 //! - **Bridge reads** — [`Info::bridge_withdrawal_history`].
 //! - **Peer discovery** — [`Info::gossip_root_ips`].
@@ -514,29 +514,6 @@ pub struct PendingUnstake {
 // `user: 0x…` ↔ `account_id` for the richer `address`-keyed methods above. The
 // methods below hit the node 1:1, so a `Client` pointed straight at a node
 // works without a gateway.
-
-/// `node_info` response — static node identity + protocol version.
-///
-/// **Operator lane only.** A public gateway REFUSES this query with the same
-/// error an unknown type gets. It answers when you talk to a node directly.
-///
-/// Per the `/info` contract (`node_info`). No request parameters.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct NodeInfo {
-    /// Network variant: `"devnet"`, `"testnet"`, or `"mainnet"`.
-    pub network: String,
-    /// EIP-712 chain id this node is pinned to.
-    pub chain_id: u64,
-    /// Wire-protocol version (semver string).
-    pub protocol_version: String,
-    /// This node's index in the active validator set.
-    pub validator_index: u32,
-    /// Operator-published build identifier (short hex).
-    pub build_commit: String,
-    /// Process uptime in seconds.
-    pub uptime_seconds: u64,
-}
 
 /// Account liquidation tier. See `concepts/tiered-liquidation.md`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2198,16 +2175,6 @@ impl<'a> Info<'a> {
 
     // ── node-native queries (keyed by internal numeric ids) ──
 
-    /// `node_info` — chain identity + sync state. No parameters.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn node_info(&self) -> Result<NodeInfo, ClientError> {
-        self.client
-            .post_json("/info", &json!({ "type": "node_info" }))
-            .await
-    }
-
     /// `account_state` — the account's full TRADING state, keyed by `address`.
     ///
     /// [`AccountDetail::Full`] (or `None`) answers with equity, margins, tier,
@@ -2692,28 +2659,6 @@ mod tests {
         });
         let s: StakingSnapshot = serde_json::from_value(with).unwrap();
         assert_eq!(s.undelegated_pool_balance.as_deref(), Some("250"));
-    }
-
-    /// Decode the exact `node_info.data` payload from the `/info` contract.
-    #[test]
-    fn node_info_decodes_doc_fixture() {
-        let data = serde_json::json!({
-            "network": "devnet",
-            "chain_id": 31337,
-            "protocol_version": "1.0.0",
-            "validator_index": 3,
-            "build_commit": "deadbeef",
-            "uptime_seconds": 123456u64
-        });
-        let n: NodeInfo = serde_json::from_value(data).unwrap();
-        assert_eq!(n.network, "devnet");
-        assert_eq!(n.chain_id, 31337);
-        assert_eq!(n.protocol_version, "1.0.0");
-        assert_eq!(n.validator_index, 3);
-        assert_eq!(n.uptime_seconds, 123456);
-        // Round-trips.
-        let dec: NodeInfo = serde_json::from_str(&serde_json::to_string(&n).unwrap()).unwrap();
-        assert_eq!(n, dec);
     }
 
     /// Stamp the committed as-of block onto an overview-shape fixture.

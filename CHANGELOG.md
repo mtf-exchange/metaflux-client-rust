@@ -65,6 +65,15 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   - `oracle_sources` — the SDK never typed it. The `OracleSource` MIP-3
     write-side enum is untouched.
 
+- **Breaking: `Info::node_info` and `NodeInfo` are deleted.** The node no longer
+  serves the read, so the method could only ever fail at run time. Nothing
+  replaces it: the fields were per-node identity, not consensus state, and two
+  honest nodes answer differently.
+
+  Take the chain id from the network you connect to — it is fixed per network,
+  and `eth_chainId` on `/evm` confirms it. Take the committed height and the
+  consensus time from any read: every response stamps `height` and `time`.
+
 - **Breaking: the WS `web_data` channel is retired.** `Subscription::WebData`,
   `WsMessage::WebData` and `WsClient::subscribe_web_data` are gone. The node
   refuses a `web_data` subscribe at the next release.
