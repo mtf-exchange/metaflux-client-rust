@@ -40,7 +40,7 @@ use crate::types::{
     defi::BorrowLend,
     encrypted::SubmitEncryptedOrder,
     fba::FbaSubmit,
-    meta_bridge::MbWithdraw,
+    meta_bridge::BridgeWithdraw,
     order::{
         BatchCancel, BatchModify, BatchOrder, CancelAllOrders, CancelByCloid, CancelOrder, Modify,
         Order, OrderResponse, ScheduleCancel, TimeInForce,
@@ -293,7 +293,7 @@ impl<'a> Exchange<'a> {
     ///
     /// Use the account-wide flow instead: close the position with
     /// [`Self::spot_margin_close`], then withdraw from the unified USDC account
-    /// through the normal account lane ([`Self::mb_withdraw`]).
+    /// through the normal account lane ([`Self::bridge_withdraw`]).
     ///
     /// The action stays on the wire so old signatures stay verifiable. The
     /// [`SpotMarginWithdraw`] type and its EIP-712 type string are kept for the
@@ -1196,10 +1196,10 @@ impl<'a> Exchange<'a> {
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn mb_withdraw(
+    pub async fn bridge_withdraw(
         &self,
         wallet: &Wallet,
-        params: &MbWithdraw,
+        params: &BridgeWithdraw,
     ) -> Result<Value, ClientError> {
         self.mb_withdraw_typed(
             wallet,

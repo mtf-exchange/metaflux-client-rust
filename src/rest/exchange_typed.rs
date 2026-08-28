@@ -38,22 +38,22 @@ struct TypedSignedEnvelope<'a> {
     expires_after: Option<u64>,
 }
 
-/// Map a [`crate::types::meta_bridge::MbChain`] to the `uint8` the typed `MbWithdraw` digest
+/// Map a [`crate::types::meta_bridge::BridgeChain`] to the `uint8` the typed `BridgeWithdraw` digest
 /// signs (`Base = 1`, `Arbitrum = 2`). This is independent of the
 /// wire string name, which is still PascalCase in the POST params.
-fn mb_chain_to_u8(chain: crate::types::meta_bridge::MbChain) -> u8 {
+fn mb_chain_to_u8(chain: crate::types::meta_bridge::BridgeChain) -> u8 {
     match chain {
-        crate::types::meta_bridge::MbChain::Base => 1,
-        crate::types::meta_bridge::MbChain::Arbitrum => 2,
+        crate::types::meta_bridge::BridgeChain::Base => 1,
+        crate::types::meta_bridge::BridgeChain::Arbitrum => 2,
     }
 }
 
-/// The PascalCase wire name for a [`crate::types::meta_bridge::MbChain`] (the value the POST
+/// The PascalCase wire name for a [`crate::types::meta_bridge::BridgeChain`] (the value the POST
 /// `params.chain` carries).
-fn mb_chain_name(chain: crate::types::meta_bridge::MbChain) -> &'static str {
+fn mb_chain_name(chain: crate::types::meta_bridge::BridgeChain) -> &'static str {
     match chain {
-        crate::types::meta_bridge::MbChain::Base => "Base",
-        crate::types::meta_bridge::MbChain::Arbitrum => "Arbitrum",
+        crate::types::meta_bridge::BridgeChain::Base => "Base",
+        crate::types::meta_bridge::BridgeChain::Arbitrum => "Arbitrum",
     }
 }
 
@@ -873,7 +873,7 @@ impl<'a> Exchange<'a> {
     pub async fn mb_withdraw_typed(
         &self,
         wallet: &Wallet,
-        chain: crate::types::meta_bridge::MbChain,
+        chain: crate::types::meta_bridge::BridgeChain,
         asset: u32,
         amount: u64,
         dst_addr: impl Into<String>,
@@ -882,7 +882,7 @@ impl<'a> Exchange<'a> {
         let chain_u8 = mb_chain_to_u8(chain);
         let chain_name = mb_chain_name(chain);
         self.post_signed_typed(wallet, |meta_chain, nonce| {
-            let action = TypedAction::MbWithdraw {
+            let action = TypedAction::BridgeWithdraw {
                 metaflux_chain: meta_chain,
                 chain: chain_u8,
                 asset,
@@ -896,7 +896,7 @@ impl<'a> Exchange<'a> {
                 "amount": amount,
                 "dst_addr": dst_addr,
             });
-            (action, "mb_withdraw", params)
+            (action, "bridge_withdraw", params)
         })
         .await
     }

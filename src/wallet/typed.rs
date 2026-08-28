@@ -201,7 +201,7 @@ const EARN_WITHDRAW_TYPE: &[u8] =
 const AGENT_SET_ABSTRACTION_TYPE: &[u8] =
     b"MetaFluxTransaction:AgentSetAbstraction(string metafluxChain,address user,uint8 kind,string value,uint64 nonce)";
 const MB_WITHDRAW_TYPE: &[u8] =
-    b"MetaFluxTransaction:MbWithdraw(string metafluxChain,uint8 chain,uint32 asset,uint64 amount,string dstAddr,uint64 nonce)";
+    b"MetaFluxTransaction:BridgeWithdraw(string metafluxChain,uint8 chain,uint32 asset,uint64 amount,string dstAddr,uint64 nonce)";
 const VAULT_DISTRIBUTE_TYPE: &[u8] =
     b"MetaFluxTransaction:VaultDistribute(string metafluxChain,uint64 vaultId,string pnl,uint64 nonce)";
 const CLAIM_BUILDER_REWARDS_TYPE: &[u8] =
@@ -646,11 +646,11 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
-    /// `MbWithdraw(string metafluxChain,uint8 chain,uint32 asset,uint64 amount,string dstAddr,uint64 nonce)`
+    /// `BridgeWithdraw(string metafluxChain,uint8 chain,uint32 asset,uint64 amount,string dstAddr,uint64 nonce)`
     ///
     /// The signed `chain` is the mapped `uint8` (`1` = Base, `2` = Arbitrum);
     /// the POST `params.chain` carries the string name.
-    MbWithdraw {
+    BridgeWithdraw {
         /// Chain tag.
         metaflux_chain: String,
         /// Destination chain discriminant (`1` = Base, `2` = Arbitrum).
@@ -1258,7 +1258,7 @@ impl TypedAction {
             TypedAction::EarnDeposit { .. } => EARN_DEPOSIT_TYPE,
             TypedAction::EarnWithdraw { .. } => EARN_WITHDRAW_TYPE,
             TypedAction::AgentSetAbstraction { .. } => AGENT_SET_ABSTRACTION_TYPE,
-            TypedAction::MbWithdraw { .. } => MB_WITHDRAW_TYPE,
+            TypedAction::BridgeWithdraw { .. } => MB_WITHDRAW_TYPE,
             TypedAction::CoreEvmTransfer { .. } => account::CORE_EVM_TRANSFER_TYPE,
             TypedAction::CoreEvmTransferV2 { .. } => account::CORE_EVM_TRANSFER_V2_TYPE,
             TypedAction::SendToEvmWithData { .. } => account::SEND_TO_EVM_WITH_DATA_TYPE,
@@ -1646,7 +1646,7 @@ impl TypedAction {
                 enc_string(value),
                 enc_u64(*nonce),
             ],
-            TypedAction::MbWithdraw {
+            TypedAction::BridgeWithdraw {
                 metaflux_chain,
                 chain,
                 asset,
@@ -2427,7 +2427,7 @@ mod tests {
                 "0dd8a92857e2f4aafd97dd0131704bab22969345844389d2b214d55f2a7de71e",
             ),
             (
-                TypedAction::MbWithdraw {
+                TypedAction::BridgeWithdraw {
                     metaflux_chain: "Testnet".into(),
                     chain: 2,
                     asset: 1,
@@ -2435,7 +2435,7 @@ mod tests {
                     dst_addr: "0xdeadbeef".into(),
                     nonce: 19,
                 },
-                "423f327abdec7b3469b6dc5d4993ac4a11f0a09487cec564b85d8162abdee2e8",
+                "3a3f54fcf37ab322eaea12dee2696e11048c107c344a8b59c962dc1e8e65cfa4",
             ),
         ];
         for (action, want) in cases {

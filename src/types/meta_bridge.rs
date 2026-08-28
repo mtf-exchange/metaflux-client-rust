@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 /// Destination chain for a MetaBridge withdrawal. Serializes in PascalCase to
 /// match the node's chain enum (`"Base"` / `"Arbitrum"`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum MbChain {
+pub enum BridgeChain {
     /// Base.
     Base,
     /// Arbitrum.
@@ -19,9 +19,9 @@ pub enum MbChain {
 /// Action — withdraw cross-collateral to a destination chain.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct MbWithdraw {
+pub struct BridgeWithdraw {
     /// Destination chain.
-    pub chain: MbChain,
+    pub chain: BridgeChain,
     /// MetaFlux asset id (currently only `0` = USDC cross-collateral).
     pub asset: u32,
     /// Amount in base units.
@@ -36,17 +36,20 @@ mod tests {
 
     #[test]
     fn mb_chain_serializes_pascal_case() {
-        assert_eq!(serde_json::to_string(&MbChain::Base).unwrap(), "\"Base\"");
         assert_eq!(
-            serde_json::to_string(&MbChain::Arbitrum).unwrap(),
+            serde_json::to_string(&BridgeChain::Base).unwrap(),
+            "\"Base\""
+        );
+        assert_eq!(
+            serde_json::to_string(&BridgeChain::Arbitrum).unwrap(),
             "\"Arbitrum\""
         );
     }
 
     #[test]
     fn mb_withdraw_round_trips() {
-        let a = MbWithdraw {
-            chain: MbChain::Base,
+        let a = BridgeWithdraw {
+            chain: BridgeChain::Base,
             asset: 0,
             amount: 1_000_000,
             dst_addr: "0xabababababababababababababababababababab".into(),
@@ -54,7 +57,7 @@ mod tests {
         let j = serde_json::to_value(&a).unwrap();
         assert!(j["amount"].is_number(), "amount is a plain integer");
         assert_eq!(j["chain"], serde_json::json!("Base"));
-        let dec: MbWithdraw = serde_json::from_value(j).unwrap();
+        let dec: BridgeWithdraw = serde_json::from_value(j).unwrap();
         assert_eq!(a, dec);
     }
 }

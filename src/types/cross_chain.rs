@@ -1,6 +1,6 @@
 //! Cross-chain — outbound bridge message read types.
 //!
-//! Withdrawals to other chains queue an outbound message (see the `mb_withdraw`
+//! Withdrawals to other chains queue an outbound message (see the `bridge_withdraw`
 //! action in [`crate::types::meta_bridge`]); this module models the message
 //! snapshot read back over `/info`.
 

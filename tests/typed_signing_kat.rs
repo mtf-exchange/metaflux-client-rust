@@ -114,7 +114,7 @@ fn kat_vectors_match_pinned_digests() {
 /// (1b) The twelve formerly-deferred typed actions must reproduce the frozen
 /// contract digests (chain id 114514 / `"Testnet"`) byte-for-byte. Covers the
 /// decimal-string (`delta`/`amount`/`shares`/`borrow`), `uint8` (`kind`/
-/// `chain`), `uint64 amount` (mb_withdraw), and verbatim-string (`value`) rules.
+/// `chain`), `uint64 amount` (bridge_withdraw), and verbatim-string (`value`) rules.
 #[test]
 fn extended_kat_vectors_match_pinned_digests() {
     let cases: Vec<(TypedAction, &str)> = vec![
@@ -224,7 +224,7 @@ fn extended_kat_vectors_match_pinned_digests() {
             "0dd8a92857e2f4aafd97dd0131704bab22969345844389d2b214d55f2a7de71e",
         ),
         (
-            TypedAction::MbWithdraw {
+            TypedAction::BridgeWithdraw {
                 metaflux_chain: "Testnet".into(),
                 chain: 2,
                 asset: 1,
@@ -232,7 +232,7 @@ fn extended_kat_vectors_match_pinned_digests() {
                 dst_addr: "0xdeadbeef".into(),
                 nonce: 19,
             },
-            "423f327abdec7b3469b6dc5d4993ac4a11f0a09487cec564b85d8162abdee2e8",
+            "3a3f54fcf37ab322eaea12dee2696e11048c107c344a8b59c962dc1e8e65cfa4",
         ),
     ];
     assert_eq!(cases.len(), 12, "all 12 formerly-deferred actions pinned");
@@ -738,7 +738,7 @@ fn every_typed_action_signs_and_recovers() {
             value: "abstraction-value".into(),
             nonce: 28,
         },
-        TypedAction::MbWithdraw {
+        TypedAction::BridgeWithdraw {
             metaflux_chain: chain.clone(),
             chain: 2,
             asset: 1,
