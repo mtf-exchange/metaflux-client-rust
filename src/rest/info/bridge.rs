@@ -79,6 +79,14 @@ pub struct BridgeOutboxEntry {
     /// every other status.
     #[serde(default)]
     pub released_at_ms: Option<u64>,
+    /// `true` while the withdrawal is still in the validator's queue, `false`
+    /// once it has left — released, or pruned when its retention window expired.
+    ///
+    /// `released_at_ms` cannot answer this on its own: a pruned entry also leaves
+    /// the queue and carries no release stamp. This is the field that separates
+    /// "still moving" from "finished".
+    #[serde(default = "crate::rest::info::bridge::default_open")]
+    pub open: bool,
 }
 
 /// One user's pending bridge withdrawals, plus the deployment rows that define
@@ -189,9 +197,10 @@ impl Info<'_> {
     /// address that holds no withdrawal still gets the rows, with empty
     /// `entries`.
     ///
-    /// This read is served by the historical archive, not by a validator: a
-    /// validator prunes a released entry out of its outbox, so it could only
-    /// ever answer "in flight right now". A deployment whose archive is
+    /// Served by the historical archive, not by a validator, and that is what
+    /// makes it a HISTORY: a validator prunes a released entry, so it could only
+    /// ever answer "in flight right now". Every entry is returned, finished ones
+    /// included; read [`BridgeOutboxEntry::open`] to tell them apart. A deployment whose archive is
     /// unreachable answers `503` here. It NEVER answers an empty `entries`,
     /// because that would say the withdrawal is not in flight.
     ///
@@ -209,4 +218,10 @@ impl Info<'_> {
         }
         self.client.post_json("/info", &body).await
     }
+}
+
+/// Entries predate the `open` field only in an archive built before it existed;
+/// treat such a row as still in flight rather than silently finished.
+pub(crate) fn default_open() -> bool {
+    true
 }
