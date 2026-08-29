@@ -488,16 +488,14 @@ async fn option_series_posts_the_bare_type_and_decodes_both_kinds() {
 }
 
 #[tokio::test]
-async fn option_positions_sends_the_address_and_keeps_the_two_planes_apart() {
+async fn option_state_sends_the_address_and_keeps_the_two_planes_apart() {
     let server = MockServer::start().await;
     let who = "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
     Mock::given(method("POST"))
         .and(path("/info"))
-        .and(body_json(
-            json!({ "type": "option_positions", "address": who }),
-        ))
+        .and(body_json(json!({ "type": "option_state", "address": who })))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "option_positions",
+            "option_state",
             json!({
                 "address": who,
                 "positions": [
@@ -505,7 +503,9 @@ async fn option_positions_sends_the_address_and_keeps_the_two_planes_apart() {
                       "kind": "capped_call", "strike": "100000",
                       "expiry": 1_735_689_600_000u64,
                       "long": "0", "short": "1.5", "escrow": "45000" }
-                ]
+                ],
+                "height": 8_416_000u64,
+                "time": 1_783_011_600_000u64
             }),
         )))
         .mount(&server)
@@ -515,7 +515,7 @@ async fn option_positions_sends_the_address_and_keeps_the_two_planes_apart() {
     let r = client
         .rest()
         .info()
-        .option_positions(Address::from_hex(who).unwrap())
+        .option_state(Address::from_hex(who).unwrap())
         .await
         .unwrap();
     assert_eq!(r.positions.len(), 1);
@@ -529,7 +529,7 @@ async fn option_positions_sends_the_address_and_keeps_the_two_planes_apart() {
 }
 
 #[tokio::test]
-async fn account_state_decodes_rich_shape_by_address() {
+async fn account_state_decodes_the_four_lane_summaries() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
@@ -538,29 +538,25 @@ async fn account_state_decodes_rich_shape_by_address() {
             json!({
                 "address": "0x000000000000000000000000000000000000beef",
                 "account_value": "100000000",
-                "withdrawable": "80000000",
-                "total_margin_used": "20000000",
                 "total_raw_usd": "99500000",
-                "total_ntl_pos": "64000",
+                "withdrawable": "80000000",
                 "health": "10000000",
                 "tier": "Safe",
                 "abstraction": "unified",
-                "position_mode": "one_way",
-                "clearinghouse_state": {
-                    "": { "positions": [{
-                        "coin": "BTC", "size": "1", "entry": "64000", "upnl": "500000",
-                        "isolated": false, "lev": 10, "liq": "58000", "roe": "0.01",
-                        "funding": "0", "margin": "6400", "maint_margin": "320",
-                        "notional": "64000"
-                    }] }
+                "perp": {
+                    "init_margin": "20000000",
+                    "total_ntl_pos": "64000",
+                    "pm_maint_margin": "0",
+                    "pm_concentration_penalty": "0"
                 },
-                "balances": [
+                "pm_net_value": "0",
+                "spot": { "balances": [
                     { "name": "USDC", "signing_id": 0, "total": "100000000", "hold": "0" },
                     { "name": "ETH", "signing_id": 102, "total": "5000000000", "hold": "0" }
-                ],
-                "pm_maint_margin": "0",
-                "pm_net_value": "0",
-                "pm_concentration_penalty": "0",
+                ] },
+                "margin": { "collateral": "0", "debt": "0", "pairs": 0 },
+                "option": { "escrow": "0", "legs": 0 },
+                "position_mode": "one_way",
                 "height": 8_416_000u64,
                 "time": 1_783_011_600_000u64
             }),
@@ -578,22 +574,98 @@ async fn account_state_decodes_rich_shape_by_address() {
         .unwrap();
     assert_eq!(a.account_value, "100000000");
     assert_eq!(a.withdrawable, "80000000");
-    assert_eq!(a.total_margin_used, "20000000");
     assert_eq!(a.total_raw_usd, "99500000");
-    assert_eq!(a.total_ntl_pos.as_deref(), Some("64000"));
     assert_eq!(a.tier, Tier::Safe);
     assert_eq!(a.abstraction, Abstraction::Unified);
-    // Positions live under the core dex key `""`.
-    assert_eq!(a.core_positions().len(), 1);
-    assert_eq!(a.core_positions()[0].coin, "BTC");
-    assert_eq!(a.core_positions()[0].leverage, 10);
-    assert_eq!(a.core_positions()[0].maint_margin, "320");
-    // Balances are an array; USDC first.
-    assert_eq!(a.balances[0].name, "USDC");
-    assert_eq!(a.balances[1].name, "ETH");
-    assert_eq!(a.balances[1].total, "5000000000");
-    assert_eq!(a.pm_net_value, "0");
+    // The perp margin numbers moved into their lane.
+    assert_eq!(a.perp.as_ref().unwrap().init_margin, "20000000");
+    assert_eq!(a.perp.as_ref().unwrap().total_ntl_pos, "64000");
+    // The token ledger moved under `spot`; USDC first.
+    assert_eq!(a.balances()[0].name, "USDC");
+    assert_eq!(a.balances()[1].name, "ETH");
+    assert_eq!(a.balances()[1].total, "5000000000");
+    // `pm_net_value` stays at the TOP level.
+    assert_eq!(a.pm_net_value.as_deref(), Some("0"));
     assert_eq!(a.height, 8_416_000);
+    // The position table is not in this body at all.
+    assert!(a.perp.is_some());
+}
+
+/// The position DETAIL is its own read. `adl` folds the `detail` parameter, and
+/// the EXACT body match pins it.
+#[tokio::test]
+async fn clearinghouse_state_sends_the_adl_detail_and_decodes_the_rows() {
+    let server = MockServer::start().await;
+    let who = "0x000000000000000000000000000000000000beef";
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(
+            json!({ "type": "clearinghouse_state", "address": who, "detail": "adl" }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "clearinghouse_state",
+            json!({
+                "address": who,
+                "clearinghouse_state": { "": { "positions": [{
+                    "coin": "BTC", "size": "1", "entry": "64000", "upnl": "500000",
+                    "isolated": false, "lev": 10, "liq": "58000", "roe": "0.01",
+                    "funding": "0", "margin": "6400", "maint_margin": "320",
+                    "notional": "64000", "adl_lamps": 0
+                }] } },
+                "height": 8_416_000u64,
+                "time": 1_783_011_600_000u64
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let c = client
+        .rest()
+        .info()
+        .clearinghouse_state(Address::from_hex(who).unwrap(), true)
+        .await
+        .unwrap();
+    assert_eq!(c.core_positions().len(), 1);
+    assert_eq!(c.core_positions()[0].coin, "BTC");
+    assert_eq!(c.core_positions()[0].leverage, 10);
+    assert_eq!(c.core_positions()[0].maint_margin, "320");
+    // Zero lamps says "not in the queue", which is not the same as unknown.
+    assert_eq!(c.core_positions()[0].adl_lamps, Some(0));
+    assert_eq!(c.height, 8_416_000);
+}
+
+/// Without `adl` the read sends NO `detail` key. An always-on lamp costs one
+/// extra pass per row, so the plain read must not ask for it.
+#[tokio::test]
+async fn clearinghouse_state_omits_the_detail_key_when_lamps_are_not_asked_for() {
+    let server = MockServer::start().await;
+    let who = "0x000000000000000000000000000000000000beef";
+    Mock::given(method("POST"))
+        .and(path("/info"))
+        .and(body_json(
+            json!({ "type": "clearinghouse_state", "address": who }),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
+            "clearinghouse_state",
+            json!({
+                "address": who,
+                "clearinghouse_state": { "": { "positions": [] } },
+                "height": 8_416_000u64,
+                "time": 1_783_011_600_000u64
+            }),
+        )))
+        .mount(&server)
+        .await;
+
+    let client = Client::new(server.uri()).unwrap();
+    let c = client
+        .rest()
+        .info()
+        .clearinghouse_state(Address::from_hex(who).unwrap(), false)
+        .await
+        .unwrap();
+    assert!(c.core_positions().is_empty());
 }
 
 #[tokio::test]

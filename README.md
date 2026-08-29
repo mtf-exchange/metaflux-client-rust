@@ -179,13 +179,37 @@ println!(
 );
 ```
 
+## Account reads
+
+An account is read through three frames, one per question:
+
+| Read | Answers |
+|------|---------|
+| `account_state(addr, None)` | equity, `withdrawable`, `health`, `tier`, and one summary per lane: `perp`, `spot`, `margin`, `option` |
+| `clearinghouse_state(addr, adl)` | the dex-keyed perp POSITION table |
+| `option_state(addr)` | the per-series option legs |
+
+Each lane key on `account_state` is always present and zeroed when the lane is
+empty, so a zeroed lane is a real answer. `AccountDetail::Margin` serves the
+scalars alone and NO lane, so every lane reads `None` there — "not served", not
+"empty".
+
+Every frame stamps `height` and `time`. Never join two frames to compute one
+number: they can come from different commits, and the result was true at
+neither.
+
+The same three bodies stream on the WebSocket channels `account_state`,
+`clearinghouse_state` and `option_state`. All three REQUIRE a `user` on
+subscribe. The `clearinghouse_state` frame never carries `adl_lamps`; ask the
+REST read with `adl = true` when you render that column.
+
 ## Spot trading
 
 The spot CLOB is a separate book from the perp engine, keyed by a numeric **pair
 id**. `tif` accepts `ioc`, `gtc` and `alo`; a `gtc` / `alo` residual rests
 against escrowed funds. `limit_px` must be `> 0`, on the 1e8 price plane.
 Discover pairs via `spot_meta()`, trade with `spot_order` / `spot_cancel`, and
-read balances back from `account_state(address, None).balances` — that array is
+read balances back from `account_state(address, None)` — the `spot` lane holds
 the whole token ledger, USDC and spot tokens alike:
 
 ```rust,ignore
@@ -216,8 +240,8 @@ let acct = client
     .info()
     .account_state(wallet.address(), None)
     .await?;
-for b in &acct.balances {
-    println!("{} ({}) total={} hold={}", b.name, b.asset, b.total, b.hold);
+for b in acct.balances() {
+    println!("{} ({}) total={} hold={}", b.name, b.signing_id, b.total, b.hold);
 }
 
 // 4. Cancel a resting order by oid.
