@@ -7,6 +7,13 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-08-29
+
+**The chain does not serve this shape yet.** The reshape ships in node 0.8.14,
+which swaps in at freeze height 25,040,000. Until that height the live chain still
+answers the flat wire-v2 body, so pin 0.21 if you read the account before the swap.
+
+
 ### Changed
 
 - **Breaking: `AccountState` is reshaped into four LANE SUMMARIES (wire-v3).**
