@@ -464,10 +464,10 @@ async fn option_series_posts_the_bare_type_and_decodes_both_kinds() {
                 "series": [
                     { "signing_id": 2_147_483_649u32, "underlying": "BTC", "kind": "put",
                       "strike": "100000", "expiry": 1_735_689_600_000u64, "sz_decimals": 5,
-                      "escrow_per_unit": "100000" },
-                    { "signing_id": 2_147_483_650u32, "underlying": "BTC", "kind": "capped_call",
-                      "strike": "100000", "cap": "130000", "expiry": 1_735_689_600_000u64,
-                      "sz_decimals": 5, "escrow_per_unit": "30000" }
+                      "settle_asset": "USDC", "escrow_per_unit": "100000" },
+                    { "signing_id": 2_147_483_650u32, "underlying": "BTC", "kind": "call",
+                      "strike": "100000", "expiry": 1_735_689_600_000u64,
+                      "sz_decimals": 5, "settle_asset": "BTC", "escrow_per_unit": "1" }
                 ]
             }),
         )))
@@ -480,11 +480,13 @@ async fn option_series_posts_the_bare_type_and_decodes_both_kinds() {
     // The signing id is served whole — it is the number an RFQ action carries.
     assert_eq!(r.series[0].signing_id, MarketId(2_147_483_649));
     assert_eq!(r.series[0].kind, OptionKind::Put);
-    assert_eq!(r.series[0].cap, None);
-    // A capped call escrows the WIDTH, not the strike.
-    assert_eq!(r.series[1].kind, OptionKind::CappedCall);
-    assert_eq!(r.series[1].cap.as_deref(), Some("130000"));
-    assert_eq!(r.series[1].escrow_per_unit, "30000");
+    // A put settles in USDC and escrows the strike.
+    assert_eq!(r.series[0].settle_asset, "USDC");
+    assert_eq!(r.series[0].escrow_per_unit, "100000");
+    // A call settles in the UNDERLYING and escrows ONE coin, not dollars.
+    assert_eq!(r.series[1].kind, OptionKind::Call);
+    assert_eq!(r.series[1].settle_asset, "BTC");
+    assert_eq!(r.series[1].escrow_per_unit, "1");
 }
 
 #[tokio::test]
@@ -500,9 +502,10 @@ async fn option_state_sends_the_address_and_keeps_the_two_planes_apart() {
                 "address": who,
                 "positions": [
                     { "signing_id": 2_147_483_650u32, "underlying": "BTC",
-                      "kind": "capped_call", "strike": "100000",
+                      "kind": "call", "strike": "100000",
                       "expiry": 1_735_689_600_000u64,
-                      "long": "0", "short": "1.5", "escrow": "45000" }
+                      "long": "0", "short": "1.5",
+                      "settle_asset": "BTC", "escrow": "1.5" }
                 ],
                 "height": 8_416_000u64,
                 "time": 1_783_011_600_000u64
@@ -520,12 +523,14 @@ async fn option_state_sends_the_address_and_keeps_the_two_planes_apart() {
         .unwrap();
     assert_eq!(r.positions.len(), 1);
     assert_eq!(r.positions[0].signing_id, MarketId(2_147_483_650));
-    assert_eq!(r.positions[0].kind, OptionKind::CappedCall);
+    assert_eq!(r.positions[0].kind, OptionKind::Call);
     // `short` is a UNIT count on the series size scale ...
     assert_eq!(r.positions[0].short, "1.5");
-    // ... and `escrow` is USDC. Reading one as the other is the failure the
-    // read documents; both are strings, so only the field name separates them.
-    assert_eq!(r.positions[0].escrow, "45000");
+    // ... and `escrow` is money in `settle_asset` — 1.5 BTC here, not 1.5
+    // dollars. Reading one as the other is the failure the read documents; both
+    // are strings, so only the field name separates them.
+    assert_eq!(r.positions[0].settle_asset, "BTC");
+    assert_eq!(r.positions[0].escrow, "1.5");
 }
 
 #[tokio::test]

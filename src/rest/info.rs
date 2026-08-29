@@ -492,8 +492,12 @@ pub struct ProductFeeRow {
     /// `None` on a product with no maker leg — see [`Self::maker_bps`].
     #[serde(default)]
     pub maker_volume_30d: Option<String>,
-    /// OPTION ROW ONLY. The rate charged on the option's MAXIMUM PAYOUT —
-    /// `strike` for a put, `cap - strike` for a capped call. Decimal bps string.
+    /// OPTION ROW ONLY. The rate charged on the option's STRIKE FACE —
+    /// `strike × units`, for a put and a call alike. Decimal bps string.
+    ///
+    /// The strike face is the put's maximum payout exactly. A call escrows one
+    /// coin, whose USDC worth the chain cannot read without a price, so the
+    /// strike is the bound it can read. The fee itself is USDC on both kinds.
     ///
     /// The fee is the SMALLER of this term and
     /// [`Self::option_premium_cap_ppm`] of the premium. Both start unset, which

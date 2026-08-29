@@ -433,9 +433,10 @@ mod tests {
                 "address": "0xd486e1b74b8ba0b30bff5c1c5c4e0a5f2c1c0a1f",
                 "positions": [{
                     "signing_id": 2_147_483_650u32, "underlying": "BTC",
-                    "kind": "capped_call", "strike": "100000",
+                    "kind": "call", "strike": "100000",
                     "expiry": 1_735_689_600_000u64,
-                    "long": "0", "short": "1.5", "escrow": "45000"
+                    "long": "0", "short": "1.5",
+                    "settle_asset": "BTC", "escrow": "1.5"
                 }],
                 "height": 318_172u64,
                 "time": 1_785_139_478_032u64
@@ -443,9 +444,11 @@ mod tests {
         }));
         let o = f.message.as_option_state().unwrap();
         assert_eq!(o.positions.len(), 1);
-        // `short` is a UNIT count; `escrow` is USDC. Both are strings.
+        // `short` is a UNIT count; `escrow` is money in `settle_asset` — here
+        // 1.5 BTC, not 1.5 dollars. Both are strings.
         assert_eq!(o.positions[0].short, "1.5");
-        assert_eq!(o.positions[0].escrow, "45000");
+        assert_eq!(o.positions[0].settle_asset, "BTC");
+        assert_eq!(o.positions[0].escrow, "1.5");
         assert_eq!(o.height, 318_172);
     }
 

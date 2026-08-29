@@ -145,6 +145,11 @@ pub struct MarginLane {
 #[serde(rename_all = "snake_case")]
 pub struct OptionLane {
     /// Total short-leg escrow, whole-USDC decimal string.
+    ///
+    /// PUT LEGS ONLY. A call escrows the underlying coin, so adding a call leg
+    /// would sum coins into dollars. [`Self::legs`] still counts every leg, so
+    /// this number can be `"0"` while `legs` is not. Read
+    /// [`Info::option_state`] for the per-series escrow and its `settle_asset`.
     pub escrow: String,
     /// How many series the account is party to. A COUNT, so it rides the wire
     /// as a number.

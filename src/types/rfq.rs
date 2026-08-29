@@ -19,8 +19,31 @@
 //!
 //! A taker opens an RFQ session; market makers quote it; the taker accepts one
 //! quote, or the window expires. An accept moves the premium from the buyer to
-//! the writer and locks the writer's escrow. It opens no perpetual position,
-//! charges no fee, and reserves no margin.
+//! the writer and locks the writer's escrow. It opens no perpetual position and
+//! reserves no margin.
+//!
+//! # THE PREMIUM IS USDC. THE ESCROW MAY NOT BE.
+//!
+//! A quote price, and [`RfqRequest::limit_px`], are USDC per whole underlying
+//! unit on BOTH option kinds. The fill moves the premium and the taker fee
+//! through the unified USDC pool.
+//!
+//! The ESCROW follows the series instead. A put escrows USDC; a CALL escrows
+//! the underlying coin, one coin per unit. The series row names the asset in
+//! `settle_asset` — read it, because the two denominations meet on one action:
+//! a client prices a call in dollars and funds it in coin.
+//!
+//! So a writer on a call series must hold the COIN on the spot ledger. Holding
+//! it IS the collateral test, and the coin escrow cannot net against the USDC
+//! premium the fill pays in. Two rejections follow, and both are reachable:
+//!
+//! ```text
+//! precondition failed: insufficient underlying balance for the escrow
+//! precondition failed: insufficient free collateral for the fee
+//! ```
+//!
+//! The second is a separate gate: the fee leg is USDC even when the escrow is
+//! not, so a writer holding the coin and no dollars still fails it.
 //!
 //! These types model the ACTIONS a client submits. The session reads
 //! `rfq_open` and `rfq_user` are public, and this SDK does not type them yet, so
@@ -75,8 +98,9 @@ pub struct RfqRequest {
     pub side: CoreSide,
     /// Requested size (must be > 0).
     pub size: u128,
-    /// Optional worst-acceptable price. Key is always present (`null` for
-    /// `None`).
+    /// Optional worst-acceptable price, USDC per whole underlying unit. USDC
+    /// on both option kinds — see the module header. Key is always present
+    /// (`null` for `None`).
     pub limit_px: Option<i128>,
     /// Server-clock expiry (ms). `0` lets the node default to `ts_ms + 5_000`.
     pub expiry_ms: u64,

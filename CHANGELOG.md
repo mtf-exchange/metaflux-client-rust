@@ -7,6 +7,85 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+**The chain does not serve this shape yet.** The standard-European reshape is
+landed in the node working tree and is not released. Until it swaps in, the live
+chain still answers the old option wire. Read this entry the way you read an
+upgrade notice: the types below are the TARGET, and a decode against the live
+node fails on `settle_asset` until the swap.
+
+### Changed
+
+- **Breaking: options are STANDARD EUROPEAN. `OptionKind` is exactly
+  `{ Put, Call }`.** The capped kind is deleted. It is not listable, and nothing
+  on the chain expresses a call spread any more. `OptionKind` now refuses any
+  token outside `"put"` and `"call"`, so a series row carrying the retired kind
+  fails the decode instead of reading as a shape the chain cannot list.
+
+  Per whole underlying unit, at settlement price `S*`:
+
+  ```text
+  put:  payoff max(K − S*, 0) USDC,    escrow K USDC
+  call: payoff max(1 − K/S*, 0) COIN,  escrow ONE coin
+  ```
+
+  The call's denomination is FORCED, not chosen. `max(S* − K, 0)` USDC is
+  unbounded, so no cash escrow collateralizes a call. The same payoff read in
+  the underlying never exceeds one coin. That bound funds both sides at the
+  fill, which is why this lane still cannot liquidate.
+
+- **Breaking: `OptionSeries::cap` is REMOVED.** The node no longer serves the
+  key on any row.
+
+- **New: `OptionSeries::settle_asset` and `OptionPosition::settle_asset`**, a
+  coin label. `"USDC"` on every put; the underlying's token name on every call.
+  It is the load-bearing field: `escrow_per_unit`, `OptionPosition::escrow` and
+  every settlement payout are amounts of THAT asset. A client that assumes
+  dollars is wrong on every call by the whole asset class.
+
+  Neither field carries a serde default. A row without `settle_asset` FAILS the
+  decode rather than reading as USDC, because a silent USDC default is exactly
+  the wrong answer on a call.
+
+- **Changed meaning: `OptionSeries::escrow_per_unit`** now follows
+  `settle_asset`. It is the strike on a put, and exactly `"1"` on a call — one
+  coin per unit, at every strike and every price.
+
+- **Changed meaning: `OptionPosition::escrow`** now follows `settle_asset` too.
+  A writer short 1.5 units of a `BTC` call holds `"1.5"` BTC in escrow, not 1.5
+  dollars. Summing this field across an account's rows adds coins to dollars.
+
+- **Changed meaning: `OptionLane::escrow`** on `account_state` counts PUT LEGS
+  ONLY. It is one USDC number, and a call escrows coins. `OptionLane::legs`
+  still counts every leg, so the lane can read `"0"` escrow with a non-zero leg
+  count. Read `Info::option_state` for the per-series escrow.
+
+- **Changed meaning: `ProductFeeRow::option_taker_bps`** is charged on the
+  STRIKE FACE (`strike × units`) for a put and a call alike, not on a maximum
+  payout. The strike face is the put's maximum payout exactly; a call escrows a
+  coin whose USDC worth the chain cannot read without a price, so the strike is
+  the bound it can read.
+
+- **The RFQ premium does NOT follow `settle_asset`.** `RfqRequest::limit_px` and
+  a maker quote price are USDC per whole underlying unit on BOTH kinds, and the
+  fill moves the premium and the fee through the unified USDC pool. So a client
+  prices a call in dollars while it reads that call's escrow and payout in coin.
+
+  A writer on a call series must hold the COIN on the spot ledger. The coin
+  escrow cannot net against the USDC premium, so an RFQ that would open a short
+  coin-settled leg is refused with `insufficient underlying balance for the
+  escrow`, and its USDC fee leg is gated apart with `insufficient free
+  collateral for the fee`.
+
+Worked example, both kinds, `K = 100,000`, one whole unit. A put escrows
+100,000 USDC; at `S* = 90,000` it pays 10,000 USDC and refunds 90,000. A `BTC`
+call escrows 1 BTC; at `S* = 125,000` it pays `1 − 100,000/125,000 = 0.2` BTC
+and refunds 0.8 BTC. Read as dollars at that price, 0.2 BTC is 25,000 — the
+`S* − K` the USDC form would have paid.
+
+Earlier entries in this file are trimmed of the removed kind. The wire they
+described no longer exists, and a changelog that still teaches it misleads a
+reader who starts at the top.
+
 ## [0.22.0] — 2026-08-29
 
 **The chain does not serve this shape yet.** The reshape ships in node 0.8.14,
@@ -292,27 +371,21 @@ answers the flat wire-v2 body, so pin 0.21 if you read the account before the sw
   `signing_id` is served whole here too. There is no formula, no base and no
   arithmetic that derives it.
 
-  The row omits `cap`, `sz_decimals` and `escrow_per_unit` — those are
-  series-wide, on `Info::option_series`.
+  The row omits `sz_decimals` and `escrow_per_unit` — those are series-wide, on
+  `Info::option_series`.
 
 - **`Info::option_series`, and the `OptionSeriesRegistry` / `OptionSeries` /
   `OptionKind` types.** The read serves every live option series: the
   `signing_id` an RFQ action signs against, the underlying, the kind, the
-  strike, the cap, the expiry, the size precision, and the escrow a writer
-  locks.
+  strike, the expiry, the size precision, and the escrow a writer locks.
 
   `signing_id` is a `MarketId` and it goes straight into `RfqRequest.market`.
   The registry serves it WHOLE. There is no formula, no base and no arithmetic
   that derives it — the encoding behind the number is internal to the node and
   may move.
 
-  `escrow_per_unit` is what a WRITER locks per whole unit. On a `CappedCall` it
-  is `cap − strike`, not `strike`: a $100,000 strike capped at $130,000 locks
-  $30,000 per unit. Reading `strike` as the lock overstates it by the whole
-  strike.
-
-  `cap` is `None` on a put — the node omits the key. An empty registry is a
-  `200` with an empty `series`, not an error.
+  `escrow_per_unit` is what a WRITER locks per whole unit. An empty registry is
+  a `200` with an empty `series`, not an error.
 
   The read carries no option price and no implied volatility, because the chain
   computes neither. For an account's own holding, read `Info::option_state`.
