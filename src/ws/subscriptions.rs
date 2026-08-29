@@ -15,7 +15,9 @@
 //!   Subscribe de-duplication keys on the RAW string, so `"BTC"` and `"0"`
 //!   count as two subscriptions to the same market.
 //! - **Per-account** channels carry `user` — a `0x`-hex address. (The node also
-//!   accepts the legacy alias `address`.)
+//!   accepts the legacy alias `address`.) `account_state`,
+//!   `clearinghouse_state` and `option_state` REJECT a subscribe with no
+//!   `user`; the node answers `"<channel> requires a `user`"`.
 //! - `active_asset_data` carries both `coin` and `user`. `markets` is global
 //!   (no field).
 //! - The subscribe ack returns on channel `subscriptionResponse` (camelCase);
@@ -139,8 +141,26 @@ pub enum Subscription {
         /// User `0x` address.
         user: Address,
     },
-    /// Per-account live PERP clearinghouse/account state, one per commit.
+    /// Per-account account snapshot, one per commit: the cross-lane scalars
+    /// plus the four lane summaries. Body identical to the REST `account_state`
+    /// read. The perp POSITION table is NOT in it — subscribe to
+    /// [`Subscription::ClearinghouseState`] for that.
     AccountState {
+        /// User `0x` address.
+        user: Address,
+    },
+    /// Per-account PERP position detail, one per commit — the dex-keyed table
+    /// that left `account_state`. Body identical to the REST
+    /// `clearinghouse_state` read, except that the frame never carries
+    /// `adl_lamps`: the lamp ranks against OTHER accounts, so an always-on lamp
+    /// would re-push this account whenever a stranger's ROE crossed a quartile.
+    ClearinghouseState {
+        /// User `0x` address.
+        user: Address,
+    },
+    /// Per-account option legs, one per commit. Body identical to the REST
+    /// `option_state` read.
+    OptionState {
         /// User `0x` address.
         user: Address,
     },
@@ -185,7 +205,8 @@ pub enum Subscription {
 ///
 /// A payload stays a raw [`serde_json::Value`] so a new server field never
 /// breaks an old client. The account channels also offer typed accessors —
-/// [`WsMessage::as_account_state`], [`WsMessage::as_open_orders`] and
+/// [`WsMessage::as_account_state`], [`WsMessage::as_clearinghouse_state`],
+/// [`WsMessage::as_option_state`], [`WsMessage::as_open_orders`] and
 /// [`WsMessage::as_order_updates`] — which decode the payload into the same
 /// DTOs the REST reads return.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,10 +250,16 @@ pub enum WsMessage {
     UserTwapSliceFills(serde_json::Value),
     /// Per-account TWAP history.
     UserTwapHistory(serde_json::Value),
-    /// Per-account live PERP account state — the SAME object the REST
-    /// `account_state` read returns. Decode with
-    /// [`WsMessage::as_account_state`].
+    /// Per-account account snapshot — the SAME object the REST `account_state`
+    /// read returns. Decode with [`WsMessage::as_account_state`].
     AccountState(serde_json::Value),
+    /// Per-account PERP position detail — the SAME object the REST
+    /// `clearinghouse_state` read returns. Decode with
+    /// [`WsMessage::as_clearinghouse_state`].
+    ClearinghouseState(serde_json::Value),
+    /// Per-account option legs — the SAME object the REST `option_state` read
+    /// returns. Decode with [`WsMessage::as_option_state`].
+    OptionState(serde_json::Value),
     /// Per-account spot-margin positions.
     SpotMarginState(serde_json::Value),
     /// Per-(user, market) leverage/margin context.
@@ -356,6 +383,32 @@ mod tests {
         assert_eq!(j["type"], "fills");
         assert!(j["user"].is_string());
         assert!(j["user"].as_str().unwrap().starts_with("0x"));
+    }
+
+    /// The two channels the account reshape added. Both carry the wire name the
+    /// node parses, and both REQUIRE the `user` — the node rejects a subscribe
+    /// without one.
+    #[test]
+    fn subscription_detail_channels_carry_the_wire_name_and_the_user() {
+        for (sub, want) in [
+            (
+                Subscription::ClearinghouseState {
+                    user: Address::ZERO,
+                },
+                "clearinghouse_state",
+            ),
+            (
+                Subscription::OptionState {
+                    user: Address::ZERO,
+                },
+                "option_state",
+            ),
+        ] {
+            let j = serde_json::to_value(&sub).unwrap();
+            assert_eq!(j["type"], want);
+            assert!(j["user"].as_str().unwrap().starts_with("0x"));
+            assert_eq!(serde_json::from_value::<Subscription>(j).unwrap(), sub);
+        }
     }
 
     #[test]

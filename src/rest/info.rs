@@ -19,7 +19,8 @@
 //! - **Market reads** — [`Info::markets`], [`Info::markets_meta`],
 //!   [`Info::l2_book`], [`Info::trades`], [`Info::candle_snapshot`],
 //!   [`Info::funding_history`].
-//! - **Account reads** — [`Info::account_state`], [`Info::account_overview`],
+//! - **Account reads** — [`Info::account_state`],
+//!   [`Info::clearinghouse_state`], [`Info::account_overview`],
 //!   [`Info::open_orders`],
 //!   [`Info::staking_state`], [`Info::order_status_by_oid`],
 //!   [`Info::historical_orders`], [`Info::user_funding`],
@@ -29,7 +30,7 @@
 //!   [`Info::active_asset_data`].
 //! - **Static / misc** — [`Info::spot_meta`], [`Info::fee_schedule`],
 //!   [`Info::vault_state`].
-//! - **Option reads** — [`Info::option_series`], [`Info::option_positions`].
+//! - **Option reads** — [`Info::option_series`], [`Info::option_state`].
 //! - **Bridge reads** — [`Info::bridge_withdrawal_history`].
 //! - **RFQ reads** — [`Info::rfq_open`], [`Info::rfq_user`].
 //! - **Fee credit** — [`Info::referral_state`], [`Info::builder_state`],
@@ -41,13 +42,18 @@
 //!   [`Info::user_twaps`].
 //! - **Peer discovery** — [`Info::gossip_root_ips`].
 
+mod account;
 mod bridge;
 mod credit;
 mod discovery;
 mod options;
+mod positions;
 mod rfq;
 mod venue;
 
+pub use account::{
+    AccountDetail, AccountState, MarginLane, OptionLane, PerpLane, SpotLane, TokenBalance,
+};
 pub use bridge::{
     BridgeChainConfigRow, BridgeOutboxEntry, BridgeOutboxStatus, BridgeScanPolicy,
     BridgeWithdrawalHistory,
@@ -57,9 +63,8 @@ pub use credit::{
     ReferralState,
 };
 pub use discovery::{AdvertisedPeer, GossipRootIps};
-pub use options::{
-    OptionKind, OptionPosition, OptionPositions, OptionSeries, OptionSeriesRegistry,
-};
+pub use options::{OptionKind, OptionPosition, OptionSeries, OptionSeriesRegistry, OptionState};
+pub use positions::{AccountPosition, ClearinghouseState, DexPositions, PositionSide};
 pub use rfq::{OpenRfq, RfqOpen, RfqQuoteRow, RfqUser};
 pub use venue::{
     ExchangeStatus, Mip3ActiveBids, Mip3Bid, PerMarketLimits, PerpDex, PerpDexLimits, PerpDexs,
@@ -667,231 +672,6 @@ pub enum PositionMode {
     OneWay,
     /// Hedge (separate long/short legs).
     Hedge,
-}
-
-/// Hedge-leg label on an [`AccountPosition`] — `"long"` / `"short"`.
-///
-/// A one-way account omits the field, so it is always `Option`. This is NOT the
-/// order-book side token — see [`OrderSide`], which spells `"B"` / `"A"`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PositionSide {
-    /// Long leg.
-    Long,
-    /// Short leg.
-    Short,
-}
-
-/// One open position inside a [`DexPositions`] group.
-///
-/// Every monetary magnitude is a whole-USDC decimal string. `size` is SIGNED
-/// (negative = short) and rides the market's own size plane; note the key is
-/// `size`, not the `sz` the order / book / trade rows use. `lev` is the user's
-/// CHOSEN leverage, not an effective ratio.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct AccountPosition {
-    /// Market symbol (e.g. `"BTC"`).
-    pub coin: String,
-    /// Signed position size, decimal string (negative = short).
-    pub size: String,
-    /// Volume-weighted entry price, whole-USDC decimal string.
-    #[serde(rename = "entry")]
-    pub entry_px: String,
-    /// Unrealised PnL (signed), whole-USDC decimal string.
-    #[serde(rename = "upnl")]
-    pub unrealised_pnl: String,
-    /// Whether this position uses isolated margin.
-    pub isolated: bool,
-    /// Chosen leverage multiple.
-    #[serde(rename = "lev")]
-    pub leverage: u32,
-    /// Liquidation price as a whole-USDC decimal string, or `None` when the
-    /// position has none. An isolated leg whose bucket no non-negative price can
-    /// breach reads `None`, NEVER `"0"` — a zero is a price, and reading one as
-    /// the other says "liquidates immediately" about a position that cannot be
-    /// price-liquidated.
-    #[serde(rename = "liq", default)]
-    pub liquidation_px: Option<String>,
-    /// Return on equity, decimal-fraction string.
-    pub roe: String,
-    /// Cumulative funding paid (positive) / received (negative) over the
-    /// position's life, whole-USDC decimal string.
-    pub funding: String,
-    /// Initial margin posted for the position, whole-USDC decimal string.
-    #[serde(rename = "margin")]
-    pub margin_used: String,
-    /// Maintenance margin required by the position, whole-USDC decimal string.
-    pub maint_margin: String,
-    /// Position notional at the mark, whole-USDC decimal string.
-    #[serde(rename = "notional")]
-    pub position_value: String,
-    /// Hedge-leg label; absent on a one-way account.
-    #[serde(default)]
-    pub side: Option<PositionSide>,
-    /// ADL queue indicator, `0..=4` lamps. Served ONLY at
-    /// [`AccountDetail::Adl`]; every other depth reads `None`.
-    ///
-    /// More lamps = sooner in the auto-deleveraging queue. It is a RANKING of
-    /// this seat against the other seats on the same side, NOT a probability:
-    /// four lamps with nobody being liquidated on the other side still means
-    /// nothing happens.
-    ///
-    /// `Some(0)` is meaningful and is not "unknown". Zero says the position is
-    /// not in the queue at all, which is the honest answer for a position ADL
-    /// cannot structurally reach — no committed mark, no profit, no cost basis,
-    /// or nobody on the opposite side to be deleveraged against. A hedge
-    /// account whose only opposing leg is its OWN reads zero, because ADL never
-    /// nets an account against itself.
-    #[serde(default)]
-    pub adl_lamps: Option<u8>,
-}
-
-/// The positions of one dex inside [`AccountState::clearinghouse_state`].
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct DexPositions {
-    /// Open positions hosted by this dex.
-    #[serde(default)]
-    pub positions: Vec<AccountPosition>,
-}
-
-/// One token balance row inside [`AccountState::balances`].
-///
-/// The USDC row is always first. A token row with neither a spendable balance
-/// nor an escrow hold is skipped, so absence means zero.
-///
-/// `total - hold` is NOT the spendable amount. `hold` counts spot order escrow
-/// only: USDC that margins an open perpetual position stays in `total` and
-/// never enters `hold`. Read [`AccountState::withdrawable`] for the budget.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct TokenBalance {
-    /// Token symbol (e.g. `"USDC"`), else `asset:<id>`.
-    pub name: String,
-    /// The uint32 to put in the `token` field of a signed `spotSend`, and in
-    /// `asset` of an `earnDeposit`. It has no other meaning: every row is keyed
-    /// and joined by `name`.
-    #[serde(default)]
-    pub signing_id: u32,
-    /// Total balance (spendable + hold), decimal string.
-    pub total: String,
-    /// Amount held in escrow by resting orders, decimal string.
-    pub hold: String,
-    /// Weighted-average acquisition cost, whole USDC PER WHOLE TOKEN. A price,
-    /// not a total: `(mark_px - avg_entry_px) * total` is the unrealized spot
-    /// PnL. `total` includes the part held behind resting orders, so multiply
-    /// by the quantity you mean rather than one the server picked for you.
-    ///
-    /// `None` means UNKNOWN, never zero. The chain rolls the basis on spot BUYS
-    /// only — a sell keeps the standing per-unit average, and a deposit (bridge
-    /// credit, Core-EVM credit, spot transfer, governance adjustment) writes no
-    /// basis at all. Render nothing rather than a PnL against a `None` basis:
-    /// that error is the whole notional reported as gain.
-    ///
-    /// The USDC row always reads `None` — a cost basis on the quote asset in
-    /// terms of itself has no meaning.
-    #[serde(default)]
-    pub avg_entry_px: Option<String>,
-}
-
-/// `account_state` response — rich per-account snapshot keyed by `address`.
-///
-/// Every monetary magnitude is a whole-USDC decimal **string** so precision
-/// survives the JS safe-integer limit; `health` may be negative.
-///
-/// Positions are grouped by dex: the core dex key is the empty string `""` and
-/// is ALWAYS present, and a MIP-3 deployer dex keys on the deployer's lowercase
-/// 0x-hex address. `height` / `time` stamp the committed block the snapshot was
-/// read at, so a client can reject a stale snapshot.
-///
-/// Every money field the requested depth serves is required, so decoding FAILS
-/// if the server drops or renames one — a missing money field must never read
-/// as an empty account. The depth-conditional fields
-/// (`cross_maintenance_margin_used`, `total_ntl_pos`, `clearinghouse_state`,
-/// `balances`) and `health_deferred` are the exceptions.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct AccountState {
-    /// Echo of the requested address.
-    pub address: Address,
-    /// Equity including unrealised PnL, whole-USDC decimal string.
-    pub account_value: String,
-    /// Cash the account can take out, decimal string, CLAMPED at zero.
-    ///
-    /// Settled cash minus funding owed minus `total_margin_used`. It does NOT
-    /// count unrealised profit, so a healthy account whose margin is funded by
-    /// open profit reads `"0"` — that means "nothing to withdraw", not "broke".
-    /// The chain's admission gate uses the raw signed figure, which can go
-    /// negative; this read never does.
-    pub withdrawable: String,
-    /// Total initial margin the account posts, whole-USDC decimal string.
-    /// Served at BOTH depths.
-    pub total_margin_used: String,
-    /// Settled cash equity, whole-USDC decimal string. It EXCLUDES unrealised
-    /// PnL: `account_value` counts open profit, this does not. Served at BOTH
-    /// depths.
-    pub total_raw_usd: String,
-    /// Mark notional of the account's CROSS legs, whole-USDC decimal string.
-    /// An ISOLATED leg is not counted, so this is not the account's whole
-    /// exposure. Served at [`AccountDetail::Full`] ONLY — the margin depth
-    /// skips the position walk, so it reads `None` there.
-    #[serde(default)]
-    pub total_ntl_pos: Option<String>,
-    /// `account_value - cross_maintenance_margin_used`, decimal string; can be
-    /// negative.
-    pub health: String,
-    /// Liquidation tier.
-    pub tier: Tier,
-    /// `true` when the risk engine DEFERS on this account: it holds a leg no
-    /// risk path can price. `tier` and `health` are then NOT solvency
-    /// statements, and the maintenance margin reads 0 for want of a price.
-    /// The node emits the key only when it is true, so absent means `false`.
-    #[serde(default)]
-    pub health_deferred: bool,
-    /// Margin abstraction class (`"unified"` / `"portfolio"`).
-    pub abstraction: Abstraction,
-    /// Position mode (one-way / hedge).
-    pub position_mode: PositionMode,
-    /// Maintenance margin of the CROSS book, whole-USDC decimal string. Served
-    /// ONLY at [`AccountDetail::Margin`]; the full depth carries the per-leg
-    /// `maint_margin` on each position row instead.
-    ///
-    /// The scope is CROSS. An isolated position is margined and liquidated on
-    /// its own bucket, so NEVER size an isolated position off this number. Read
-    /// that leg's own [`AccountPosition::maint_margin`] instead.
-    #[serde(default)]
-    pub cross_maintenance_margin_used: Option<String>,
-    /// Open positions grouped by dex key. `BTreeMap` for deterministic key
-    /// ordering. Empty at [`AccountDetail::Margin`], which skips the walk.
-    #[serde(default)]
-    pub clearinghouse_state: std::collections::BTreeMap<String, DexPositions>,
-    /// The account's WHOLE token ledger — the unified USDC pool in row 0, then
-    /// every spot token. Empty at [`AccountDetail::Margin`], which skips the
-    /// scan.
-    #[serde(default)]
-    pub balances: Vec<TokenBalance>,
-    /// Portfolio-margin maintenance margin, whole-USDC decimal string. Always
-    /// present; `"0"` when the account is not enrolled.
-    pub pm_maint_margin: String,
-    /// Portfolio-margin net account value, whole-USDC decimal string.
-    pub pm_net_value: String,
-    /// Portfolio-margin concentration penalty, whole-USDC decimal string.
-    pub pm_concentration_penalty: String,
-    /// Committed block height the snapshot was read at.
-    pub height: u64,
-    /// Committed block timestamp the snapshot was read at (unix ms).
-    pub time: u64,
-}
-
-impl AccountState {
-    /// Positions of the CORE dex (the `""` key), which the node always emits.
-    #[must_use]
-    pub fn core_positions(&self) -> &[AccountPosition] {
-        self.clearinghouse_state
-            .get("")
-            .map_or(&[], |d| d.positions.as_slice())
-    }
 }
 
 /// EVM-side contract binding for a registered token.
@@ -2092,29 +1872,6 @@ pub struct AccountOverview {
     pub time: u64,
 }
 
-/// Response depth for [`Info::account_state`].
-///
-/// The node accepts a third value, `"overview"`. It answers with the
-/// [`AccountOverview`] shape, which [`AccountState`] cannot decode, so
-/// [`Info::account_overview`] serves it instead of a variant here.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountDetail {
-    /// Margin scalars, positions and the whole token ledger. The default.
-    Full,
-    /// Margin scalars only — no position walk, no balance scan. Adds
-    /// [`AccountState::cross_maintenance_margin_used`] and drops
-    /// [`AccountState::total_ntl_pos`], which needs the walk.
-    Margin,
-    /// The [`AccountDetail::Full`] body, widened by
-    /// [`AccountPosition::adl_lamps`] on every position row.
-    ///
-    /// It is opt-in because each lamp ranks the position against every other
-    /// position in that market, so the node pays one extra pass per row. Ask
-    /// for it only when you render the column.
-    Adl,
-}
-
 /// Insert `coin` into a request body only when present — an absent `coin` asks
 /// for every market, which is a different question from one unknown market.
 fn insert_coin(body: &mut Value, coin: Option<&str>) {
@@ -2297,37 +2054,6 @@ impl<'a> Info<'a> {
     }
 
     // ── node-native queries (keyed by internal numeric ids) ──
-
-    /// `account_state` — the account's full TRADING state, keyed by `address`.
-    ///
-    /// [`AccountDetail::Full`] (or `None`) answers with equity, margins, tier,
-    /// positions and the whole token ledger. [`AccountDetail::Margin`] answers
-    /// with the margin scalars only — it skips the position walk and the
-    /// balance scan, which is the right ask for a frequent liquidation-health
-    /// poll. Both depths compute the scalars with one shared helper, so the two
-    /// can never disagree.
-    ///
-    /// [`AccountState::cross_maintenance_margin_used`] is served ONLY at
-    /// [`AccountDetail::Margin`], and [`AccountState::total_ntl_pos`] ONLY at
-    /// [`AccountDetail::Full`].
-    ///
-    /// [`AccountDetail::Adl`] answers the full body plus
-    /// [`AccountPosition::adl_lamps`] on every position row.
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn account_state(
-        &self,
-        addr: Address,
-        detail: Option<AccountDetail>,
-    ) -> Result<AccountState, ClientError> {
-        let mut body = json!({ "type": "account_state", "address": addr });
-        if let Some(d) = detail {
-            let obj = body.as_object_mut().expect("json! produced an object");
-            obj.insert("detail".into(), json!(d));
-        }
-        self.client.post_json("/info", &body).await
-    }
 
     /// `open_orders` — open orders for an account, keyed by `address`.
     ///
@@ -2807,261 +2533,6 @@ mod tests {
         body["height"] = serde_json::json!(562u64);
         body["time"] = serde_json::json!(1_700_000_000_555u64);
         body
-    }
-
-    /// The wire-v2 `account_state.data` body, exactly as the node serializes it.
-    fn account_state_fixture() -> serde_json::Value {
-        serde_json::json!({
-            "address": "0x000000000000000000000000000000000000beef",
-            "account_value": "100000000",
-            "withdrawable": "80000000",
-            "total_margin_used": "20000000",
-            "total_raw_usd": "99500000",
-            "total_ntl_pos": "96000",
-            "health": "10000000",
-            "tier": "Safe",
-            "abstraction": "unified",
-            "position_mode": "one_way",
-            "clearinghouse_state": {
-                "": { "positions": [{
-                    "coin": "BTC",
-                    "size": "-1.5",
-                    "entry": "64000",
-                    "upnl": "500000",
-                    "isolated": false,
-                    "lev": 10,
-                    "liq": "71000",
-                    "roe": "0.02",
-                    "funding": "-1.25",
-                    "margin": "9600",
-                    "maint_margin": "480",
-                    "notional": "96000"
-                }] },
-                "0x000000000000000000000000000000000000dead": { "positions": [{
-                    "coin": "XYZ",
-                    "size": "2",
-                    "entry": "10",
-                    "upnl": "0",
-                    "isolated": true,
-                    "lev": 3,
-                    "liq": "5",
-                    "roe": "0",
-                    "funding": "0",
-                    "margin": "6.66",
-                    "maint_margin": "0.4",
-                    "notional": "20",
-                    "side": "long"
-                }] }
-            },
-            "balances": [
-                { "name": "USDC", "signing_id": 100, "total": "100000000", "hold": "0" },
-                { "name": "ETH", "signing_id": 102, "total": "5000000000", "hold": "1" }
-            ],
-            "pm_maint_margin": "0",
-            "pm_net_value": "0",
-            "pm_concentration_penalty": "0",
-            "height": 8_416_000u64,
-            "time": 1_783_011_600_000u64
-        })
-    }
-
-    #[test]
-    fn account_state_decodes_the_wire_v2_body() {
-        let a: AccountState = serde_json::from_value(account_state_fixture()).unwrap();
-        assert_eq!(a.account_value, "100000000");
-        assert_eq!(a.total_margin_used, "20000000");
-        // `total_raw_usd` excludes the leg's 500000 unrealised profit.
-        assert_eq!(a.total_raw_usd, "99500000");
-        // The isolated XYZ leg's 20 notional is NOT in the cross total.
-        assert_eq!(a.total_ntl_pos.as_deref(), Some("96000"));
-        assert_eq!(a.tier, Tier::Safe);
-        assert_eq!(a.abstraction, Abstraction::Unified);
-        assert_eq!(a.position_mode, PositionMode::OneWay);
-        assert_eq!(a.height, 8_416_000);
-        assert_eq!(a.time, 1_783_011_600_000);
-
-        // Positions group by dex; the core dex is the empty-string key.
-        assert_eq!(a.clearinghouse_state.len(), 2);
-        let core = a.core_positions();
-        assert_eq!(core.len(), 1);
-        assert_eq!(core[0].coin, "BTC");
-        // `size` is SIGNED and keeps the `size` key — the order/book `sz` key is
-        // a different plane and must not be unified with it.
-        assert_eq!(core[0].size, "-1.5");
-        assert_eq!(core[0].maint_margin, "480");
-        assert_eq!(core[0].position_value, "96000");
-        // A one-way leg carries no side label.
-        assert!(core[0].side.is_none());
-
-        // A MIP-3 deployer dex keys on the deployer address.
-        let dex = &a.clearinghouse_state["0x000000000000000000000000000000000000dead"];
-        assert_eq!(dex.positions[0].side, Some(PositionSide::Long));
-
-        // Balances are an ARRAY of token rows; USDC is first.
-        assert_eq!(a.balances[0].name, "USDC");
-        assert_eq!(a.balances[0].signing_id, 100);
-        assert_eq!(a.balances[1].name, "ETH");
-        assert_eq!(a.balances[1].hold, "1");
-
-        // Portfolio-margin figures are always present, whole-USDC strings.
-        assert_eq!(a.pm_maint_margin, "0");
-        assert_eq!(a.pm_net_value, "0");
-        assert_eq!(a.pm_concentration_penalty, "0");
-
-        let dec: AccountState = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
-        assert_eq!(a, dec);
-    }
-
-    /// The retired pre-wire-v2 keys must be gone from the body the SDK decodes.
-    /// A flat `positions` array or an object `balances` means the fixture — or
-    /// the DTO — slipped back to the old wire.
-    #[test]
-    fn account_state_body_drops_the_retired_keys() {
-        let body = account_state_fixture();
-        assert!(body.get("positions").is_none());
-        assert!(body.get("init_margin").is_none());
-        assert!(body.get("maint_margin").is_none());
-        assert!(body.get("cross_maintenance_margin_used").is_none());
-        assert!(body.get("mode").is_none());
-        assert!(body.get("pm_enabled").is_none());
-        assert!(body["balances"].is_array());
-        assert!(
-            body["clearinghouse_state"][""]["positions"][0]
-                .get("asset")
-                .is_none()
-        );
-    }
-
-    /// The node emits `health_deferred` ONLY when the risk engine defers, so
-    /// absent must read `false` and present must read `true`.
-    #[test]
-    fn account_state_reads_the_conditional_health_deferred_flag() {
-        let body = account_state_fixture();
-        assert!(body.get("health_deferred").is_none());
-        let a: AccountState = serde_json::from_value(body.clone()).unwrap();
-        assert!(!a.health_deferred);
-
-        let mut deferred = body;
-        deferred["health_deferred"] = serde_json::json!(true);
-        let d: AccountState = serde_json::from_value(deferred).unwrap();
-        assert!(d.health_deferred);
-    }
-
-    /// A dropped or renamed field on the money path must FAIL the decode. With
-    /// `#[serde(default)]` a rename decoded fine and reported an account that
-    /// holds nothing.
-    ///
-    /// `clearinghouse_state` and `balances` are NOT in this list: the margin
-    /// depth omits both by design, so the type cannot demand them.
-    #[test]
-    fn account_state_rejects_a_dropped_or_renamed_field() {
-        for key in [
-            "abstraction",
-            "position_mode",
-            "account_value",
-            "withdrawable",
-            "total_margin_used",
-            "total_raw_usd",
-            "health",
-            "tier",
-            "pm_maint_margin",
-            "pm_net_value",
-            "pm_concentration_penalty",
-            "height",
-            "time",
-            "address",
-        ] {
-            let mut absent = account_state_fixture();
-            absent.as_object_mut().unwrap().remove(key);
-            assert!(
-                serde_json::from_value::<AccountState>(absent).is_err(),
-                "a missing `{key}` must fail the decode"
-            );
-
-            let mut renamed = account_state_fixture();
-            let v = renamed.as_object_mut().unwrap().remove(key).unwrap();
-            renamed[format!("{key}_v3")] = v;
-            assert!(
-                serde_json::from_value::<AccountState>(renamed).is_err(),
-                "a renamed `{key}` must fail the decode"
-            );
-        }
-    }
-
-    /// The rename guard above must not be satisfied by an unrelated failure:
-    /// the untouched fixture still decodes.
-    #[test]
-    fn account_state_fixture_still_decodes_unmodified() {
-        assert!(serde_json::from_value::<AccountState>(account_state_fixture()).is_ok());
-    }
-
-    /// The margin depth answers the scalars alone: it omits the position walk
-    /// and the balance scan, and it is the ONLY depth that carries
-    /// `cross_maintenance_margin_used`. Dropping the walk also drops
-    /// `total_ntl_pos`. Both collections must read empty, never as a decode
-    /// failure and never as a fabricated row.
-    #[test]
-    fn account_state_margin_depth_drops_the_walks_and_adds_cross_maintenance_margin_used() {
-        let mut body = account_state_fixture();
-        let obj = body.as_object_mut().unwrap();
-        obj.remove("clearinghouse_state");
-        obj.remove("balances");
-        obj.remove("total_ntl_pos");
-        obj.insert(
-            "cross_maintenance_margin_used".into(),
-            serde_json::json!("90000000"),
-        );
-
-        let a: AccountState = serde_json::from_value(body).unwrap();
-        assert_eq!(a.cross_maintenance_margin_used.as_deref(), Some("90000000"));
-        assert!(a.total_ntl_pos.is_none());
-        assert_eq!(a.total_margin_used, "20000000");
-        assert_eq!(a.total_raw_usd, "99500000");
-        assert!(a.clearinghouse_state.is_empty());
-        assert!(a.balances.is_empty());
-
-        // The full depth is the other half of the contract: it carries
-        // `total_ntl_pos` and no `cross_maintenance_margin_used`.
-        let full: AccountState = serde_json::from_value(account_state_fixture()).unwrap();
-        assert!(full.cross_maintenance_margin_used.is_none());
-        assert_eq!(full.total_ntl_pos.as_deref(), Some("96000"));
-    }
-
-    /// `detail: "adl"` is the full body plus `adl_lamps` on every position row.
-    /// Zero lamps is a real answer — the position is not in the queue — so it
-    /// must decode as `Some(0)`, never as the absent case.
-    #[test]
-    fn account_state_adl_depth_reads_the_queue_lamps() {
-        assert_eq!(
-            serde_json::to_value(AccountDetail::Adl).unwrap(),
-            serde_json::json!("adl")
-        );
-
-        // No `adl_lamps` at the other depths.
-        let full: AccountState = serde_json::from_value(account_state_fixture()).unwrap();
-        assert_eq!(full.clearinghouse_state[""].positions[0].adl_lamps, None);
-
-        let mut body = account_state_fixture();
-        body["clearinghouse_state"][""]["positions"][0]["adl_lamps"] = serde_json::json!(3u8);
-        body["clearinghouse_state"]["0x000000000000000000000000000000000000dead"]["positions"][0]
-            ["adl_lamps"] = serde_json::json!(0u8);
-        let a: AccountState = serde_json::from_value(body).unwrap();
-        assert_eq!(a.clearinghouse_state[""].positions[0].adl_lamps, Some(3));
-        assert_eq!(
-            a.clearinghouse_state["0x000000000000000000000000000000000000dead"].positions[0]
-                .adl_lamps,
-            Some(0)
-        );
-    }
-
-    #[test]
-    fn account_state_reads_a_portfolio_margin_account() {
-        let mut body = account_state_fixture();
-        body["abstraction"] = serde_json::json!("portfolio");
-        body["pm_maint_margin"] = serde_json::json!("1234.56");
-        let a: AccountState = serde_json::from_value(body).unwrap();
-        assert_eq!(a.abstraction, Abstraction::Portfolio);
-        assert_eq!(a.pm_maint_margin, "1234.56");
     }
 
     /// Decode the DEPLOYED gateway `markets.data` shape: an object

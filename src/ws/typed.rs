@@ -5,8 +5,10 @@
 //! payload into the same DTOs the REST reads return, and report a clear error
 //! when the frame is a different channel or the shape does not match.
 //!
-//! The node builds the REST body and the WS body of `account_state` from ONE
-//! function, so an `account_state` frame decodes into [`AccountState`] as-is.
+//! The node builds the REST body and the WS body of each account read from ONE
+//! function, so an `account_state`, `clearinghouse_state` or `option_state`
+//! frame decodes into [`AccountState`], [`ClearinghouseState`] or
+//! [`OptionState`] as-is.
 //! The order channels differ in their ENVELOPE: `open_orders` is a bare array
 //! of rows (the REST read wraps the same rows in `{address, orders}`), and
 //! `order_updates` is an array of lifecycle records.
@@ -14,7 +16,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::ClientError;
-use crate::rest::info::{AccountState, OpenOrder, OrderSide, OrderTrigger};
+use crate::rest::info::{
+    AccountState, ClearinghouseState, OpenOrder, OptionState, OrderSide, OrderTrigger,
+};
 use crate::ws::subscriptions::WsMessage;
 
 /// The inner `order` object of an [`OrderUpdate`].
@@ -196,6 +200,8 @@ impl WsMessage {
             Self::UserTwapSliceFills(_) => "user_twap_slice_fills",
             Self::UserTwapHistory(_) => "user_twap_history",
             Self::AccountState(_) => "account_state",
+            Self::ClearinghouseState(_) => "clearinghouse_state",
+            Self::OptionState(_) => "option_state",
             Self::SpotMarginState(_) => "spot_margin_state",
             Self::ActiveAssetData(_) => "active_asset_data",
             Self::ExplorerBlock(_) => "explorer_block",
@@ -210,8 +216,14 @@ impl WsMessage {
     /// Decode an `account_state` frame into the typed [`AccountState`].
     ///
     /// The body is identical to the REST `account_state` read, including the
-    /// `height` / `time` stamp and the dex-keyed `clearinghouse_state` whose
-    /// core key is the empty string.
+    /// `height` / `time` stamp and the four lane summaries. The perp POSITION
+    /// table is NOT in it — subscribe to `clearinghouse_state` and decode with
+    /// [`WsMessage::as_clearinghouse_state`].
+    ///
+    /// A frame whose `height` and `time` are both `0` is the gateway's
+    /// placeholder, sent when the node has not answered yet. It is not a
+    /// snapshot of the account: treat a zero stamp as "no data" and wait for the
+    /// next frame.
     ///
     /// # Errors
     /// [`ClientError::Decode`] when this is not an `account_state` frame, or
@@ -220,6 +232,38 @@ impl WsMessage {
         match self {
             Self::AccountState(v) => Ok(AccountState::deserialize(v)?),
             other => Err(wrong_channel("account_state", other)),
+        }
+    }
+
+    /// Decode a `clearinghouse_state` frame into the typed
+    /// [`ClearinghouseState`].
+    ///
+    /// The body is identical to the REST `clearinghouse_state` read, except that
+    /// the frame never carries `adl_lamps`. Ask the REST read with `adl = true`
+    /// when you render that column.
+    ///
+    /// # Errors
+    /// [`ClientError::Decode`] when this is not a `clearinghouse_state` frame,
+    /// or when the payload does not match [`ClearinghouseState`].
+    pub fn as_clearinghouse_state(&self) -> Result<ClearinghouseState, ClientError> {
+        match self {
+            Self::ClearinghouseState(v) => Ok(ClearinghouseState::deserialize(v)?),
+            other => Err(wrong_channel("clearinghouse_state", other)),
+        }
+    }
+
+    /// Decode an `option_state` frame into the typed [`OptionState`].
+    ///
+    /// The body is identical to the REST `option_state` read, `height` / `time`
+    /// stamp included.
+    ///
+    /// # Errors
+    /// [`ClientError::Decode`] when this is not an `option_state` frame, or when
+    /// the payload does not match [`OptionState`].
+    pub fn as_option_state(&self) -> Result<OptionState, ClientError> {
+        match self {
+            Self::OptionState(v) => Ok(OptionState::deserialize(v)?),
+            other => Err(wrong_channel("option_state", other)),
         }
     }
 
@@ -274,9 +318,9 @@ mod tests {
     use crate::ws::WsFrame;
     use serde_json::json;
 
-    /// A live `account_state` frame, key-for-key as `wss://api.devnet.mtf.exchange`
-    /// serves it: dex-keyed `clearinghouse_state` with the `""` core key, the
-    /// `balances` ARRAY, and the `height` / `time` stamp.
+    /// An `account_state` frame, key-for-key as the node serves it: the
+    /// cross-lane scalars, the four lane summaries, and the `height` / `time`
+    /// stamp. No position table — that is its own channel.
     fn account_state_frame() -> serde_json::Value {
         json!({
             "channel": "account_state",
@@ -285,7 +329,37 @@ mod tests {
                 "abstraction": "unified",
                 "account_value": "1250.5",
                 "address": "0xd486e1b74b8ba0b30bff5c1c5c4e0a5f2c1c0a1f",
-                "balances": [{ "signing_id": 100, "hold": "0", "name": "USDC", "total": "1250.5" }],
+                "withdrawable": "1000",
+                "health": "770.5",
+                "height": 318_172u64,
+                "total_raw_usd": "750.5",
+                "perp": {
+                    "init_margin": "250",
+                    "total_ntl_pos": "96000",
+                    "pm_maint_margin": "0",
+                    "pm_concentration_penalty": "0"
+                },
+                "pm_net_value": "0",
+                "spot": { "balances": [
+                    { "signing_id": 100, "hold": "0", "name": "USDC", "total": "1250.5" }
+                ] },
+                "margin": { "collateral": "0", "debt": "0", "pairs": 0 },
+                "option": { "escrow": "0", "legs": 0 },
+                "position_mode": "one_way",
+                "tier": "Safe",
+                "time": 1_785_139_478_032u64
+            }
+        })
+    }
+
+    /// The `clearinghouse_state` frame — the position DETAIL that left
+    /// `account_state`. The frame never carries `adl_lamps`.
+    fn clearinghouse_state_frame() -> serde_json::Value {
+        json!({
+            "channel": "clearinghouse_state",
+            "is_snapshot": true,
+            "data": {
+                "address": "0xd486e1b74b8ba0b30bff5c1c5c4e0a5f2c1c0a1f",
                 "clearinghouse_state": { "": { "positions": [{
                     "coin": "BTC",
                     "size": "-1.5",
@@ -300,17 +374,7 @@ mod tests {
                     "maint_margin": "480",
                     "notional": "96000"
                 }] } },
-                "withdrawable": "1000",
-                "health": "770.5",
                 "height": 318_172u64,
-                "total_margin_used": "250",
-                "total_raw_usd": "750.5",
-                "total_ntl_pos": "96000",
-                "pm_concentration_penalty": "0",
-                "pm_maint_margin": "0",
-                "pm_net_value": "0",
-                "position_mode": "one_way",
-                "tier": "Safe",
                 "time": 1_785_139_478_032u64
             }
         })
@@ -322,19 +386,67 @@ mod tests {
         assert!(f.is_snapshot);
         let a = f.message.as_account_state().unwrap();
         assert_eq!(a.account_value, "1250.5");
-        assert_eq!(a.total_margin_used, "250");
         assert_eq!(a.total_raw_usd, "750.5");
-        assert_eq!(a.total_ntl_pos.as_deref(), Some("96000"));
+        assert_eq!(a.perp.as_ref().unwrap().init_margin, "250");
+        assert_eq!(a.perp.as_ref().unwrap().total_ntl_pos, "96000");
+        // The WS frame carries the default depth, so the margin-only scalars
+        // are absent.
         assert!(a.cross_maintenance_margin_used.is_none());
+        assert!(a.total_margin_used.is_none());
         assert_eq!(a.tier, Tier::Safe);
         assert_eq!(a.abstraction, Abstraction::Unified);
-        assert_eq!(a.position_mode, PositionMode::OneWay);
+        assert_eq!(a.position_mode, Some(PositionMode::OneWay));
         assert_eq!(a.height, 318_172);
         assert_eq!(a.time, 1_785_139_478_032);
         assert!(!a.health_deferred);
-        assert_eq!(a.balances[0].signing_id, 100);
-        assert_eq!(a.core_positions().len(), 1);
-        assert_eq!(a.core_positions()[0].coin, "BTC");
+        assert_eq!(a.balances()[0].signing_id, 100);
+        // The lanes an idle account has nothing in are present and zeroed.
+        assert_eq!(a.margin.as_ref().unwrap().pairs, 0);
+        assert_eq!(a.option.as_ref().unwrap().next_expiry, None);
+    }
+
+    /// The position detail decodes off its OWN channel, and only off it.
+    #[test]
+    fn clearinghouse_state_frame_decodes_typed() {
+        let f = WsFrame::from_value(clearinghouse_state_frame());
+        assert!(f.is_snapshot);
+        let c = f.message.as_clearinghouse_state().unwrap();
+        assert_eq!(c.core_positions().len(), 1);
+        assert_eq!(c.core_positions()[0].coin, "BTC");
+        // The WS frame never carries the lamps.
+        assert_eq!(c.core_positions()[0].adl_lamps, None);
+        assert_eq!(c.height, 318_172);
+
+        // The summary frame is not the detail frame, and neither decodes as the
+        // other.
+        let s = WsFrame::from_value(account_state_frame());
+        assert!(s.message.as_clearinghouse_state().is_err());
+        assert!(f.message.as_account_state().is_err());
+    }
+
+    #[test]
+    fn option_state_frame_decodes_typed() {
+        let f = WsFrame::from_value(json!({
+            "channel": "option_state",
+            "is_snapshot": true,
+            "data": {
+                "address": "0xd486e1b74b8ba0b30bff5c1c5c4e0a5f2c1c0a1f",
+                "positions": [{
+                    "signing_id": 2_147_483_650u32, "underlying": "BTC",
+                    "kind": "capped_call", "strike": "100000",
+                    "expiry": 1_735_689_600_000u64,
+                    "long": "0", "short": "1.5", "escrow": "45000"
+                }],
+                "height": 318_172u64,
+                "time": 1_785_139_478_032u64
+            }
+        }));
+        let o = f.message.as_option_state().unwrap();
+        assert_eq!(o.positions.len(), 1);
+        // `short` is a UNIT count; `escrow` is USDC. Both are strings.
+        assert_eq!(o.positions[0].short, "1.5");
+        assert_eq!(o.positions[0].escrow, "45000");
+        assert_eq!(o.height, 318_172);
     }
 
     #[test]
@@ -547,6 +659,8 @@ mod tests {
     fn channel_name_matches_the_wire_tag() {
         for (tag, want) in [
             ("account_state", "account_state"),
+            ("clearinghouse_state", "clearinghouse_state"),
+            ("option_state", "option_state"),
             ("open_orders", "open_orders"),
             ("order_updates", "order_updates"),
             ("subscriptionResponse", "subscriptionResponse"),

@@ -324,6 +324,30 @@ impl WsClient {
         self.subscribe(Subscription::AccountState { user }).await
     }
 
+    /// Subscribe to the per-user PERP position stream — the dex-keyed table
+    /// that left the `account_state` body. The frame never carries `adl_lamps`.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_clearinghouse_state(
+        &self,
+        user: crate::wallet::Address,
+    ) -> Result<(), ClientError> {
+        self.subscribe(Subscription::ClearinghouseState { user })
+            .await
+    }
+
+    /// Subscribe to the per-user option-leg stream.
+    ///
+    /// # Errors
+    /// See [`WsClient::subscribe`].
+    pub async fn subscribe_option_state(
+        &self,
+        user: crate::wallet::Address,
+    ) -> Result<(), ClientError> {
+        self.subscribe(Subscription::OptionState { user }).await
+    }
+
     /// Subscribe to the per-user spot-margin position stream.
     ///
     /// # Errors

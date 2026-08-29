@@ -1,7 +1,7 @@
 //! `/info` — the option lane reads.
 //!
 //! Two PUBLIC queries. [`Info::option_series`] answers which series are live and
-//! which number to sign against. [`Info::option_positions`] answers what one
+//! which number to sign against. [`Info::option_state`] answers what one
 //! account holds in them.
 //!
 //! ## `signing_id` is the number an RFQ action carries
@@ -120,7 +120,7 @@ pub struct OptionPosition {
     pub escrow: String,
 }
 
-/// One account's open option legs (`option_positions`).
+/// `option_state` response — one account's open option legs.
 ///
 /// The row carries no `cap`, no `sz_decimals` and no `escrow_per_unit` — those
 /// are series-wide, on [`OptionSeries`].
@@ -128,15 +128,21 @@ pub struct OptionPosition {
 /// One of `long` / `short` is always `"0"`. A fill consumes the opposite leg
 /// before it opens a new one, so a row is either a holding or a written
 /// position, never both.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `height` / `time` stamp the committed block the snapshot was read at, so a
+/// client can reject a stale snapshot. The WebSocket `option_state` frame
+/// carries the same body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub struct OptionPositions {
+pub struct OptionState {
     /// The account the rows belong to, `0x` hex.
-    #[serde(default)]
     pub address: String,
     /// One row per open leg. Empty when the account is party to no series.
-    #[serde(default)]
     pub positions: Vec<OptionPosition>,
+    /// Committed block height the snapshot was read at.
+    pub height: u64,
+    /// Committed block timestamp the snapshot was read at (unix ms).
+    pub time: u64,
 }
 
 impl Info<'_> {
@@ -154,7 +160,7 @@ impl Info<'_> {
             .await
     }
 
-    /// Read one account's open option legs (`option_positions`).
+    /// Read one account's open option legs (`option_state`).
     ///
     /// Each row carries the series terms beside the position, so no second read
     /// is needed. An account party to no series answers `200` with an empty
@@ -167,13 +173,16 @@ impl Info<'_> {
     /// `long` / `short` are UNIT counts and `escrow` is USDC. See the module
     /// header — both are `String` and nothing in the type separates them.
     ///
+    /// The read was named `option_positions` before wire-v3. The old name is
+    /// GONE, not aliased: the node answers it with `unknown info type`.
+    ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn option_positions(&self, address: Address) -> Result<OptionPositions, ClientError> {
+    pub async fn option_state(&self, address: Address) -> Result<OptionState, ClientError> {
         self.client
             .post_json(
                 "/info",
-                &json!({ "type": "option_positions", "address": address }),
+                &json!({ "type": "option_state", "address": address }),
             )
             .await
     }
@@ -229,12 +238,12 @@ mod tests {
     /// `String`, so only the field name separates them.
     #[test]
     fn a_position_row_keeps_units_and_escrow_apart() {
-        let v: OptionPositions = serde_json::from_str(
+        let v: OptionState = serde_json::from_str(
             r#"{"address":"0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1","positions":[
                 {"signing_id":2147483650,"underlying":"BTC","kind":"capped_call",
                  "strike":"100000","expiry":1735689600000,
                  "long":"0","short":"1.5","escrow":"45000"}
-            ]}"#,
+            ],"height":8416000,"time":1783011600000}"#,
         )
         .expect("decode positions");
         let row = &v.positions[0];
@@ -249,10 +258,31 @@ mod tests {
     /// An account party to nothing is an empty list, not an error.
     #[test]
     fn an_account_party_to_nothing_decodes_empty() {
-        let v: OptionPositions = serde_json::from_str(
-            r#"{"address":"0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2","positions":[]}"#,
+        let v: OptionState = serde_json::from_str(
+            r#"{"address":"0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2","positions":[],
+                "height":8416000,"time":1783011600000}"#,
         )
         .expect("decode");
         assert!(v.positions.is_empty());
+        assert_eq!(v.height, 8_416_000);
+    }
+
+    /// A dropped key on this frame must FAIL the decode: an absent `positions`
+    /// must never read as an account that wrote nothing.
+    #[test]
+    fn a_dropped_key_fails_the_decode() {
+        let full = serde_json::json!({
+            "address": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+            "positions": [], "height": 1u64, "time": 2u64
+        });
+        for key in ["address", "positions", "height", "time"] {
+            let mut absent = full.clone();
+            absent.as_object_mut().unwrap().remove(key);
+            assert!(
+                serde_json::from_value::<OptionState>(absent).is_err(),
+                "a missing `{key}` must fail the decode"
+            );
+        }
+        assert!(serde_json::from_value::<OptionState>(full).is_ok());
     }
 }

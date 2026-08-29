@@ -7,7 +7,95 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking: `AccountState` is reshaped into four LANE SUMMARIES (wire-v3).**
+  The node moved the flat account body to one summary per lane, so every
+  account decode against the old type FAILS. There is no transition window and
+  no parallel v2 body.
+
+  | Old top-level field | Now |
+  |---|---|
+  | `total_margin_used` | `perp.init_margin` (still flat at `AccountDetail::Margin`) |
+  | `total_ntl_pos` | `perp.total_ntl_pos` |
+  | `pm_maint_margin` | `perp.pm_maint_margin` |
+  | `pm_concentration_penalty` | `perp.pm_concentration_penalty` |
+  | `balances` | `spot.balances` — the ROWS are unchanged |
+  | `clearinghouse_state` | its own read, see below |
+  | `cross_maintenance_margin_used` | `AccountDetail::Margin` only, as before |
+
+  `address`, `height`, `time`, `abstraction`, `position_mode`, `account_value`,
+  `total_raw_usd`, `withdrawable`, `health`, `health_deferred`, `tier` and
+  **`pm_net_value`** stay at the top level. `pm_net_value` is the trap: it reads
+  like a perp figure, but its cash term is the whole unified pool, so a client
+  that summed the lanes would count the same USDC twice.
+
+  Two new lane summaries have no flat predecessor: `margin`
+  (`{collateral, debt, pairs}`, the spot-margin lane) and `option`
+  (`{escrow, legs, next_expiry?}`).
+
+  Each lane key is ALWAYS present at the default depth, zeroed when the lane is
+  empty. The four lanes, `pm_net_value` and `position_mode` are therefore
+  `Option` on the type ONLY to carry the `AccountDetail::Margin` shape, which
+  serves the scalars and no lane. `None` means "this depth did not serve the
+  lane" — never "the account holds nothing". `AccountState::balances()` reads
+  the spot lane's rows and returns an empty slice at that depth.
+
+  Two non-uniform points the node keeps, both deliberate:
+  `option.next_expiry` is ABSENT when `legs` is 0, because a zero timestamp
+  reads as 1970; and `spot.balances` always carries the USDC row, so an EMPTY
+  array is a shape no real account returns.
+
+- **These three shapes are LANDED but not yet RELEASED.** Measured 2026-08-29
+  against the live public API, `option_series`, `option_positions` and
+  `option_state` all answer `unknown info type`, so the live binary predates
+  this wire. This version moves the SDK to the TARGET shape ahead of the node,
+  the way an upgrade notice does. Until the node release lands, `account_state`
+  on the live chain still serves the flat wire-v2 body, which this version
+  cannot decode.
+
+- **Breaking: `AccountDetail::Adl` is removed.** The node now REFUSES
+  `detail: "adl"` on `account_state` with a 400 that names the new read. Ask
+  `Info::clearinghouse_state` with `adl = true` instead.
+
+- **The option-leg read is `option_state`, not `option_positions`.** The wire
+  type was renamed with the reshape and the old name is GONE, not aliased: the
+  node answers `option_positions` with `unknown info type`. The SDK follows —
+  `Info::option_state`, returning `OptionState`. The body also gains the
+  `height` / `time` stamp the node injects, and `address` / `positions` are
+  required fields: an absent `positions` must not read as an account that wrote
+  nothing. The `OptionPosition` row is unchanged.
+
 ### Added
+
+- **`Info::clearinghouse_state` and the `ClearinghouseState` type** — the perp
+  POSITION detail that left the `account_state` body, served under the same
+  wire name it had as a key. `{ address, clearinghouse_state, height, time }`,
+  the dex-keyed table with the core dex under `""` and a MIP-3 deployer dex
+  under its lowercase 0x address. The row shape is UNCHANGED, so
+  `AccountPosition`, `DexPositions` and `PositionSide` move here untouched, and
+  `AccountState::core_positions` becomes `ClearinghouseState::core_positions`.
+
+  The `adl` argument folds `detail: "adl"`, which widens every row with
+  `adl_lamps`. It costs one extra pass per row, so the plain read sends no
+  `detail` key at all.
+
+  Read this beside `account_state`, never joined with it: each frame carries its
+  own `height`, and the two can come from different commits.
+
+- **Two WebSocket channels: `clearinghouse_state` and `option_state`.**
+  `Subscription::ClearinghouseState` / `Subscription::OptionState`,
+  `WsClient::subscribe_clearinghouse_state` /
+  `WsClient::subscribe_option_state`, and the typed decoders
+  `WsMessage::as_clearinghouse_state` / `WsMessage::as_option_state`. Both
+  REQUIRE a `user` on subscribe; the node rejects a subscribe without one.
+  Both share the REST builder, so the frame equals the read — except that the
+  `clearinghouse_state` frame never carries `adl_lamps`, because a lamp ranks
+  against OTHER accounts and would re-push this account whenever a stranger's
+  ROE crossed a quartile.
+
+- **The lane summary types** — `PerpLane`, `SpotLane`, `MarginLane`,
+  `OptionLane`.
 
 - **`Exchange::rfq_request_as` / `Exchange::rfq_accept_as`** — an approved agent
   can now open and accept an RFQ AS a vault. Both bind a params-level `owner`
@@ -154,10 +242,12 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   channel carries an RFQ event, so both are polled.
 
 - **Breaking: `AccountState` renames its two account-level margin scalars.**
-  `init_margin` is now `total_margin_used`, and `maint_margin` is now
-  `cross_maintenance_margin_used`. The names now say the SCOPE: the maintenance
-  figure covers the CROSS book only. An isolated position is margined and
-  liquidated on its own bucket, so size it off the row's own `maint_margin`.
+  `maint_margin` is now `cross_maintenance_margin_used`, and the initial-margin
+  scalar is now `total_margin_used` at `AccountDetail::Margin` and
+  `perp.init_margin` at the default depth (see the wire-v3 entry above). The
+  names now say the SCOPE: the maintenance figure covers the CROSS book only. An
+  isolated position is margined and liquidated on its own bucket, so size it off
+  the row's own `maint_margin`.
 
   The PER-POSITION `maint_margin` and `margin` fields on a
   `clearinghouse_state` row are UNCHANGED, as are `maint_margin_ratio` /
@@ -177,8 +267,8 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Added
 
-- **`Info::option_positions`, and the `OptionPositions` / `OptionPosition`
-  types.** One account's open option legs, by `address`. Each row carries the
+- **`Info::option_state`, and the `OptionState` / `OptionPosition` types.** One
+  account's open option legs, by `address`. Each row carries the
   series terms beside the position, so no second read is needed. An account
   party to no series answers `200` with an empty `positions` list.
 
@@ -218,7 +308,7 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   `200` with an empty `series`, not an error.
 
   The read carries no option price and no implied volatility, because the chain
-  computes neither. For an account's own holding, read `Info::option_positions`.
+  computes neither. For an account's own holding, read `Info::option_state`.
 
 - **`OrderTrigger.group` / `TriggerOrderStatus.group`** — the scaled-TP/SL
   LADDER handle, `Option<u64>`. A `positionTpsl` batch of three or more
@@ -243,10 +333,9 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   It EXCLUDES unrealised PnL, so it differs from `account_value` by exactly the
   open PnL. Served at both `detail` depths.
 
-- **`AccountState.total_ntl_pos`** — mark notional of the account's CROSS legs
-  as a decimal string. Isolated legs are NOT counted, so it is not the whole
-  exposure. `Option<String>`: served at the FULL depth only, because
-  `detail: "margin"` skips the position walk.
+- **`AccountState.perp.total_ntl_pos`** — mark notional of the account's CROSS
+  legs as a decimal string. Isolated legs are NOT counted, so it is not the
+  whole exposure. Served in the `perp` lane, which `detail: "margin"` omits.
 
 - `WsMessage::as_ledger_updates` and the `WsLedgerUpdate` record. The
   `ledger_updates` channel was reachable only as a raw `Value`, so every caller
