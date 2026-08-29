@@ -1382,7 +1382,8 @@ impl<'a> Exchange<'a> {
     /// `side` is PascalCase on the wire (`"Bid"` / `"Ask"`) but a `uint8`
     /// (`0` / `1`) in the digest. `size` / `limit_px` are the raw `u64` wire form
     /// (fixed-point lots / price). `limit_px` / `stp_group` are optional; absent →
-    /// presence `false` + `0` in the digest, `null` on the wire.
+    /// presence `false` + `0` in the digest, `null` on the wire. For an approved
+    /// agent opening the RFQ AS a vault, use [`Self::rfq_request_as`].
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -1400,6 +1401,7 @@ impl<'a> Exchange<'a> {
         self.post_signed_typed(wallet, |chain, nonce| {
             let action = TypedAction::RfqRequest {
                 metaflux_chain: chain,
+                owner: None,
                 market,
                 side: core_side_to_u8(side),
                 size,
@@ -1426,6 +1428,10 @@ impl<'a> Exchange<'a> {
     /// Cross against a specific resting RFQ quote via the `rfq_accept` tag under
     /// the typed scheme.
     ///
+    /// The node gates the accept on `requester == sender`, so an RFQ opened with
+    /// [`Self::rfq_request_as`] can only be accepted with [`Self::rfq_accept_as`]
+    /// for the same owner.
+    ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn rfq_accept_typed(
@@ -1438,12 +1444,101 @@ impl<'a> Exchange<'a> {
         self.post_signed_typed(wallet, |chain, nonce| {
             let action = TypedAction::RfqAccept {
                 metaflux_chain: chain,
+                owner: None,
                 rfq_id,
                 quote_idx,
                 size,
                 nonce,
             };
             let params = json!({
+                "rfq_id": rfq_id,
+                "quote_idx": quote_idx,
+                "size": size,
+            });
+            (action, "rfq_accept", params)
+        })
+        .await
+    }
+
+    /// As an approved agent, open an RFQ AS `owner` (a vault) under the typed
+    /// scheme — the owner-bound counterpart of [`Self::rfq_request_typed`].
+    ///
+    /// The signed digest binds `owner` right after `metafluxChain` (selecting the
+    /// `RfqRequest` `*_WITH_OWNER` type string). Signing the owner-LESS string
+    /// instead is not a rejection: the node admits the action and opens the RFQ
+    /// on the agent's OWN account, so the option escrow and the resulting
+    /// position land on the operator wallet, not the vault.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn rfq_request_as(
+        &self,
+        wallet: &Wallet,
+        owner: crate::wallet::Address,
+        market: u32,
+        side: crate::types::rfq::CoreSide,
+        size: u64,
+        limit_px: Option<u64>,
+        expiry_ms: u64,
+        stp_group: Option<u64>,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::RfqRequest {
+                metaflux_chain: chain,
+                owner: Some(owner),
+                market,
+                side: core_side_to_u8(side),
+                size,
+                has_limit_px: limit_px.is_some(),
+                limit_px: limit_px.unwrap_or(0),
+                expiry_ms,
+                has_stp_group: stp_group.is_some(),
+                stp_group: stp_group.unwrap_or(0),
+                nonce,
+            };
+            let params = json!({
+                "owner": owner,
+                "market": market,
+                "side": side,
+                "size": size,
+                "limit_px": limit_px,
+                "expiry_ms": expiry_ms,
+                "stp_group": stp_group,
+            });
+            (action, "rfq_request", params)
+        })
+        .await
+    }
+
+    /// As an approved agent, accept a resting RFQ quote AS `owner` (a vault)
+    /// under the typed scheme — the owner-bound counterpart of
+    /// [`Self::rfq_accept_typed`].
+    ///
+    /// `owner` MUST be the same account [`Self::rfq_request_as`] opened the RFQ
+    /// for: the node gates the accept on `requester == sender`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn rfq_accept_as(
+        &self,
+        wallet: &Wallet,
+        owner: crate::wallet::Address,
+        rfq_id: u64,
+        quote_idx: u32,
+        size: u64,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::RfqAccept {
+                metaflux_chain: chain,
+                owner: Some(owner),
+                rfq_id,
+                quote_idx,
+                size,
+                nonce,
+            };
+            let params = json!({
+                "owner": owner,
                 "rfq_id": rfq_id,
                 "quote_idx": quote_idx,
                 "size": size,

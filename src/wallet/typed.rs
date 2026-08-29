@@ -870,12 +870,16 @@ pub enum TypedAction {
     /// decimal-scaled). The optional `limit_px` / `stp_group` each flatten to a
     /// presence `bool` + value (`0` when absent).
     ///
-    /// The node also accepts an agent-resolved `owner` here, with its own
-    /// `*_WITH_OWNER` type string. This variant signs the owner-less form, so
-    /// the signer is the taker.
+    /// An approved agent may open the RFQ AS a vault by setting `owner`, which
+    /// selects the `*_WITH_OWNER` type string. The owner IS signed: the handler
+    /// captures `requester = sender`, and `rfq_accept` later gates on
+    /// `requester == sender`, so the signature must say WHICH account requests.
     RfqRequest {
         /// Chain tag.
         metaflux_chain: String,
+        /// Params-level owner the agent requests for. `None` = self → owner-less
+        /// digest. `Some` binds the requester identity into the digest.
+        owner: Option<Address>,
         /// Market to request a quote on.
         market: u32,
         /// Taker side (`0` = bid, `1` = ask).
@@ -897,11 +901,16 @@ pub enum TypedAction {
     },
     /// `RfqAccept(string metafluxChain,uint64 rfqId,uint32 quoteIdx,uint64 size,uint64 nonce)`
     ///
-    /// Accept of a specific resting RFQ quote. Like [`Self::RfqRequest`] the
-    /// node offers an owner-bound form; this variant signs the owner-less one.
+    /// Accept of a specific resting RFQ quote. `owner` binds the same requester
+    /// identity as [`Self::RfqRequest`], because the accept gate is
+    /// `requester == sender`. BOTH legs must carry the same `owner` for an agent
+    /// to open then accept AS a vault.
     RfqAccept {
         /// Chain tag.
         metaflux_chain: String,
+        /// Params-level owner the agent accepts for. `None` = self → owner-less
+        /// digest.
+        owner: Option<Address>,
         /// Parent RFQ session id.
         rfq_id: u64,
         /// Index of the accepted quote in the session's quote vector.
@@ -1277,8 +1286,10 @@ impl TypedAction {
                 }
             }
             TypedAction::SubmitEncryptedOrder { .. } => account::SUBMIT_ENCRYPTED_ORDER_TYPE,
-            TypedAction::RfqRequest { .. } => account::RFQ_REQUEST_TYPE,
-            TypedAction::RfqAccept { .. } => account::RFQ_ACCEPT_TYPE,
+            TypedAction::RfqRequest { owner: None, .. } => account::RFQ_REQUEST_TYPE,
+            TypedAction::RfqRequest { owner: Some(_), .. } => account::RFQ_REQUEST_WITH_OWNER_TYPE,
+            TypedAction::RfqAccept { owner: None, .. } => account::RFQ_ACCEPT_TYPE,
+            TypedAction::RfqAccept { owner: Some(_), .. } => account::RFQ_ACCEPT_WITH_OWNER_TYPE,
             TypedAction::FbaSubmit { .. } => account::FBA_SUBMIT_TYPE,
             TypedAction::Noop { .. } => account::NOOP_TYPE,
             TypedAction::VaultDistribute { .. } => VAULT_DISTRIBUTE_TYPE,
@@ -1820,6 +1831,7 @@ impl TypedAction {
             ),
             TypedAction::RfqRequest {
                 metaflux_chain,
+                owner,
                 market,
                 side,
                 size,
@@ -1829,25 +1841,53 @@ impl TypedAction {
                 has_stp_group,
                 stp_group,
                 nonce,
-            } => account::rfq_request_words(
-                metaflux_chain,
-                *market,
-                *side,
-                *size,
-                *has_limit_px,
-                *limit_px,
-                *expiry_ms,
-                *has_stp_group,
-                *stp_group,
-                *nonce,
-            ),
+            } => match owner {
+                Some(o) => account::rfq_request_words_with_owner(
+                    metaflux_chain,
+                    o,
+                    *market,
+                    *side,
+                    *size,
+                    *has_limit_px,
+                    *limit_px,
+                    *expiry_ms,
+                    *has_stp_group,
+                    *stp_group,
+                    *nonce,
+                ),
+                None => account::rfq_request_words(
+                    metaflux_chain,
+                    *market,
+                    *side,
+                    *size,
+                    *has_limit_px,
+                    *limit_px,
+                    *expiry_ms,
+                    *has_stp_group,
+                    *stp_group,
+                    *nonce,
+                ),
+            },
             TypedAction::RfqAccept {
                 metaflux_chain,
+                owner,
                 rfq_id,
                 quote_idx,
                 size,
                 nonce,
-            } => account::rfq_accept_words(metaflux_chain, *rfq_id, *quote_idx, *size, *nonce),
+            } => match owner {
+                Some(o) => account::rfq_accept_words_with_owner(
+                    metaflux_chain,
+                    o,
+                    *rfq_id,
+                    *quote_idx,
+                    *size,
+                    *nonce,
+                ),
+                None => {
+                    account::rfq_accept_words(metaflux_chain, *rfq_id, *quote_idx, *size, *nonce)
+                }
+            },
             TypedAction::FbaSubmit {
                 metaflux_chain,
                 market,

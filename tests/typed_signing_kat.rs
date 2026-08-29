@@ -417,6 +417,7 @@ fn w1_micro_typed_kat_vectors_match_pinned_digests() {
     // side 0 = Bid; numeric fields are the raw u64 wire form (NOT decimal-scaled).
     let rfq_request = TypedAction::RfqRequest {
         metaflux_chain: "Testnet".into(),
+        owner: None,
         market: 7,
         side: 0,
         size: 1_000,
@@ -435,6 +436,7 @@ fn w1_micro_typed_kat_vectors_match_pinned_digests() {
 
     let rfq_accept = TypedAction::RfqAccept {
         metaflux_chain: "Testnet".into(),
+        owner: None,
         rfq_id: 9,
         quote_idx: 2,
         size: 500,
@@ -444,6 +446,53 @@ fn w1_micro_typed_kat_vectors_match_pinned_digests() {
         hex::encode(_typed_digest_for_test(&rfq_accept)),
         "fc8da74189fbbaf2a10430dc41df54e0495b2489ab8d79f2a5f0fe4920df0f3d",
         "RfqAccept digest drift vs node"
+    );
+
+    // Owner-bound RFQ taker pair (an approved agent opens then accepts AS a
+    // vault). Both legs must carry the SAME owner: the node captures
+    // `requester = sender` at request time and gates the accept on
+    // `requester == sender`.
+    let rfq_request_owner = TypedAction::RfqRequest {
+        metaflux_chain: "Testnet".into(),
+        owner: Some(addr(0xE4)),
+        market: 7,
+        side: 0,
+        size: 1_000,
+        has_limit_px: true,
+        limit_px: 105,
+        expiry_ms: 0,
+        has_stp_group: false,
+        stp_group: 0,
+        nonce: 53,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&rfq_request_owner)),
+        "6eb97ef8c8b73fd2bf5058c999f499d7d88b6523a57429602f178c5631c88973",
+        "RfqRequestWithOwner digest drift vs node"
+    );
+    assert_ne!(
+        _typed_digest_for_test(&rfq_request),
+        _typed_digest_for_test(&rfq_request_owner),
+        "binding owner must change the RfqRequest digest"
+    );
+
+    let rfq_accept_owner = TypedAction::RfqAccept {
+        metaflux_chain: "Testnet".into(),
+        owner: Some(addr(0xE4)),
+        rfq_id: 9,
+        quote_idx: 2,
+        size: 500,
+        nonce: 55,
+    };
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&rfq_accept_owner)),
+        "5d68b024f940cf5d0e7d1f3ebe9dbc744b0c7fe805abb4e492b81faac48e2b95",
+        "RfqAcceptWithOwner digest drift vs node"
+    );
+    assert_ne!(
+        _typed_digest_for_test(&rfq_accept),
+        _typed_digest_for_test(&rfq_accept_owner),
+        "binding owner must change the RfqAccept digest"
     );
 
     let fba_submit = TypedAction::FbaSubmit {
@@ -817,6 +866,20 @@ fn every_typed_action_signs_and_recovers() {
         },
         TypedAction::RfqRequest {
             metaflux_chain: chain.clone(),
+            owner: None,
+            market: 7,
+            side: 0,
+            size: 1_000,
+            has_limit_px: true,
+            limit_px: 105,
+            expiry_ms: 0,
+            has_stp_group: false,
+            stp_group: 0,
+            nonce: 41,
+        },
+        TypedAction::RfqRequest {
+            metaflux_chain: chain.clone(),
+            owner: Some(addr(0xE4)),
             market: 7,
             side: 0,
             size: 1_000,
@@ -829,6 +892,15 @@ fn every_typed_action_signs_and_recovers() {
         },
         TypedAction::RfqAccept {
             metaflux_chain: chain.clone(),
+            owner: None,
+            rfq_id: 9,
+            quote_idx: 2,
+            size: 500,
+            nonce: 42,
+        },
+        TypedAction::RfqAccept {
+            metaflux_chain: chain.clone(),
+            owner: Some(addr(0xE4)),
             rfq_id: 9,
             quote_idx: 2,
             size: 500,
@@ -1017,7 +1089,7 @@ fn every_typed_action_signs_and_recovers() {
             nonce: 44,
         },
     ];
-    assert_eq!(actions.len(), 66, "all 66 reachable typed actions covered");
+    assert_eq!(actions.len(), 68, "all 68 reachable typed actions covered");
 
     for action in &actions {
         let digest = _typed_digest_for_test(action);

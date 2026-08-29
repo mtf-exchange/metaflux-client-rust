@@ -263,7 +263,6 @@ async fn fee_schedule_decodes_gateway_shape() {
                 "maker_bps": "1.0",
                 "taker_bps": "5.0",
                 "referrer_share_bps": "5.0",
-                "builder_rebate_bps": "0",
                 "burn_ratio": "0.8",
                 "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
             }),
@@ -278,22 +277,23 @@ async fn fee_schedule_decodes_gateway_shape() {
     assert_eq!(f.burn_ratio, "0.8");
     assert_eq!(f.tiers.len(), 1);
     assert_eq!(f.tiers[0].volume_30d, "0");
-    assert_eq!(f.builder_rebate_bps.as_deref(), Some("0"));
 }
 
-/// A current server sends no `builder_rebate_bps`. The read must still succeed.
+/// The node serves the ladder with no top-level maker/taker pair. The read must
+/// still succeed, and `tiers[0]` carries the base rates.
 #[tokio::test]
-async fn fee_schedule_decodes_without_builder_rebate() {
+async fn fee_schedule_decodes_a_ladder_only_body() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
             "fee_schedule",
             json!({
-                "maker_bps": "1.0",
-                "taker_bps": "5.0",
-                "referrer_share_bps": "5.0",
-                "burn_ratio": "0.8",
+                "referrer_share_bps": "1000",
+                "burn_ratio": "0.7",
+                "pooled_volume_sunset_day": 20_500u64,
+                "pooled_volume_sunset_ms": "1771200000000",
+                "pooled_volume_counts": true,
                 "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
             }),
         )))
@@ -302,9 +302,10 @@ async fn fee_schedule_decodes_without_builder_rebate() {
 
     let client = Client::new(server.uri()).unwrap();
     let f = client.rest().info().fee_schedule().await.unwrap();
-    assert!(f.builder_rebate_bps.is_none());
-    assert_eq!(f.referrer_share_bps, "5.0");
-    assert_eq!(f.tiers.len(), 1);
+    assert!(f.maker_bps.is_none() && f.taker_bps.is_none());
+    assert_eq!(f.tiers[0].maker_bps, "1.0");
+    assert_eq!(f.referrer_share_bps, "1000");
+    assert_eq!(f.pooled_volume_sunset_day, Some(20_500));
 }
 
 #[tokio::test]

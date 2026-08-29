@@ -14,6 +14,12 @@
 //! stay useful to shape a deploy sequence, but the submit call does not clear.
 //! The module is retained for reference; it is not removed this wave.
 //!
+//! The credit pre-flight ([`crate::Client::check_deploy_credit`] and
+//! [`crate::Client::await_deploy_credit`]) is DEPRECATED for a second reason:
+//! the chain serves no `deploy_credit` info type at all, so the read is a 400
+//! and the wait can only time out. Read the live auction with
+//! [`crate::rest::info::Info::mip3_active_bids`] instead.
+//!
 //! ## Typical flow
 //!
 //! ```no_run

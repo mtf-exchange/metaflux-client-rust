@@ -312,6 +312,7 @@ async fn handle_check_credit(
         return Ok(());
     }
     let client = Client::new(&cli.rpc)?;
+    #[allow(deprecated)]
     let count = client.check_deploy_credit(addr).await?;
     if cli.json {
         println!(

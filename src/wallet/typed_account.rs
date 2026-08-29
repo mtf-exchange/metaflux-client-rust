@@ -85,10 +85,22 @@ pub(crate) const SUBMIT_ENCRYPTED_ORDER_TYPE: &[u8] =
 /// presence `bool` + value (`0` when absent).
 pub(crate) const RFQ_REQUEST_TYPE: &[u8] =
     b"MetaFluxTransaction:RfqRequest(string metafluxChain,uint32 market,uint8 side,uint64 size,bool hasLimitPx,uint64 limitPx,uint64 expiryMs,bool hasStpGroup,uint64 stpGroup,uint64 nonce)";
+/// `MetaFluxTransaction:RfqRequest` with the params-level `owner` bound (an
+/// approved agent opens the RFQ AS a vault) // CONSENSUS-FROZEN. `owner` sits
+/// right after `metafluxChain`; used ONLY when the wire action carries an
+/// `owner` (absent → [`RFQ_REQUEST_TYPE`]).
+pub(crate) const RFQ_REQUEST_WITH_OWNER_TYPE: &[u8] =
+    b"MetaFluxTransaction:RfqRequest(string metafluxChain,address owner,uint32 market,uint8 side,uint64 size,bool hasLimitPx,uint64 limitPx,uint64 expiryMs,bool hasStpGroup,uint64 stpGroup,uint64 nonce)";
 /// `MetaFluxTransaction:RfqAccept` // CONSENSUS-FROZEN. Binds the parent `rfqId`,
 /// the accepted `quoteIdx`, and the accepted `uint64` `size`.
 pub(crate) const RFQ_ACCEPT_TYPE: &[u8] =
     b"MetaFluxTransaction:RfqAccept(string metafluxChain,uint64 rfqId,uint32 quoteIdx,uint64 size,uint64 nonce)";
+/// `MetaFluxTransaction:RfqAccept` with the params-level `owner` bound (an
+/// approved agent accepts AS a vault) // CONSENSUS-FROZEN. `owner` sits right
+/// after `metafluxChain`; used ONLY when the wire action carries an `owner`
+/// (absent → [`RFQ_ACCEPT_TYPE`]).
+pub(crate) const RFQ_ACCEPT_WITH_OWNER_TYPE: &[u8] =
+    b"MetaFluxTransaction:RfqAccept(string metafluxChain,address owner,uint64 rfqId,uint32 quoteIdx,uint64 size,uint64 nonce)";
 /// `MetaFluxTransaction:RfqQuote` // CONSENSUS-FROZEN. Maker quote onto an open
 /// RFQ session: `price` / `maxSize` are the raw `uint64` wire form
 /// (digest-symmetric with `RfqRequest`, NOT decimal-scaled); the optional
@@ -365,6 +377,36 @@ pub(crate) fn rfq_request_words(
     ]
 }
 
+/// `RfqRequest` words with the params-level `owner` bound, after `metafluxChain`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn rfq_request_words_with_owner(
+    chain: &str,
+    owner: &crate::wallet::Address,
+    market: u32,
+    side: u8,
+    size: u64,
+    has_limit_px: bool,
+    limit_px: u64,
+    expiry_ms: u64,
+    has_stp_group: bool,
+    stp_group: u64,
+    nonce: u64,
+) -> Vec<[u8; 32]> {
+    vec![
+        enc_string(chain),
+        enc_addr(owner),
+        enc_u32(market),
+        enc_u8(side),
+        enc_u64(size),
+        enc_bool(has_limit_px),
+        enc_u64(limit_px),
+        enc_u64(expiry_ms),
+        enc_bool(has_stp_group),
+        enc_u64(stp_group),
+        enc_u64(nonce),
+    ]
+}
+
 /// `RfqAccept` words — `rfqId` / `quoteIdx` / the accepted `uint64` `size`.
 pub(crate) fn rfq_accept_words(
     chain: &str,
@@ -375,6 +417,25 @@ pub(crate) fn rfq_accept_words(
 ) -> Vec<[u8; 32]> {
     vec![
         enc_string(chain),
+        enc_u64(rfq_id),
+        enc_u32(quote_idx),
+        enc_u64(size),
+        enc_u64(nonce),
+    ]
+}
+
+/// `RfqAccept` words with the params-level `owner` bound, after `metafluxChain`.
+pub(crate) fn rfq_accept_words_with_owner(
+    chain: &str,
+    owner: &crate::wallet::Address,
+    rfq_id: u64,
+    quote_idx: u32,
+    size: u64,
+    nonce: u64,
+) -> Vec<[u8; 32]> {
+    vec![
+        enc_string(chain),
+        enc_addr(owner),
         enc_u64(rfq_id),
         enc_u32(quote_idx),
         enc_u64(size),

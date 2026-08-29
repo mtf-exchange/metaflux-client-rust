@@ -9,6 +9,56 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ### Added
 
+- **`Exchange::rfq_request_as` / `Exchange::rfq_accept_as`** — an approved agent
+  can now open and accept an RFQ AS a vault. Both bind a params-level `owner`
+  into the signed digest, which selects the node's `*_WITH_OWNER` type string:
+
+  ```text
+  RfqRequest(string metafluxChain,address owner,uint32 market,...,uint64 nonce)
+  RfqAccept(string metafluxChain,address owner,uint64 rfqId,uint32 quoteIdx,uint64 size,uint64 nonce)
+  ```
+
+  Signing the owner-less string instead is NOT a rejection. The node admits the
+  action and acts on the AGENT's own account, so the option escrow and the
+  resulting position land on the operator wallet. RFQ is the only option trade
+  path, so this was the whole lane for a vault operator. Both legs must carry
+  the SAME owner: the node captures `requester = sender` at request time and
+  gates the accept on `requester == sender`. The digests are pinned in
+  `tests/typed_signing_kat.rs`.
+
+  Breaking for anyone building `TypedAction::RfqRequest` / `RfqAccept` by hand:
+  each gains an `owner: Option<Address>` field. `None` reproduces the old digest
+  byte-for-byte.
+
+- **Fifteen `/info` reads gain typed methods.** Each was reachable only through
+  `Info::raw`, with the caller hand-writing the response shape.
+
+  - `Info::rfq_open` / `Info::rfq_user` — the two RFQ discovery reads. A taker
+    learns the `rfq_id` its request was given from `rfq_user`, and a maker finds
+    a request to quote on from `rfq_open`. Without them the lane is open at one
+    end only.
+  - `Info::referral_state` / `Info::builder_state` — accrued referral and broker
+    fee credit. `claim_referral_rewards` and `claim_builder_rewards` report no
+    amount, so this is the only place the claimable figure is published.
+  - `Info::delegator_rewards`, `Info::approved_builders`,
+    `Info::exchange_status`, `Info::vault_summaries`, `Info::user_rate_limit`,
+    `Info::perp_dexs`, `Info::validator_summaries`,
+    `Info::validator_l1_votes`, `Info::mip3_active_bids`,
+    `Info::spot_deploy_auction`, `Info::user_twaps`.
+
+- **`MarketMeta.max_market_order_ntl`** — the remaining open-interest headroom,
+  already computed by the node. `None` = UNCAPPED, `Some("0")` = AT the cap.
+  Reconstructing the figure from `oi_cap` and `open_interest` costs a second
+  read and loses that distinction.
+
+### Deprecated
+
+- **`Client::check_deploy_credit` / `Client::await_deploy_credit`** — the chain
+  serves no `deploy_credit` info type, so the read returns `400 unknown info
+  type` and the wait can only time out. Read the live auction with
+  `Info::mip3_active_bids` instead.
+
+
 - **`types::order::Trigger.trail_px`** — a trailing stop is now submittable. The
   callback is an absolute offset on the 1e8 price plane, `Option<u64>`, and the
   node ratchets the parked level toward the mark by it. `Trigger::with_trail`
@@ -32,6 +82,12 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   `tests/trail_px_kat.rs`.
 
 ### Removed
+
+- **Breaking: `FeeSchedule.builder_rebate_bps` is deleted.** The node dropped
+  the field, and its own tests now assert the absence, so nothing can ever set
+  it. There is no broker-rebate field on this read: a broker's rate is the
+  `builder_fee` it sets per order, capped by the account's own
+  `approved_builders` grant.
 
 - **Breaking: `Info::encode_action` is deleted.** The node no longer serves the
   read, because the `multi_sig` inner blob now accepts the ordinary

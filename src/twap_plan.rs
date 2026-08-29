@@ -285,6 +285,7 @@ mod tests {
             close: Some(true),
             strict_isolated: Some(false),
             oi_cap: None,
+            max_market_order_ntl: None,
             halted: Some(false),
             mid_px: None,
             impact_pxs: None,

@@ -31,19 +31,40 @@
 //!   [`Info::vault_state`].
 //! - **Option reads** — [`Info::option_series`], [`Info::option_positions`].
 //! - **Bridge reads** — [`Info::bridge_withdrawal_history`].
+//! - **RFQ reads** — [`Info::rfq_open`], [`Info::rfq_user`].
+//! - **Fee credit** — [`Info::referral_state`], [`Info::builder_state`],
+//!   [`Info::delegator_rewards`], [`Info::approved_builders`].
+//! - **Venue / validators / deploy auctions** — [`Info::exchange_status`],
+//!   [`Info::vault_summaries`], [`Info::user_rate_limit`], [`Info::perp_dexs`],
+//!   [`Info::validator_summaries`], [`Info::validator_l1_votes`],
+//!   [`Info::mip3_active_bids`], [`Info::spot_deploy_auction`],
+//!   [`Info::user_twaps`].
 //! - **Peer discovery** — [`Info::gossip_root_ips`].
 
 mod bridge;
+mod credit;
 mod discovery;
 mod options;
+mod rfq;
+mod venue;
 
 pub use bridge::{
     BridgeChainConfigRow, BridgeOutboxEntry, BridgeOutboxStatus, BridgeScanPolicy,
     BridgeWithdrawalHistory,
 };
+pub use credit::{
+    ApprovedBuilder, ApprovedBuilders, BuilderState, DelegatorRewardRow, DelegatorRewards,
+    ReferralState,
+};
 pub use discovery::{AdvertisedPeer, GossipRootIps};
 pub use options::{
     OptionKind, OptionPosition, OptionPositions, OptionSeries, OptionSeriesRegistry,
+};
+pub use rfq::{OpenRfq, RfqOpen, RfqQuoteRow, RfqUser};
+pub use venue::{
+    ExchangeStatus, Mip3ActiveBids, Mip3Bid, PerMarketLimits, PerpDex, PerpDexLimits, PerpDexs,
+    SealedRound, SpotDeployAuction, UserRateLimit, UserTwap, UserTwaps, ValidatorL1Vote,
+    ValidatorL1Votes, ValidatorSummaries, ValidatorSummary, VaultSummaries, VaultSummary,
 };
 
 use serde::{Deserialize, Serialize};
@@ -392,6 +413,10 @@ pub struct FeeTier {
 /// `burn_ratio` is a **fraction** in `[0, 1]` (`"0.8"` = 80%), NOT bps — do not
 /// scale it by 10000 like the bps fields. `tiers[0]` is the canonical source of
 /// maker/taker when the top-level pair is absent.
+///
+/// This read carries NO broker-rebate field. A broker's rate is the
+/// `builder_fee` it sets per order, capped by the account's own
+/// [`Info::approved_builders`] grant.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct FeeSchedule {
@@ -405,11 +430,6 @@ pub struct FeeSchedule {
     pub taker_bps: Option<String>,
     /// Referrer share of the base taker take, bps decimal string (e.g. `"5.0"`).
     pub referrer_share_bps: String,
-    /// Max additional builder-code rebate, bps decimal string. A current server
-    /// omits the field, so `None` is the normal case. `None` means "no value
-    /// sent" — do not read it as `"0"`.
-    #[serde(default)]
-    pub builder_rebate_bps: Option<String>,
     /// Burn fraction of the non-referrer remainder, fraction in `[0, 1]`
     /// (e.g. `"0.8"`). NOT bps.
     pub burn_ratio: String,
@@ -1042,6 +1062,15 @@ pub struct MarketMeta {
     /// when the market is uncapped — an absent cap is not a cap of `0`.
     #[serde(default)]
     pub oi_cap: Option<String>,
+    /// Remaining open-interest headroom in whole base units — `oi_cap` minus the
+    /// market's live open interest, already computed by the node.
+    ///
+    /// `None` = UNCAPPED, so any size passes the cap; `Some("0")` = AT the cap,
+    /// so no size does. The two say opposite things, and both are absent from a
+    /// caller that reconstructs the figure from `oi_cap` and `open_interest`.
+    /// Read this field instead of doing that arithmetic.
+    #[serde(default)]
+    pub max_market_order_ntl: Option<String>,
     /// Whether the market is halted. `None` on the static `markets_meta` read.
     #[serde(default)]
     pub halted: Option<bool>,
@@ -3376,14 +3405,12 @@ mod tests {
             "maker_bps": "1.0",
             "taker_bps": "5.0",
             "referrer_share_bps": "5.0",
-            "builder_rebate_bps": "0",
             "burn_ratio": "0.8",
             "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
         });
         let f: FeeSchedule = serde_json::from_value(data).unwrap();
         assert_eq!(f.maker_bps.as_deref(), Some("1.0"));
         assert_eq!(f.referrer_share_bps, "5.0");
-        assert_eq!(f.builder_rebate_bps.as_deref(), Some("0"));
         assert_eq!(f.burn_ratio, "0.8");
         assert_eq!(f.tiers.len(), 1);
         assert_eq!(f.tiers[0].taker_bps, "5.0");
@@ -3394,7 +3421,6 @@ mod tests {
         // A source-built node may omit the top-level maker/taker pair.
         let data2 = serde_json::json!({
             "referrer_share_bps": "5.0",
-            "builder_rebate_bps": "0",
             "burn_ratio": "0.8",
             "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
         });
@@ -3408,7 +3434,6 @@ mod tests {
         let data = serde_json::json!({
             "type": "fee_schedule",
             "tiers": [],
-            "builder_rebate_bps": "0.2",
             "burn_ratio": "0.30",
             "referrer_share_bps": "1.0",
             "user": {
@@ -3457,14 +3482,14 @@ mod tests {
     fn fee_schedule_tolerates_an_absent_user_and_absent_products() {
         let bare: FeeSchedule = serde_json::from_value(serde_json::json!({
             "type": "fee_schedule", "tiers": [],
-            "builder_rebate_bps": "0.2", "burn_ratio": "0.30", "referrer_share_bps": "1.0"
+            "burn_ratio": "0.30", "referrer_share_bps": "1.0"
         }))
         .unwrap();
         assert!(bare.user.is_none());
 
         let old: FeeSchedule = serde_json::from_value(serde_json::json!({
             "type": "fee_schedule", "tiers": [],
-            "builder_rebate_bps": "0.2", "burn_ratio": "0.30", "referrer_share_bps": "1.0",
+            "burn_ratio": "0.30", "referrer_share_bps": "1.0",
             "user": {
                 "address": "0x00000000000000000000000000000000000000aa",
                 "taker_volume_30d": "0", "maker_volume_30d": "0",
@@ -3477,33 +3502,34 @@ mod tests {
         assert!(old.user.expect("user present").products.is_empty());
     }
 
-    /// A current server sends NO `builder_rebate_bps`. The response still
-    /// decodes, and the absent field stays distinct from a real `"0"`.
+    /// The CURRENT node `fee_schedule` body, key for key. It carries no broker
+    /// rebate at all — the field was removed server-side, and the node's own
+    /// tests now assert its absence — so the SDK must not offer one to read.
     #[test]
-    fn fee_schedule_decodes_without_builder_rebate() {
+    fn fee_schedule_decodes_the_current_node_body() {
         let data = serde_json::json!({
-            "maker_bps": "1.0",
-            "taker_bps": "5.0",
-            "referrer_share_bps": "5.0",
-            "burn_ratio": "0.8",
-            "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
+            "tiers": [
+                { "volume_30d": "0", "maker_bps": "1.0", "taker_bps": "5.0" },
+                { "volume_30d": "5000000", "maker_bps": "0.8", "taker_bps": "4.0" }
+            ],
+            "pooled_volume_sunset_day": 20_500,
+            "pooled_volume_sunset_ms": "1771200000000",
+            "pooled_volume_counts": true,
+            "burn_ratio": "0.7",
+            "referrer_share_bps": "1000"
         });
         let f: FeeSchedule = serde_json::from_value(data).unwrap();
-        assert!(f.builder_rebate_bps.is_none());
-        assert_eq!(f.referrer_share_bps, "5.0");
-        assert_eq!(f.tiers.len(), 1);
+        assert_eq!(f.tiers.len(), 2);
+        assert_eq!(f.tiers[1].taker_bps, "4.0");
+        assert_eq!(f.pooled_volume_sunset_day, Some(20_500));
+        assert_eq!(f.pooled_volume_counts, Some(true));
+        assert_eq!(f.referrer_share_bps, "1000");
+        assert!(f.maker_bps.is_none() && f.taker_bps.is_none());
+        assert!(f.user.is_none());
 
-        let with_key = serde_json::json!({
-            "maker_bps": "1.0",
-            "taker_bps": "5.0",
-            "referrer_share_bps": "5.0",
-            "builder_rebate_bps": "0",
-            "burn_ratio": "0.8",
-            "tiers": [{ "maker_bps": "1.0", "taker_bps": "5.0", "volume_30d": "0" }]
-        });
-        let g: FeeSchedule = serde_json::from_value(with_key).unwrap();
-        assert_eq!(g.builder_rebate_bps.as_deref(), Some("0"));
-        assert_ne!(f.builder_rebate_bps, g.builder_rebate_bps);
+        let round_trip: FeeSchedule =
+            serde_json::from_str(&serde_json::to_string(&f).unwrap()).unwrap();
+        assert_eq!(f, round_trip);
     }
 
     /// Decode the node `open_orders.data`. One canonical row serves the REST

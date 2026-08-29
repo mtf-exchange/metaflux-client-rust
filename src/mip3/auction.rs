@@ -117,6 +117,9 @@ impl Client {
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`ClientError`].
+    #[deprecated(
+        note = "the read names in this module do not exist on the chain: there is no `deploy_credit` info type, so every call returns 400 `unknown info type`. Kept for reference only."
+    )]
     pub async fn check_deploy_credit(&self, address: Address) -> Result<u32, ClientError> {
         // Returns a small wrapper struct so we don't depend on a free-form Value.
         #[derive(Deserialize)]
@@ -144,6 +147,9 @@ impl Client {
     /// - [`ClientError::Validation`] if `max_wait` ≤ `Duration::ZERO` or if
     ///   the wait elapses without seeing a credit.
     /// - Bubbles up [`Client::check_deploy_credit`] errors.
+    #[deprecated(
+        note = "polls `check_deploy_credit`, which the chain answers with 400 `unknown info type`. The first poll therefore fails and the wait never succeeds. Kept for reference only."
+    )]
     pub async fn await_deploy_credit(
         &self,
         wallet: &Wallet,
@@ -159,6 +165,7 @@ impl Client {
         let cap = Duration::from_secs(5);
 
         loop {
+            #[allow(deprecated)]
             let credits = self.check_deploy_credit(wallet.address()).await?;
             if credits > 0 {
                 return Ok(());
@@ -226,6 +233,7 @@ mod tests {
     async fn await_deploy_credit_rejects_zero_wait() {
         let c = Client::new("https://api.devnet.mtf.exchange").unwrap();
         let w = Wallet::random_for_testing();
+        #[allow(deprecated)]
         let err = c.await_deploy_credit(&w, Duration::ZERO).await.unwrap_err();
         assert!(matches!(err, ClientError::Validation(_)));
     }
