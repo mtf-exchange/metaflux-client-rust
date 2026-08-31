@@ -178,7 +178,7 @@ fn build_crosses(
         // Dominant direction = trade toward the CEX (close the on-chain gap);
         // ~1 in 4 (wobble) takes the other side so the book gets two-sided flow.
         let toward_cex = refpx >= m.mark;
-        let contrarian = (wobble + mi) % 4 == 0;
+        let contrarian = (wobble + mi).is_multiple_of(4);
         let side = if toward_cex != contrarian {
             Side::Bid
         } else {

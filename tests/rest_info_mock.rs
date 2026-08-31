@@ -320,7 +320,7 @@ async fn spot_meta_decodes_pairs_and_tokens() {
             json!({
                 "spot": {
                     "pairs": [{
-                        "id": 101,
+                        "signing_id": 110,
                         "name": "BTC/USDC",
                         "base": 0,
                         "quote": 100,
@@ -349,9 +349,9 @@ async fn spot_meta_decodes_pairs_and_tokens() {
     let client = Client::new(server.uri()).unwrap();
     let m = client.rest().info().spot_meta().await.unwrap();
     assert_eq!(m.pairs.len(), 1);
-    // `name` is the derived `{base}/{quote}` display name; `id` is the numeric
-    // pair id spot prints carry as `coin` on the WS feeds.
-    assert_eq!(m.pairs[0].id, 101);
+    // `name` is the derived `{base}/{quote}` display name; `signing_id` is the
+    // numeric pair id spot prints carry as `coin` on the WS feeds.
+    assert_eq!(m.pairs[0].signing_id, 110);
     assert_eq!(m.pairs[0].name, "BTC/USDC");
     assert_eq!(m.pairs[0].base, 0);
     assert_eq!(m.pairs[0].quote, 100);
@@ -359,7 +359,7 @@ async fn spot_meta_decodes_pairs_and_tokens() {
     assert_eq!(m.pairs[0].taker_fee_bps, "5");
     assert_eq!(m.pairs[0].min_notional, "1000");
     assert!(m.pairs[0].active);
-    assert_eq!(m.pairs[0].mark_px, "61550.2");
+    assert_eq!(m.pairs[0].mark_px.as_deref(), Some("61550.2"));
     assert_eq!(m.tokens.len(), 2);
     assert_eq!(m.tokens[0].name, "BTC");
     assert_eq!(m.tokens[0].sz_decimals, 5);

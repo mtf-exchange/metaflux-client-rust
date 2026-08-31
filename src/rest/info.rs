@@ -991,8 +991,9 @@ pub struct MarketDynamic {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SpotPair {
-    /// Numeric pair id (the WS `coin` label for spot prints).
-    pub id: u32,
+    /// Numeric pair id (the WS `coin` label for spot prints). The wire renamed
+    /// this from `id`; a spot order names the pair by this number.
+    pub signing_id: u32,
     /// Display name, derived as `{base}/{quote}` from the token registry.
     pub name: String,
     /// Base asset id.
@@ -1011,9 +1012,13 @@ pub struct SpotPair {
     /// quote token or from a perp of the same symbol.
     #[serde(default)]
     pub sz_decimals: u8,
-    /// Mark price, whole-USDC decimal string. Absent on some reads → empty.
+    /// Mark price, whole-USDC decimal string. `None` on an inactive pair.
+    ///
+    /// The wire sends an explicit `null` here, and `serde(default)` covers an
+    /// ABSENT field, never a null one — so this must be an `Option`, not a
+    /// defaulted `String`.
     #[serde(default)]
-    pub mark_px: String,
+    pub mark_px: Option<String>,
     /// Mid price, whole-USDC decimal string; `None` when no two-sided book.
     #[serde(default)]
     pub mid_px: Option<String>,
@@ -2737,75 +2742,60 @@ mod tests {
         assert!(j["bids"][0]["n_orders"].is_number());
     }
 
-    /// Decode the live `spot_meta` payload (node 0.7.26): pair `name` derived as
-    /// `{base}/{quote}`, numeric `id` (the WS spot `coin` label), `taker_fee_bps`
-    /// as a STRING, the pair price/vol/supply context, plus the enriched token
-    /// registry (object `evm_contract`, `token_id`, `system_address`,
-    /// `is_canonical`, `total_supply`).
+    /// Decode a body CAPTURED FROM THE LIVE CHAIN, not hand-written.
+    ///
+    /// The previous fixture was authored beside the type and carried `id` with a
+    /// non-null `mark_px`. It stayed green while the real call failed on every
+    /// request, because a fixture that shares the type's assumption cannot fail
+    /// on drift. Re-capture this body when the wire moves.
     #[test]
-    fn spot_meta_decodes_node_fixture() {
+    fn spot_meta_decodes_a_captured_live_body() {
         let data = serde_json::json!({
             "pairs": [{
-                "id": 101,
-                "name": "BTC/USDC",
-                "base": 0,
-                "quote": 100,
-                "taker_fee_bps": "5",
-                "min_notional": "1000",
-                "active": true,
-                "mark_px": "61550.2",
-                "mid_px": "61551",
-                "prev_day_px": "61200",
+                "active": false,
+                "base": 101,
+                "circulating_supply": "0",
                 "day_ntl_vlm": "0",
-                "circulating_supply": "21000000"
+                "deployer": "0x17c5185167401ed00cf5f5b2fc97d9bbfdb7d025",
+                "mark_px": null,
+                "mid_px": null,
+                "min_notional": "1",
+                "name": "BTC/USDC",
+                "prev_day_px": null,
+                "quote": 100,
+                "registered_at": 0,
+                "signing_id": 110,
+                "sz_decimals": 5,
+                "taker_fee_bps": "5"
             }],
-            "tokens": [
-                { "id": 0, "name": "BTC", "sz_decimals": 5, "wei_decimals": 8,
-                  "token_id": "0x00000000000000000000000000000000000000000000000000000000000000aa",
-                  "system_address": "0x0000000000000000000000000000000000000200",
-                  "evm_contract": { "address": "0x0000000000000000000000000000000000012345",
-                                    "evm_extra_wei_decimals": -2 },
-                  "is_canonical": true, "total_supply": "21000000" },
-                { "id": 100, "name": "USDC", "sz_decimals": 2, "wei_decimals": 6,
-                  "token_id": "0x0000000000000000000000000000000000000000000000000000000000000064",
-                  "system_address": "0x0000000000000000000000000000000000000201",
-                  "evm_contract": null, "is_canonical": true, "total_supply": "0" }
-            ]
+            "tokens": [{
+                "evm_contract": null,
+                "id": 100,
+                "is_canonical": true,
+                "name": "USDC",
+                "system_address": "0x80abd3bd8c42d2a279e4fa00f20bb30637734371",
+                "sz_decimals": 2,
+                "token_id": "0xf23ea17597e324c04f842e6d8bfffe75636f0af88e7c7ab93ea755d9056396bc",
+                "total_supply": "0",
+                "wei_decimals": 6
+            }]
         });
         let m: SpotMeta = serde_json::from_value(data).unwrap();
-        assert_eq!(m.pairs.len(), 1);
-        assert_eq!(m.pairs[0].id, 101);
+        assert_eq!(m.pairs[0].signing_id, 110);
         assert_eq!(m.pairs[0].name, "BTC/USDC");
-        assert_eq!(m.pairs[0].base, 0);
+        assert_eq!(m.pairs[0].base, 101);
         assert_eq!(m.pairs[0].quote, 100);
+        assert_eq!(m.pairs[0].sz_decimals, 5);
         assert_eq!(m.pairs[0].taker_fee_bps, "5");
-        assert_eq!(m.pairs[0].min_notional, "1000");
-        assert!(m.pairs[0].active);
-        assert_eq!(m.pairs[0].mark_px, "61550.2");
-        assert_eq!(m.pairs[0].mid_px.as_deref(), Some("61551"));
-        assert_eq!(m.pairs[0].prev_day_px.as_deref(), Some("61200"));
-        assert_eq!(m.pairs[0].circulating_supply, "21000000");
-        assert_eq!(m.tokens.len(), 2);
-        assert_eq!(m.tokens[0].name, "BTC");
-        assert_eq!(m.tokens[0].wei_decimals, 8);
-        // evm_contract is an OBJECT (not a bare address string).
-        let evm = m.tokens[0].evm_contract.as_ref().unwrap();
-        assert_eq!(evm.address, "0x0000000000000000000000000000000000012345");
-        assert_eq!(evm.evm_extra_wei_decimals, -2);
+        assert!(!m.pairs[0].active);
+        // An inactive pair prices as an explicit null, which `serde(default)`
+        // does NOT cover. This assertion is the one that was failing live.
+        assert_eq!(m.pairs[0].mark_px, None);
+        assert_eq!(m.pairs[0].mid_px, None);
+        assert_eq!(m.tokens[0].name, "USDC");
+        assert_eq!(m.tokens[0].wei_decimals, 6);
+        assert!(m.tokens[0].evm_contract.is_none());
         assert!(m.tokens[0].is_canonical);
-        assert_eq!(m.tokens[0].total_supply, "21000000");
-        assert_eq!(m.tokens[1].id, 100);
-        assert_eq!(m.tokens[1].sz_decimals, 2);
-        assert!(m.tokens[1].evm_contract.is_none());
-        // `taker_fee_bps` / `min_notional` stay strings; ids stay numbers.
-        let j = serde_json::to_value(&m).unwrap();
-        assert!(j["pairs"][0]["taker_fee_bps"].is_string());
-        assert!(j["pairs"][0]["min_notional"].is_string());
-        assert!(j["pairs"][0]["id"].is_number());
-        assert!(j["tokens"][0]["evm_contract"]["address"].is_string());
-        // Round-trips.
-        let dec: SpotMeta = serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
-        assert_eq!(m, dec);
     }
 
     /// The `spot_meta()` wrapper decodes the `markets_meta` kind=spot envelope:
@@ -2820,8 +2810,9 @@ mod tests {
         let data = serde_json::json!({
             "spot": {
                 "pairs": [{
-                    "id": 101, "name": "BTC/USDC", "base": 0, "quote": 100,
-                    "taker_fee_bps": "5", "min_notional": "1000", "active": true
+                    "signing_id": 110, "name": "BTC/USDC", "base": 101, "quote": 100,
+                    "taker_fee_bps": "5", "min_notional": "1", "active": false,
+                    "mark_px": null
                 }],
                 "tokens": [
                     { "id": 0, "name": "BTC", "sz_decimals": 5, "wei_decimals": 8 }

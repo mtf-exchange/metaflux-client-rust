@@ -22,11 +22,16 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::error::ProtocolError;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
+use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
+use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 
 use crate::error::ClientError;
 use crate::types::order::{CancelOrder, Order, OrderResponse};
 use crate::wallet::{TypedTradingAction, TypedTradingDigest, Wallet};
+use crate::ws::compress::{Decoder, WireMode, offer};
 use crate::ws::subscriptions::{Subscription, WsFrame};
 
 /// Tunable WS configuration.
@@ -133,6 +138,7 @@ impl WsClient {
         let task_state = TaskState {
             url,
             config,
+            offer_compression: true,
             inbound_tx: inbound_tx.clone(),
             cmd_rx,
             alive: alive.clone(),
@@ -584,6 +590,9 @@ fn l2_book_is_coin(sub: &Subscription, coin: &str) -> bool {
 struct TaskState {
     url: String,
     config: WsConfig,
+    /// Cleared for good once a server refuses the compression offer, so an
+    /// older gateway costs one extra handshake, not one per reconnect.
+    offer_compression: bool,
     inbound_tx: broadcast::Sender<WsFrame>,
     cmd_rx: mpsc::UnboundedReceiver<Command>,
     alive: Arc<AtomicBool>,
@@ -616,7 +625,33 @@ enum ConnectionExit {
 }
 
 async fn run_connection(state: &mut TaskState) -> Result<ConnectionExit, ClientError> {
-    let (stream, _) = tokio_tungstenite::connect_async(&state.url).await?;
+    let (stream, mode) = if state.offer_compression {
+        let mut request = state.url.as_str().into_client_request()?;
+        request
+            .headers_mut()
+            .insert(SEC_WEBSOCKET_PROTOCOL, HeaderValue::from_static(offer()));
+        match tokio_tungstenite::connect_async(request).await {
+            Ok((stream, response)) => {
+                let token = response
+                    .headers()
+                    .get(SEC_WEBSOCKET_PROTOCOL)
+                    .and_then(|v| v.to_str().ok());
+                (stream, WireMode::from_selected(token))
+            }
+            // RFC 6455 lets a server answer an offer with no subprotocol, but
+            // tungstenite fails the handshake instead. Retry without the offer.
+            Err(WsError::Protocol(ProtocolError::SecWebSocketSubProtocolError(_))) => {
+                state.offer_compression = false;
+                let (stream, _) = tokio_tungstenite::connect_async(&state.url).await?;
+                (stream, WireMode::Text)
+            }
+            Err(e) => return Err(e.into()),
+        }
+    } else {
+        let (stream, _) = tokio_tungstenite::connect_async(&state.url).await?;
+        (stream, WireMode::Text)
+    };
+    let mut decoder = Decoder::new(mode);
     let (mut sink, mut stream) = stream.split();
 
     // Replay active subscriptions on (re)connect.
@@ -679,34 +714,16 @@ async fn run_connection(state: &mut TaskState) -> Result<ConnectionExit, ClientE
                 };
                 match frame {
                     Ok(Message::Text(text)) => {
-                        // A `{channel:"post"}` frame correlates by id back to the
-                        // waiting caller; every other frame is a channel update
-                        // for the broadcast.
-                        match serde_json::from_str::<Value>(&text) {
-                            Ok(v)
-                                if v.get("channel").and_then(Value::as_str) == Some("post") =>
-                            {
-                                if let Some(id) =
-                                    v.pointer("/data/id").and_then(Value::as_u64)
-                                {
-                                    if let Some(reply) = pending.remove(&id) {
-                                        let resp = v
-                                            .pointer("/data/response")
-                                            .cloned()
-                                            .unwrap_or(Value::Null);
-                                        let _ = reply.send(resp);
-                                    }
-                                }
-                            }
-                            Ok(v) => {
-                                let _ = state.inbound_tx.send(WsFrame::from_value(v));
-                            }
-                            Err(_) => {}
+                        dispatch(&text, &mut pending, &state.inbound_tx);
+                    }
+                    Ok(Message::Binary(bytes)) => {
+                        // Text mode has no decoder, so binary drops as before.
+                        if let Some(text) = decoder.as_mut().and_then(|d| d.decode(&bytes)) {
+                            dispatch(&text, &mut pending, &state.inbound_tx);
                         }
                     }
-                    Ok(Message::Binary(_) | Message::Pong(_) | Message::Ping(_)) => {
-                        // Ignore non-text control frames; tungstenite handles
-                        // pong automatically for ping.
+                    Ok(Message::Pong(_) | Message::Ping(_)) => {
+                        // tungstenite answers ping automatically.
                     }
                     Ok(Message::Close(_)) => {
                         return Ok(ConnectionExit::Recoverable);
@@ -718,6 +735,30 @@ async fn run_connection(state: &mut TaskState) -> Result<ConnectionExit, ClientE
                 }
             }
         }
+    }
+}
+
+/// Route one inbound JSON frame. A `{channel:"post"}` frame correlates by id
+/// back to the waiting caller; every other frame is a channel update for the
+/// broadcast.
+fn dispatch(
+    text: &str,
+    pending: &mut HashMap<u64, oneshot::Sender<Value>>,
+    inbound_tx: &broadcast::Sender<WsFrame>,
+) {
+    match serde_json::from_str::<Value>(text) {
+        Ok(v) if v.get("channel").and_then(Value::as_str) == Some("post") => {
+            if let Some(id) = v.pointer("/data/id").and_then(Value::as_u64) {
+                if let Some(reply) = pending.remove(&id) {
+                    let resp = v.pointer("/data/response").cloned().unwrap_or(Value::Null);
+                    let _ = reply.send(resp);
+                }
+            }
+        }
+        Ok(v) => {
+            let _ = inbound_tx.send(WsFrame::from_value(v));
+        }
+        Err(_) => {}
     }
 }
 

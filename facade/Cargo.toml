@@ -2,7 +2,7 @@
 name = "metaflux"
 version = "0.23.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 authors = ["MTF Exchange contributors"]
 license = "MIT"
 description = "Short alias for the metaflux-client SDK — re-exports the entire metaflux-client public API."

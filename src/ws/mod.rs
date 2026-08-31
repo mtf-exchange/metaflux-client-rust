@@ -29,6 +29,7 @@
 //! pong / data is received in 60 seconds the connection is recycled.
 
 mod client;
+mod compress;
 mod subscriptions;
 mod typed;
 
