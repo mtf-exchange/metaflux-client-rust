@@ -15,6 +15,11 @@
 //! | `mm_friendly`        |       20 |  3.0  |  -2.0  |    1_000 |   all 10       |
 //!
 //! Notes:
+//! - No preset carries a DEX NAME, because a preset cannot know the deployer's
+//!   dex. Chain [`PerpDeployBuilder::with_dex_name`] before a first deploy: the
+//!   first registration by a deployer creates the dex, and the node REJECTS an
+//!   empty name there rather than defaulting it. The name is also the asset
+//!   namespace, so set the symbol to `<name>:<suffix>` to match.
 //! - All fee bps are stored ×10 internally (so 4.5 bps is `45`).
 //! - Deployer fee is the builder's take (capped at 5 bps, i.e. `50`).
 //! - The `long_tail_default` excludes Coinbase + Kraken because they
@@ -201,6 +206,21 @@ mod tests {
     #[test]
     fn preset_by_name_returns_none_for_unknown() {
         assert!(preset_by_name("zz_unknown").is_none());
+    }
+
+    /// A preset carries no dex name, and `with_dex_name` must reach the ONE
+    /// action that creates the dex. An unset name is a node rejection.
+    #[test]
+    fn a_preset_carries_no_dex_name_until_the_caller_sets_one() {
+        assert_eq!(btc_standard().dex_name, "");
+        let b = btc_standard()
+            .with_dex_name("MYDEX")
+            .with_asset_symbol("MYDEX:BTC");
+        let Action::PerpRegisterAsset { dex_name, .. } = b.build_register_asset() else {
+            panic!("build_register_asset must yield PerpRegisterAsset");
+        };
+        assert_eq!(dex_name, "MYDEX");
+        assert_eq!(b.build_register_asset().to_json()["name"], "MYDEX");
     }
 
     #[test]

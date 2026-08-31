@@ -122,7 +122,20 @@ pub struct PerpDexLimits {
 #[serde(rename_all = "snake_case")]
 pub struct PerpDex {
     /// Position of this dex in the venue's dex vector.
+    ///
+    /// A Vec subscript, not an identifier. Join on [`PerpDex::name`] instead.
     pub index: u64,
+    /// The dex name, and the only stable identifier of a dex.
+    ///
+    /// It is the asset namespace: every market here has the symbol
+    /// `<name>:<suffix>`. It is also the `clearinghouse_state` bucket key, so
+    /// it joins an account's positions to this row. The core dex has `""`.
+    #[serde(default)]
+    pub name: String,
+    /// The deployer that created this dex, `0x` hex. `None` on the core dex,
+    /// which has no deployer.
+    #[serde(default)]
+    pub deployer: Option<String>,
     /// Number of markets it hosts.
     pub n_assets: u64,
     /// Market symbols it hosts.
@@ -509,7 +522,10 @@ mod tests {
     #[test]
     fn perp_dexs_decodes_the_two_independent_stake_knobs() {
         let d: PerpDexs = serde_json::from_str(
-            r#"{"dexs":[{"index":0,"n_assets":2,"assets":["BTC","ETH"]}],
+            r#"{"dexs":[{"index":0,"name":"","deployer":null,
+                  "n_assets":2,"assets":["BTC","ETH"]},
+                 {"index":1,"name":"GRAD","deployer":"0x10572bc485ee62403eb8778c1303857d6f4f9913",
+                  "n_assets":1,"assets":["GRAD:000001SH"]}],
                 "limits":{"mip3_enabled":true,
                   "min_deploy_stake_base":"100000000000",
                   "min_deploy_stake_mtf":"1000",
@@ -520,6 +536,12 @@ mod tests {
         )
         .expect("decode");
         assert_eq!(d.dexs[0].assets.len(), 2);
+        // The core dex is named "", not null, and has no deployer. A deployer
+        // dex carries both halves of the join key the account read needs.
+        assert_eq!(d.dexs[0].name, "");
+        assert_eq!(d.dexs[0].deployer, None);
+        assert_eq!(d.dexs[1].name, "GRAD");
+        assert!(d.dexs[1].deployer.is_some());
         assert_ne!(
             d.limits.min_deploy_stake_base,
             d.limits.min_deploy_stake_mtf

@@ -65,11 +65,24 @@ use crate::wallet::Address;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PerpRegisterAsset {
-    /// Market symbol, e.g. `"WIF"`.
+    /// Market symbol, e.g. `"GRAD:WIF"`. It must read `<name>:<suffix>` with a
+    /// non-empty suffix; the node compares the prefix against `name`
+    /// byte-exact.
     pub symbol: String,
     /// Token decimals. `0` selects the node default of 8; the node rejects a
     /// value above 18.
     pub decimals: u8,
+    /// The perp dex this market joins, e.g. `"GRAD"`.
+    ///
+    /// 1 to 16 ASCII alphanumeric bytes, unique across dexes ignoring case, and
+    /// WRITE-ONCE — there is no rename. The FIRST registration by a deployer
+    /// creates the dex and must carry a valid name; the node REJECTS a missing
+    /// or empty one instead of defaulting it. A later registration on the same
+    /// dex must repeat the stored name.
+    ///
+    /// The name is also the account-read key: `clearinghouse_state` buckets
+    /// positions by it, and `""` is the core dex.
+    pub name: String,
 }
 
 /// Bind the enabled oracle-source subset for a market.
@@ -200,11 +213,15 @@ mod tests {
     #[test]
     fn perp_deploy_params_serialize_snake_case() {
         let r = PerpRegisterAsset {
-            symbol: "WIF".into(),
+            symbol: "GRAD:WIF".into(),
             decimals: 8,
+            name: "GRAD".into(),
         };
         let jr = serde_json::to_value(&r).unwrap();
-        assert_eq!(jr, serde_json::json!({ "symbol": "WIF", "decimals": 8 }));
+        assert_eq!(
+            jr,
+            serde_json::json!({ "symbol": "GRAD:WIF", "decimals": 8, "name": "GRAD" })
+        );
         assert_eq!(r, serde_json::from_value(jr).unwrap());
 
         let o = PerpSetOracle {

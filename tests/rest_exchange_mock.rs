@@ -1304,16 +1304,18 @@ async fn the_perp_deployer_lane_posts_its_nine_tags_with_their_own_fields() {
         .perp_register_asset(
             &wallet,
             &PerpRegisterAsset {
-                symbol: "WIF".into(),
+                symbol: "GRAD:WIF".into(),
                 decimals: 8,
+                name: "GRAD".into(),
             },
         )
         .await
         .unwrap();
     let a = captor.last.lock().await.clone().unwrap()["action"].clone();
     assert_eq!(a["type"].as_str(), Some("perp_register_asset"));
-    assert_eq!(a["params"]["symbol"], json!("WIF"));
+    assert_eq!(a["params"]["symbol"], json!("GRAD:WIF"));
     assert_eq!(a["params"]["decimals"], json!(8));
+    assert_eq!(a["params"]["name"], json!("GRAD"));
     assert!(a["params"].get("bid").is_none(), "the bid lane is dead");
     assert!(
         a["params"].get("asset").is_none(),

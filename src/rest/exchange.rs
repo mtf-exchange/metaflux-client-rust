@@ -1449,6 +1449,9 @@ impl<'a> Exchange<'a> {
     /// id; read it back from `/info` before sending any of the eight actions
     /// below, since each targets an id and not a symbol.
     ///
+    /// The first registration by a deployer also creates its perp dex, so
+    /// [`PerpRegisterAsset::name`] must be valid on it. See that field.
+    ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn perp_register_asset(
@@ -1456,8 +1459,13 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &PerpRegisterAsset,
     ) -> Result<Value, ClientError> {
-        self.perp_register_asset_typed(wallet, params.symbol.clone(), params.decimals)
-            .await
+        self.perp_register_asset_typed(
+            wallet,
+            params.symbol.clone(),
+            params.decimals,
+            params.name.clone(),
+        )
+        .await
     }
 
     /// Bind a market's enabled oracle-source subset.

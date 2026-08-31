@@ -46,9 +46,13 @@
 //! client.await_deploy_credit(&wallet, Duration::from_secs(120)).await?;
 //!
 //! // 3. Customise a preset and submit the 8-action deploy sequence.
+//! // The dex name is the asset namespace, so the symbol carries it as a
+//! // prefix. The first deploy by a deployer creates the dex and is REJECTED
+//! // without a name.
 //! let builder = templates::long_tail_default()
+//!     .with_dex_name("BANANA")
 //!     .with_asset_name("BANANA-PERP")
-//!     .with_asset_symbol("BANANA");
+//!     .with_asset_symbol("BANANA:PERP");
 //! for action in builder.deploy_sequence() {
 //!     client.rest().exchange().submit_deploy_action::<serde_json::Value>(&wallet, action.to_json()).await?;
 //! }

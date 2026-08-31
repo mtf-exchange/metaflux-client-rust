@@ -233,7 +233,7 @@ const SPOT_FINALIZE_SUPPLY_TYPE: &[u8] =
 // ONLY the fields its own sub-handler reads. None carries `bid`: the legacy
 // gas-auction lane is dead and the node rejects a non-zero bid.
 const PERP_REGISTER_ASSET_TYPE: &[u8] =
-    b"MetaFluxTransaction:PerpRegisterAsset(string metafluxChain,string symbol,uint8 decimals,uint64 nonce)";
+    b"MetaFluxTransaction:PerpRegisterAsset(string metafluxChain,string symbol,uint8 decimals,string name,uint64 nonce)";
 const PERP_SET_ORACLE_TYPE: &[u8] =
     b"MetaFluxTransaction:PerpSetOracle(string metafluxChain,uint32 asset,uint16 oracleSourceMask,uint64 nonce)";
 const PERP_SET_LEVERAGE_TYPE: &[u8] =
@@ -1110,15 +1110,21 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
-    /// `PerpRegisterAsset(string metafluxChain,string symbol,uint8 decimals,uint64 nonce)`
+    /// `PerpRegisterAsset(string metafluxChain,string symbol,uint8 decimals,string name,uint64 nonce)`
     PerpRegisterAsset {
         /// Chain tag.
         metaflux_chain: String,
-        /// Market symbol.
+        /// Market symbol. It must read `<name>:<suffix>` with a non-empty
+        /// suffix, compared byte-exact against `name`.
         symbol: String,
         /// Token decimals. `0` is not "zero decimals" — the node reads it as its
         /// default of 8.
         decimals: u8,
+        /// The perp dex name: 1 to 16 ASCII alphanumeric bytes, unique across
+        /// dexes ignoring case, and WRITE-ONCE. The first registration by a
+        /// deployer creates the dex and must carry it; a later registration on
+        /// the same dex must repeat the stored name.
+        name: String,
         /// Envelope nonce.
         nonce: u64,
     },
@@ -2073,11 +2079,13 @@ impl TypedAction {
                 metaflux_chain,
                 symbol,
                 decimals,
+                name,
                 nonce,
             } => vec![
                 enc_string(metaflux_chain),
                 enc_string(symbol),
                 enc_u8(*decimals),
+                enc_string(name),
                 enc_u64(*nonce),
             ],
             TypedAction::PerpSetOracle {

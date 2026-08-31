@@ -116,10 +116,12 @@ pub struct DexPositions {
 /// `clearinghouse_state` response — one account's open perp positions, grouped
 /// by dex.
 ///
-/// The core dex key is the empty string `""` and is ALWAYS present, even for an
-/// account with no position. A MIP-3 deployer dex keys on the deployer's
-/// lowercase 0x-hex address. Use [`ClearinghouseState::core_positions`] for the
-/// core group.
+/// The key is the DEX NAME. The core dex is the empty string `""` and is ALWAYS
+/// present, even for an account with no position. A MIP-3 deployer dex keys on
+/// the name its deployer registered, such as `"GRAD"`. That name is also the
+/// symbol namespace, so a position on dex `GRAD` has a coin like
+/// `"GRAD:000001SH"`, and it joins this table to `perp_dexs` by `name`. Use
+/// [`ClearinghouseState::core_positions`] for the core group.
 ///
 /// `height` / `time` stamp the committed block the snapshot was read at.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,8 +189,8 @@ mod tests {
                     "funding": "-1.25", "margin": "9600", "maint_margin": "480",
                     "notional": "96000"
                 }] },
-                "0x000000000000000000000000000000000000dead": { "positions": [{
-                    "coin": "XYZ", "size": "2", "entry": "10", "upnl": "0",
+                "GRAD": { "positions": [{
+                    "coin": "GRAD:XYZ", "size": "2", "entry": "10", "upnl": "0",
                     "isolated": true, "lev": 3, "liq": "5", "roe": "0",
                     "funding": "0", "margin": "6.66", "maint_margin": "0.4",
                     "notional": "20", "side": "long"
@@ -211,7 +213,7 @@ mod tests {
         assert_eq!(core[0].size, "-1.5");
         assert!(core[0].side.is_none());
         assert_eq!(core[0].adl_lamps, None);
-        let dex = &c.clearinghouse_state["0x000000000000000000000000000000000000dead"];
+        let dex = &c.clearinghouse_state["GRAD"];
         assert_eq!(dex.positions[0].side, Some(PositionSide::Long));
         assert_eq!(c.height, 8_416_000);
 
@@ -240,13 +242,11 @@ mod tests {
     fn the_adl_read_keeps_a_zero_lamp_apart_from_an_absent_one() {
         let mut v = body();
         v["clearinghouse_state"][""]["positions"][0]["adl_lamps"] = json!(3u8);
-        v["clearinghouse_state"]["0x000000000000000000000000000000000000dead"]["positions"][0]["adl_lamps"] =
-            json!(0u8);
+        v["clearinghouse_state"]["GRAD"]["positions"][0]["adl_lamps"] = json!(0u8);
         let c: ClearinghouseState = serde_json::from_value(v).unwrap();
         assert_eq!(c.core_positions()[0].adl_lamps, Some(3));
         assert_eq!(
-            c.clearinghouse_state["0x000000000000000000000000000000000000dead"].positions[0]
-                .adl_lamps,
+            c.clearinghouse_state["GRAD"].positions[0].adl_lamps,
             Some(0)
         );
     }

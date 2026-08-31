@@ -118,6 +118,10 @@ pub enum Action {
         asset_symbol: String,
         /// Number of decimals for the size field (typical 8).
         decimals: u8,
+        /// The perp DEX name, sent as `name`. 1 to 16 ASCII alphanumeric
+        /// bytes, unique ignoring case, and write-once. See
+        /// [`PerpDeployBuilder::with_dex_name`].
+        dex_name: String,
     },
     /// Pin the oracle source subset (sub-action 2/8).
     PerpSetOracle {
@@ -214,11 +218,13 @@ impl Action {
                 asset_name,
                 asset_symbol,
                 decimals,
+                dex_name,
             } => json!({
                 "type": "perp_register_asset",
                 "asset_name": asset_name,
                 "asset_symbol": asset_symbol,
                 "decimals": decimals,
+                "name": dex_name,
             }),
             Self::PerpSetOracle {
                 asset_name,
@@ -352,6 +358,10 @@ pub struct PerpDeployBuilder {
     pub min_order_size: u128,
     /// Deployer fee in bps × 10 (≤ 5).
     pub deployer_fee_bps: u16,
+    /// The perp DEX name this market joins. Empty until
+    /// [`PerpDeployBuilder::with_dex_name`] sets it, because a preset cannot
+    /// know the deployer's dex.
+    pub dex_name: String,
 }
 
 impl PerpDeployBuilder {
@@ -389,6 +399,7 @@ impl PerpDeployBuilder {
             maker_fee_bps,
             min_order_size,
             deployer_fee_bps,
+            dex_name: String::new(),
         };
         me.validate()?;
         Ok(me)
@@ -405,6 +416,22 @@ impl PerpDeployBuilder {
     #[must_use]
     pub fn with_asset_symbol(mut self, symbol: impl Into<String>) -> Self {
         self.asset_symbol = symbol.into();
+        self
+    }
+
+    /// Set the perp DEX name this market joins; returns `self` for chaining.
+    ///
+    /// The name is 1 to 16 ASCII alphanumeric bytes, unique across dexes
+    /// ignoring case, and WRITE-ONCE — there is no rename. It is also the asset
+    /// namespace: the market symbol must read `<name>:<suffix>` with a
+    /// non-empty suffix.
+    ///
+    /// A preset leaves it empty. The FIRST registration by a deployer creates
+    /// the dex, and the node REJECTS an empty name there rather than defaulting
+    /// it, so set this before you build a first deploy.
+    #[must_use]
+    pub fn with_dex_name(mut self, name: impl Into<String>) -> Self {
+        self.dex_name = name.into();
         self
     }
 
@@ -532,6 +559,7 @@ impl PerpDeployBuilder {
             asset_name: self.asset_name.clone(),
             asset_symbol: self.asset_symbol.clone(),
             decimals: self.decimals,
+            dex_name: self.dex_name.clone(),
         }
     }
 
@@ -997,9 +1025,12 @@ mod tests {
             asset_name: "FOO".into(),
             asset_symbol: "F".into(),
             decimals: 8,
+            dex_name: "MYDEX".into(),
         };
         assert_eq!(a.type_id(), "perp_register_asset");
         assert_eq!(a.to_json()["type"], "perp_register_asset");
+        // The dex name rides the wire as `name`, not as `dex_name`.
+        assert_eq!(a.to_json()["name"], "MYDEX");
     }
 
     #[test]

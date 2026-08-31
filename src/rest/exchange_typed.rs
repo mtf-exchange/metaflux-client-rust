@@ -2025,6 +2025,12 @@ impl<'a> Exchange<'a> {
     ///
     /// `decimals` of `0` selects the node default of 8, not zero decimals.
     ///
+    /// `name` is the perp dex the market joins: 1 to 16 ASCII alphanumeric
+    /// bytes, unique across dexes ignoring case, and WRITE-ONCE. Send it on
+    /// every registration — the first one creates the dex, and a later one must
+    /// repeat the stored name. `symbol` must read `<name>:<suffix>` with a
+    /// non-empty suffix; the node compares the prefix byte-exact.
+    ///
     /// Availability is per network. On the primary networks the node knows
     /// these tags; an unknown action is what gets `unknown variant`. Probe one
     /// call against your target network. See [`crate::types::perp`].
@@ -2036,16 +2042,19 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         symbol: impl Into<String>,
         decimals: u8,
+        name: impl Into<String>,
     ) -> Result<Value, ClientError> {
         let symbol = symbol.into();
+        let name = name.into();
         self.post_signed_typed(wallet, |chain, nonce| {
             let action = TypedAction::PerpRegisterAsset {
                 metaflux_chain: chain,
                 symbol: symbol.clone(),
                 decimals,
+                name: name.clone(),
                 nonce,
             };
-            let params = json!({ "symbol": symbol, "decimals": decimals });
+            let params = json!({ "symbol": symbol, "decimals": decimals, "name": name });
             (action, "perp_register_asset", params)
         })
         .await

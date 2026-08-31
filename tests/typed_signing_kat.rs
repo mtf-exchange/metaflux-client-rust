@@ -1028,8 +1028,9 @@ fn every_typed_action_signs_and_recovers() {
         },
         TypedAction::PerpRegisterAsset {
             metaflux_chain: chain.clone(),
-            symbol: "WIF".into(),
+            symbol: "GRAD:WIF".into(),
             decimals: 8,
+            name: "GRAD".into(),
             nonce: 59,
         },
         TypedAction::PerpSetOracle {

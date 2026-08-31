@@ -32,9 +32,10 @@ fn the_ten_perp_deployer_signing_strings_keep_their_digests() {
                 metaflux_chain: CHAIN.to_string(),
                 symbol: "WIF".to_string(),
                 decimals: 8,
+                name: "GRAD".to_string(),
                 nonce: 201,
             },
-            "ed8d4dbc9462484893615eb0dba08fe55b08d187e9346ad66e6a0e0f2ba786c8",
+            "2302f970b71374d0bd974e880c867f2206eaa1ccbd0fa0cc794400cac57a94a3",
         ),
         (
             "perp_set_oracle",
@@ -242,10 +243,34 @@ fn a_zero_decimals_is_not_an_explicit_eight() {
         metaflux_chain: CHAIN.to_string(),
         symbol: "WIF".to_string(),
         decimals,
+        name: "GRAD".to_string(),
         nonce: 201,
     };
     assert_ne!(
         _typed_digest_for_test(&build(0)),
         _typed_digest_for_test(&build(8))
+    );
+}
+
+/// The dex name RIDES the digest, so a relay can neither insert nor swap it. An
+/// absent name is not the same signature as any real one, which is what stops a
+/// stale client from landing a market in the wrong namespace.
+#[test]
+fn the_dex_name_is_part_of_the_register_digest() {
+    let build = |name: &str| TypedAction::PerpRegisterAsset {
+        metaflux_chain: CHAIN.to_string(),
+        symbol: "WIF".to_string(),
+        decimals: 8,
+        name: name.to_string(),
+        nonce: 201,
+    };
+    assert_ne!(
+        _typed_digest_for_test(&build("GRAD")),
+        _typed_digest_for_test(&build(""))
+    );
+    assert_ne!(
+        _typed_digest_for_test(&build("GRAD")),
+        _typed_digest_for_test(&build("grad")),
+        "the digest hashes the bytes; only the node folds case for uniqueness"
     );
 }
