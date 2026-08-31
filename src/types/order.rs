@@ -30,6 +30,53 @@ use crate::error::ApiError;
 use crate::types::{Cloid, MarketId, OrderId};
 use crate::wallet::Address;
 
+/// Deserializers for the id family (`oid`, `tid`) on every RESPONSE surface.
+///
+/// The node serves these ids as decimal-digit **strings**, because a `tid` is a
+/// 64-bit hash-derived value and a bare JSON number above 2^53 loses digits in
+/// every JavaScript consumer. Rust holds a `u64` exactly, so the SDK keeps the
+/// integer type and only widens what it ACCEPTS: a string or a number both
+/// decode. That covers a node that has not yet swapped, an archive-served row,
+/// and any recorded fixture. Serialization is unchanged — a request still sends
+/// a JSON number, and the signed action payload is not touched at all.
+pub(crate) mod id_wire {
+    use crate::types::OrderId;
+    use serde::{Deserialize, Deserializer};
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum U64Wire {
+        Num(u64),
+        Str(String),
+    }
+
+    impl U64Wire {
+        fn into_u64<E: serde::de::Error>(self) -> Result<u64, E> {
+            match self {
+                Self::Num(n) => Ok(n),
+                Self::Str(s) => s.parse::<u64>().map_err(serde::de::Error::custom),
+            }
+        }
+    }
+
+    /// A `u64` id served as a JSON string or a JSON number.
+    pub(crate) fn u64_flex<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+        U64Wire::deserialize(d)?.into_u64()
+    }
+
+    /// An optional `u64` id. A `null` or an absent key stays `None`.
+    pub(crate) fn opt_u64_flex<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+        Option::<U64Wire>::deserialize(d)?
+            .map(U64Wire::into_u64)
+            .transpose()
+    }
+
+    /// An [`OrderId`] served as a JSON string or a JSON number.
+    pub(crate) fn order_id_flex<'de, D: Deserializer<'de>>(d: D) -> Result<OrderId, D::Error> {
+        u64_flex(d).map(OrderId)
+    }
+}
+
 /// Side of an order — buyer (bid) or seller (ask).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -408,8 +455,9 @@ pub struct CancelAllOrders {
 /// ```
 ///
 /// `total_sz` / `avg_px` are CANONICAL decimal **strings** on the wire
-/// (string-typed so precision survives past 2^53); `oid` is a JSON number
-/// (uint64). The variant is selected by the single present key.
+/// (string-typed so precision survives past 2^53). `oid` is a decimal-digit
+/// **string** for the same reason; this type accepts a string or a number and
+/// holds the exact `u64`. The variant is selected by the single present key.
 ///
 /// An `error` entry carries the SAME [`ApiError`] object the response
 /// envelope uses, so one error shape covers the whole request and one leg of
@@ -428,8 +476,10 @@ pub enum OrderStatus {
     /// leg rests.
     Chase {
         /// The `cancel_chase` handle.
+        #[serde(deserialize_with = "id_wire::order_id_flex")]
         chase_oid: OrderId,
         /// Current leg oid. It is re-stamped on every reprice.
+        #[serde(deserialize_with = "id_wire::order_id_flex")]
         leg_oid: OrderId,
         /// Leg placed price, a fixed-point integer string.
         leg_px: String,
@@ -480,6 +530,7 @@ impl OrderStatus {
 #[serde(rename_all = "snake_case")]
 pub struct RestingStatus {
     /// Server-assigned order id.
+    #[serde(deserialize_with = "id_wire::order_id_flex")]
     pub oid: OrderId,
     /// Echo of the client order id, if one was supplied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -495,6 +546,7 @@ pub struct FilledStatus {
     /// Volume-weighted average fill price, canonical decimal string.
     pub avg_px: String,
     /// Server-assigned order id.
+    #[serde(deserialize_with = "id_wire::order_id_flex")]
     pub oid: OrderId,
 }
 

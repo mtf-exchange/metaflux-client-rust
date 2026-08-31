@@ -115,6 +115,11 @@ pub struct SpotCancel {
     /// Target spot pair id.
     pub pair: u32,
     /// Server-assigned spot order id.
+    ///
+    /// Serialized as a JSON number, which is what the signed cancel payload
+    /// binds. It DESERIALIZES from a string too, so a caller can feed back the
+    /// string-typed `oid` every read now serves without converting it first.
+    #[serde(deserialize_with = "crate::types::order::id_wire::u64_flex")]
     pub oid: u64,
 }
 

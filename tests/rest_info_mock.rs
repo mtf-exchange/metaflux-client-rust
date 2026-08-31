@@ -355,8 +355,9 @@ async fn spot_meta_decodes_pairs_and_tokens() {
     assert_eq!(m.pairs[0].name, "BTC/USDC");
     assert_eq!(m.pairs[0].base, 0);
     assert_eq!(m.pairs[0].quote, 100);
-    // `taker_fee_bps` is a STRING on the live wire.
-    assert_eq!(m.pairs[0].taker_fee_bps, "5");
+    // `taker_fee_bps` is a STRING on the live wire, and null when the pair
+    // carries no deployer override.
+    assert_eq!(m.pairs[0].taker_fee_bps.as_deref(), Some("5"));
     assert_eq!(m.pairs[0].min_notional, "1000");
     assert!(m.pairs[0].active);
     assert_eq!(m.pairs[0].mark_px.as_deref(), Some("61550.2"));
@@ -890,12 +891,14 @@ async fn order_status_by_oid_posts_oid_and_decodes_filled() {
             "order_status",
             json!({
                 "status": "filled",
-                "fill": {
+                "fills": [{
                     "coin": "MTF", "side": "B", "px": "0.12126000", "sz": "112.22",
-                    "time": 1_784_820_001_998u64, "oid": 42u64, "tid": 7u64,
-                    "fee": "0.000952", "closed_pnl": "0", "dir": "Open Long",
+                    "time": 1_784_820_001_998u64, "oid": "42", "tid": "7",
+                    "fee": "0.000952", "fee_token": "USDC", "closed_pnl": "0",
+                    "dir": "Open Long",
                     "start_position": "-357795.12", "block": 8_416_000u64, "hash": ""
-                }
+                }],
+                "total_filled_sz": "112.22"
             }),
         )))
         .mount(&server)
@@ -903,12 +906,19 @@ async fn order_status_by_oid_posts_oid_and_decodes_filled() {
 
     let client = Client::new(server.uri()).unwrap();
     let st = client.rest().info().order_status_by_oid(42).await.unwrap();
-    let OrderStatus::Filled { fill } = st else {
+    let OrderStatus::Filled {
+        fills,
+        total_filled_sz,
+    } = st
+    else {
         panic!("expected Filled");
     };
-    assert_eq!(fill.coin, "MTF");
-    assert_eq!(fill.px, "0.12126000");
-    assert_eq!(fill.block, Some(8_416_000));
+    assert_eq!(total_filled_sz, "112.22");
+    assert_eq!(fills[0].coin, "MTF");
+    assert_eq!(fills[0].px, "0.12126000");
+    assert_eq!(fills[0].oid, 42);
+    assert_eq!(fills[0].fee_token.as_deref(), Some("USDC"));
+    assert_eq!(fills[0].block, Some(8_416_000));
 }
 
 /// `order_status_by_cloid` posts `{type, cloid}` (no `oid`) and decodes the

@@ -177,11 +177,6 @@ pub enum Subscription {
         /// User `0x` address.
         user: Address,
     },
-    /// Global stream of committed explorer block headers, one per block.
-    ExplorerBlock,
-    /// Global stream of committed explorer transaction rows. Each row carries a
-    /// `hash` (the 0x action hash; empty for systemic transactions).
-    ExplorerTxs,
     /// Per-account resting-order set (MTF-native). EVERY frame is a FULL
     /// snapshot of the account's current open orders, re-emitted on any
     /// resting-set mutation.
@@ -264,11 +259,6 @@ pub enum WsMessage {
     SpotMarginState(serde_json::Value),
     /// Per-(user, market) leverage/margin context.
     ActiveAssetData(serde_json::Value),
-    /// Committed explorer block header frame.
-    ExplorerBlock(serde_json::Value),
-    /// Committed explorer transaction rows (each row carries a 0x action `hash`,
-    /// empty for systemic transactions).
-    ExplorerTxs(serde_json::Value),
     /// Per-account resting-order snapshot frame — a bare ARRAY of order rows,
     /// NOT the `{address, orders}` object the REST read returns. Decode with
     /// [`WsMessage::as_open_orders`].
@@ -489,18 +479,6 @@ mod tests {
     }
 
     #[test]
-    fn subscription_explorer_channels_are_bare_type() {
-        for (sub, ty) in [
-            (Subscription::ExplorerBlock, "explorer_block"),
-            (Subscription::ExplorerTxs, "explorer_txs"),
-        ] {
-            let j = serde_json::to_value(&sub).unwrap();
-            assert_eq!(j["type"], ty);
-            assert!(j.get("coin").is_none() && j.get("user").is_none());
-        }
-    }
-
-    #[test]
     fn ws_message_decodes_data_channels() {
         for chan in [
             "l2_book",
@@ -511,8 +489,6 @@ mod tests {
             "account_state",
             "spot_margin_state",
             "user_fundings",
-            "explorer_block",
-            "explorer_txs",
         ] {
             let raw = serde_json::json!({ "channel": chan, "data": { "x": 1 } });
             let m: WsMessage = serde_json::from_value(raw)

@@ -243,6 +243,7 @@ pub struct OrderTrigger {
 #[serde(rename_all = "snake_case")]
 pub struct OpenOrder {
     /// Real resting-order id (cancellable per-oid).
+    #[serde(deserialize_with = "crate::types::order::id_wire::u64_flex")]
     pub oid: u64,
     /// Market symbol (e.g. `"BTC"`) or spot pair name (`"BTC/USDC"`).
     pub coin: String,
@@ -367,6 +368,10 @@ pub struct Trade {
     /// Aggressor taker side: `"A"` (sell) or `"B"` (buy).
     pub side: String,
     /// Unique trade id.
+    ///
+    /// A hash-derived 64-bit value, so it routinely exceeds 2^53 and the node
+    /// serves it as a decimal-digit string. Rust holds the exact `u64`.
+    #[serde(deserialize_with = "crate::types::order::id_wire::u64_flex")]
     pub tid: u64,
     /// Block height the trade committed in.
     pub block: u64,
@@ -1000,9 +1005,16 @@ pub struct SpotPair {
     pub base: u32,
     /// Quote asset id.
     pub quote: u32,
-    /// Taker fee in bps, decimal STRING (e.g. `"5"`). The node emits this as a
-    /// string (dbps/10 `.to_string()`); it is NOT a JSON number.
-    pub taker_fee_bps: String,
+    /// The DEPLOYER fee override in bps, decimal STRING (e.g. `"5"`). It is a
+    /// string (dbps/10), never a JSON number.
+    ///
+    /// `None` is the COMMON case: most pairs carry no override, and the node
+    /// sends an explicit `null` for them. Such a pair prices off the
+    /// volume-tier ladder that [`Info::fee_schedule`] serves — read that
+    /// instead. `None` does NOT mean the pair trades free, which is why the
+    /// node refuses to render it as `"0"`.
+    #[serde(default)]
+    pub taker_fee_bps: Option<String>,
     /// Minimum order notional (USDC cents) as a decimal string; `"0"` if unset.
     pub min_notional: String,
     /// Whether the pair is active for trading.
@@ -1104,11 +1116,25 @@ pub struct Fill {
     /// Consensus fill timestamp (unix ms).
     pub time: u64,
     /// Resting-order id the fill matched.
+    #[serde(deserialize_with = "crate::types::order::id_wire::u64_flex")]
     pub oid: u64,
-    /// Unique trade id.
+    /// Unique trade id, shared by both legs of the print.
+    ///
+    /// Above 2^53 in practice, so it is served as a decimal-digit string.
+    #[serde(deserialize_with = "crate::types::order::id_wire::u64_flex")]
     pub tid: u64,
     /// Fee charged, whole-USDC decimal string.
     pub fee: String,
+    /// Coin symbol the `fee` is denominated in.
+    ///
+    /// Read this before you sum `fee` across an account. A perp fee is always
+    /// `"USDC"`. A spot SELL charges USDC too, but a spot BUY charges the BASE
+    /// token — so a BTC/USDC buy pays its fee in BTC. Summing `fee` without
+    /// this field adds BTC to USDC.
+    ///
+    /// `None` on a record served by a node that predates the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fee_token: Option<String>,
     /// Realized PnL of the closed portion, signed decimal string.
     pub closed_pnl: String,
     /// Human direction label (`"Open Long"` / `"Close Short"` / `"Buy"` …).
@@ -1156,6 +1182,7 @@ pub struct Fill {
 #[serde(rename_all = "snake_case")]
 pub struct RestingOrderStatus {
     /// Resting-order id (cancellable per-oid).
+    #[serde(deserialize_with = "crate::types::order::id_wire::u64_flex")]
     pub oid: u64,
     /// Market symbol (perp) or spot pair name.
     pub coin: String,
@@ -1182,6 +1209,7 @@ pub struct RestingOrderStatus {
 #[serde(rename_all = "snake_case")]
 pub struct TriggerOrderStatus {
     /// Trigger-order id.
+    #[serde(deserialize_with = "crate::types::order::id_wire::u64_flex")]
     pub oid: u64,
     /// Market symbol (perp) or spot pair name.
     pub coin: String,
@@ -1216,12 +1244,12 @@ pub struct TriggerOrderStatus {
 /// `order_status` response — single-order lifecycle lookup by `oid` or `cloid`.
 ///
 /// The node resolves the FIRST hit: a live resting order, then a parked trigger,
-/// then the most recent matching fill, else unknown. Tagged by the wire `status`
-/// field. A cloid-only query resolves resting / triggered hits only — the fill
-/// ring is oid-keyed.
-// The filled variant carries a whole `Fill`, which the attribution fields made
-// much larger than its siblings. The shape mirrors the wire, so boxing it would
-// buy a smaller enum at the cost of an allocation on the common path.
+/// then the order's fills, then a terminal outcome, else unknown. Tagged by the
+/// wire `status` field. A `cloid` resolves at every one of those stages — the
+/// node carries the cloid into its read-side rings, so a lookup no longer dies
+/// the moment the order fills.
+// The order rows mirror the wire, so boxing a variant would buy a smaller enum
+// at the cost of an allocation on the common path.
 #[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
@@ -1236,13 +1264,73 @@ pub enum OrderStatus {
         /// The parked trigger.
         trigger: TriggerOrderStatus,
     },
-    /// A terminal fill (the most recent matching leg in the ring).
+    /// The order executed. Carries EVERY matching leg, not one of them.
     Filled {
-        /// The matching fill.
-        fill: Fill,
+        /// Matching legs in the ring, oldest first. An order that filled in
+        /// two prints has two entries.
+        fills: Vec<Fill>,
+        /// Sum of `fills[*].sz`, size-plane decimal string. Compare it with the
+        /// order's original size to tell a full fill from a partial one.
+        total_filled_sz: String,
     },
-    /// Never seen, or evicted from the ring.
+    /// The order was cancelled — by the owner, by a cancel-all, or by the
+    /// engine (self-trade prevention, a delist, a reduce-only violation).
+    Canceled {
+        /// The terminal record.
+        outcome: OrderOutcome,
+    },
+    /// The CANCEL request failed. The order had already left this node's live
+    /// view when the cancel arrived, so the ORDER itself may well have filled.
+    /// Branch on this variant, never on [`OrderOutcome::reason`].
+    CancelRejected {
+        /// The terminal record.
+        outcome: OrderOutcome,
+    },
+    /// The order was refused at admission or at commit and never rested.
+    Rejected {
+        /// The terminal record.
+        outcome: OrderOutcome,
+    },
+    /// Outside this node's retention view: never seen, evicted from the ring,
+    /// or placed before the node last restarted. It is NOT proof the order
+    /// never existed — read [`Info::historical_orders`] for the archive answer.
     Unknown,
+}
+
+/// The terminal record behind [`OrderStatus::Canceled`],
+/// [`OrderStatus::CancelRejected`] and [`OrderStatus::Rejected`].
+///
+/// It is a separate key from the `order` of a live resting hit, because the two
+/// answer different questions and a shared name under different content is how a
+/// caller reads the wrong one.
+///
+/// The record names the order and how it ended. It does NOT carry a size: a
+/// cancel names the order, not its quantity. It carries no executed size
+/// either, because a terminal answer is unreachable for an order that traded —
+/// `order_status` resolves fills FIRST, so any order with one leg answers
+/// [`OrderStatus::Filled`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct OrderOutcome {
+    /// Order id. `None` only when the query named a `cloid` the node refused
+    /// before it assigned an oid.
+    #[serde(
+        default,
+        deserialize_with = "crate::types::order::id_wire::opt_u64_flex"
+    )]
+    pub oid: Option<u64>,
+    /// Market symbol (perp) or spot pair name.
+    pub coin: String,
+    /// Side, `"B"` (bid) / `"A"` (ask). `None` on a cancel outcome — a cancel
+    /// names the order, not its side.
+    #[serde(default)]
+    pub side: Option<OrderSide>,
+    /// Consensus timestamp the order reached this state (unix ms).
+    pub time: u64,
+    /// Why the order ended. `None` on a successful cancel. Match on the
+    /// [`OrderStatus`] variant, never on this string.
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// One record inside a [`HistoricalOrders`] response.
@@ -1260,6 +1348,7 @@ pub enum OrderStatus {
 #[serde(rename_all = "snake_case")]
 pub struct HistoricalOrder {
     /// Order id.
+    #[serde(deserialize_with = "crate::types::order::id_wire::u64_flex")]
     pub oid: u64,
     /// Market symbol (perp) or spot pair name.
     pub coin: String,
@@ -1420,7 +1509,10 @@ pub struct LedgerUpdate {
     #[serde(default)]
     pub counterparty: Option<String>,
     /// Trade id for a trade row.
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::types::order::id_wire::opt_u64_flex"
+    )]
     pub tid: Option<u64>,
     /// Realized PnL for a trade row, signed decimal string.
     #[serde(default)]
@@ -2211,9 +2303,9 @@ impl<'a> Info<'a> {
 
     /// `order_status` — single-order lifecycle lookup by `cloid` (`0x` + 32 hex).
     ///
-    /// A cloid-only query resolves resting / triggered hits only — the fill ring
-    /// is oid-keyed, so a filled order that has left the book returns
-    /// [`OrderStatus::Unknown`] by cloid.
+    /// A `cloid` resolves a filled and a terminal order as well as a live one.
+    /// [`OrderStatus::Unknown`] means the order is outside this node's
+    /// retention view, not that it never existed.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -2786,7 +2878,7 @@ mod tests {
         assert_eq!(m.pairs[0].base, 101);
         assert_eq!(m.pairs[0].quote, 100);
         assert_eq!(m.pairs[0].sz_decimals, 5);
-        assert_eq!(m.pairs[0].taker_fee_bps, "5");
+        assert_eq!(m.pairs[0].taker_fee_bps.as_deref(), Some("5"));
         assert!(!m.pairs[0].active);
         // An inactive pair prices as an explicit null, which `serde(default)`
         // does NOT cover. This assertion is the one that was failing live.
@@ -2811,7 +2903,7 @@ mod tests {
             "spot": {
                 "pairs": [{
                     "signing_id": 110, "name": "BTC/USDC", "base": 101, "quote": 100,
-                    "taker_fee_bps": "5", "min_notional": "1", "active": false,
+                    "taker_fee_bps": null, "min_notional": "1", "active": false,
                     "mark_px": null
                 }],
                 "tokens": [
@@ -2822,7 +2914,9 @@ mod tests {
         let resp: Resp = serde_json::from_value(data).unwrap();
         assert_eq!(resp.spot.pairs.len(), 1);
         assert_eq!(resp.spot.pairs[0].name, "BTC/USDC");
-        assert_eq!(resp.spot.pairs[0].taker_fee_bps, "5");
+        // No deployer override — the common case. A non-optional type failed
+        // the whole response here, not just this field.
+        assert_eq!(resp.spot.pairs[0].taker_fee_bps, None);
         // Older/minimal token rows (no evm block) still decode via defaults.
         assert_eq!(resp.spot.tokens[0].name, "BTC");
         assert!(resp.spot.tokens[0].evm_contract.is_none());
@@ -3173,44 +3267,121 @@ mod tests {
     // ── P2 wave-1: typed /info read decodes (fixtures pinned to the node
     // serializer shapes) ──
 
-    /// `order_status` filled branch = the canonical fill record (values from
-    /// `perp_fill_canonical`): symbol coin, 8-dp tape `px`, size-plane `sz`,
-    /// `time`, no `block` on the archive-normalized twin.
+    /// `order_status` filled branch = EVERY matching leg plus the summed size.
+    /// An order that filled in two prints must not report one of them.
     #[test]
-    fn order_status_filled_decodes_canonical_fill() {
+    fn order_status_filled_decodes_all_legs() {
+        let leg = |sz: &str, tid: &str, block: Option<u64>| {
+            let mut v = serde_json::json!({
+                "coin": "MTF", "side": "B", "px": "0.12126000", "sz": sz,
+                "time": 1_784_820_001_998u64, "oid": "42", "tid": tid,
+                "fee": "0.000952", "fee_token": "USDC", "closed_pnl": "0",
+                "dir": "Open Long", "start_position": "-357795.12", "hash": ""
+            });
+            if let Some(b) = block {
+                v["block"] = serde_json::json!(b);
+            }
+            v
+        };
         let data = serde_json::json!({
             "status": "filled",
-            "fill": {
-                "coin": "MTF", "side": "B", "px": "0.12126000", "sz": "112.22",
-                "time": 1_784_820_001_998u64, "oid": 42u64, "tid": 7u64,
-                "fee": "0.000952", "closed_pnl": "0", "dir": "Open Long",
-                "start_position": "-357795.12", "hash": ""
-            }
+            // `tid` past 2^53 — the reason the wire serves ids as strings.
+            "fills": [leg("0.62", "16613428288414605024", None), leg("0.87", "7", Some(8_416_000))],
+            "total_filled_sz": "1.49"
         });
         let st: OrderStatus = serde_json::from_value(data).unwrap();
-        let OrderStatus::Filled { fill } = &st else {
+        let OrderStatus::Filled {
+            fills,
+            total_filled_sz,
+        } = &st
+        else {
             panic!("expected Filled, got {st:?}");
         };
-        assert_eq!(fill.coin, "MTF");
-        assert_eq!(fill.px, "0.12126000");
-        assert_eq!(fill.sz, "112.22");
-        assert_eq!(fill.start_position, "-357795.12");
-        assert_eq!(fill.block, None); // archive-normalized fill carries no block
-        assert!(fill.hash.is_empty());
-        // A node-ring fill DOES carry `block` (Option::Some).
-        let ring = serde_json::json!({
-            "status": "filled",
-            "fill": {
-                "coin": "MTF", "side": "B", "px": "0.12126000", "sz": "112.22",
-                "time": 1_784_820_001_998u64, "oid": 42u64, "tid": 7u64,
-                "fee": "0.000952", "closed_pnl": "0", "dir": "Open Long",
-                "start_position": "-357795.12", "block": 8_416_000u64, "hash": ""
+        assert_eq!(fills.len(), 2);
+        assert_eq!(total_filled_sz, "1.49");
+        assert_eq!(fills[0].tid, 16_613_428_288_414_605_024);
+        assert_eq!(fills[0].oid, 42);
+        assert_eq!(fills[0].fee_token.as_deref(), Some("USDC"));
+        assert_eq!(fills[0].block, None); // archive-normalized leg carries no block
+        assert_eq!(fills[1].block, Some(8_416_000));
+    }
+
+    /// The id family decodes from a STRING and from a NUMBER alike, and a
+    /// request still serializes it as a number.
+    #[test]
+    fn ids_decode_from_string_or_number_and_serialize_numeric() {
+        let row = |tid: serde_json::Value| {
+            serde_json::json!({
+                "coin": "BTC", "px": "67000", "sz": "0.1", "side": "A",
+                "tid": tid, "block": 1u64, "time": 1u64
+            })
+        };
+        let a: Trade =
+            serde_json::from_value(row(serde_json::json!("16613428288414605024"))).unwrap();
+        let b: Trade =
+            serde_json::from_value(row(serde_json::json!(16_613_428_288_414_605_024u64))).unwrap();
+        assert_eq!(a.tid, b.tid);
+        assert_eq!(a.tid, 16_613_428_288_414_605_024);
+
+        // A cancel is a REQUEST: it accepts either shape but always sends a number.
+        let c: crate::types::spot::SpotCancel =
+            serde_json::from_str(r#"{"pair":3,"oid":"12345"}"#).unwrap();
+        assert_eq!(c.oid, 12345);
+        assert_eq!(
+            serde_json::to_value(c).unwrap()["oid"],
+            serde_json::json!(12345)
+        );
+    }
+
+    /// A terminal outcome is its own status, and `unknown` no longer has to
+    /// stand in for a cancel. The shape is the node's: a `status` beside an
+    /// `outcome` of exactly `oid` / `coin` / `side` / `time` / `reason`.
+    #[test]
+    fn order_status_terminal_states_decode() {
+        // A successful cancel names the order only: no side, no reason.
+        let data = serde_json::json!({
+            "status": "canceled",
+            "outcome": {
+                "oid": "32535358", "coin": "BTC", "side": null,
+                "time": 1_784_820_001_998u64, "reason": null
             }
         });
-        let OrderStatus::Filled { fill } = serde_json::from_value(ring).unwrap() else {
-            panic!("expected Filled");
+        let OrderStatus::Canceled { outcome } = serde_json::from_value(data).unwrap() else {
+            panic!("expected Canceled");
         };
-        assert_eq!(fill.block, Some(8_416_000));
+        assert_eq!(outcome.oid, Some(32_535_358));
+        assert_eq!(outcome.coin, "BTC");
+        assert_eq!(outcome.side, None);
+        assert_eq!(outcome.reason, None);
+
+        // `cancel_rejected` is a status of its own. A caller that branches on
+        // `reason` instead of the variant reads this as a cancel.
+        let data = serde_json::json!({
+            "status": "cancel_rejected",
+            "outcome": {
+                "oid": "77", "coin": "ETH", "side": null, "time": 5u64,
+                "reason": "order not found"
+            }
+        });
+        let OrderStatus::CancelRejected { outcome } = serde_json::from_value(data).unwrap() else {
+            panic!("expected CancelRejected");
+        };
+        assert_eq!(outcome.oid, Some(77));
+        assert_eq!(outcome.reason.as_deref(), Some("order not found"));
+
+        // Rejected by cloid: the order never got an oid.
+        let data = serde_json::json!({
+            "status": "rejected",
+            "outcome": {
+                "oid": null, "coin": "BTC", "side": "A", "time": 9u64,
+                "reason": "insufficient margin"
+            }
+        });
+        let OrderStatus::Rejected { outcome } = serde_json::from_value(data).unwrap() else {
+            panic!("expected Rejected");
+        };
+        assert_eq!(outcome.oid, None);
+        assert_eq!(outcome.side, Some(OrderSide::Ask));
     }
 
     /// `order_status` resting branch: tick-snapped `px`, `"B"` / `"A"` side, cloid.

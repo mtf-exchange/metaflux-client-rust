@@ -36,7 +36,12 @@ use crate::ws::subscriptions::WsMessage;
 #[serde(rename_all = "snake_case")]
 pub struct WsOrderRow {
     /// Resting-order id. `null` on a rejected order and on a cancel by cloid.
-    #[serde(default)]
+    ///
+    /// The node serves it as a decimal-digit string; a number still decodes.
+    #[serde(
+        default,
+        deserialize_with = "crate::types::order::id_wire::opt_u64_flex"
+    )]
     pub oid: Option<u64>,
     /// Market symbol (`"BTC"`) or spot pair name (`"BTC/USDC"`).
     pub coin: String,
@@ -204,8 +209,6 @@ impl WsMessage {
             Self::OptionState(_) => "option_state",
             Self::SpotMarginState(_) => "spot_margin_state",
             Self::ActiveAssetData(_) => "active_asset_data",
-            Self::ExplorerBlock(_) => "explorer_block",
-            Self::ExplorerTxs(_) => "explorer_txs",
             Self::OpenOrders(_) => "open_orders",
             Self::Markets(_) => "markets",
             Self::Pong => "pong",
@@ -482,7 +485,7 @@ mod tests {
             "channel": "open_orders",
             "is_snapshot": true,
             "data": [{
-                "oid": 4242u64,
+                "oid": "4242",
                 "coin": "BTC",
                 "side": "B",
                 "px": "64000",
@@ -554,7 +557,7 @@ mod tests {
     fn order_updates_cancel_record_decodes_a_null_order_row() {
         let data = json!([{
             "order": {
-                "oid": 4242u64, "coin": "BTC", "side": null, "px": null, "sz": null,
+                "oid": "4242", "coin": "BTC", "side": null, "px": null, "sz": null,
                 "orig_sz": null, "cloid": null, "tif": null, "reduce_only": null,
                 "trigger": null, "inserted_at": null
             },

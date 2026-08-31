@@ -376,23 +376,6 @@ impl WsClient {
         self.subscribe(Subscription::UserFundings { user }).await
     }
 
-    /// Subscribe to the global explorer block-header stream.
-    ///
-    /// # Errors
-    /// See [`WsClient::subscribe`].
-    pub async fn subscribe_explorer_block(&self) -> Result<(), ClientError> {
-        self.subscribe(Subscription::ExplorerBlock).await
-    }
-
-    /// Subscribe to the global explorer transaction stream (each row carries a
-    /// 0x action `hash`).
-    ///
-    /// # Errors
-    /// See [`WsClient::subscribe`].
-    pub async fn subscribe_explorer_txs(&self) -> Result<(), ClientError> {
-        self.subscribe(Subscription::ExplorerTxs).await
-    }
-
     /// Subscribe to a user's resting-order set. Every frame is a full snapshot
     /// of the account's current open orders.
     ///
