@@ -1472,6 +1472,10 @@ impl<'a> Exchange<'a> {
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[deprecated(
+        note = "perp_set_oracle is retired: the mask was never read, and the node refuses the action from the release that lands per-handler sub-deployer permissions. Nothing replaces it; the deployer price control is mip3_set_oracle_px."
+    )]
+    #[allow(deprecated)]
     pub async fn perp_set_oracle(
         &self,
         wallet: &Wallet,

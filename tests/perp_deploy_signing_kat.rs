@@ -1,8 +1,8 @@
-//! The ten MIP-3 perp-deployer signing strings, pinned by digest.
+//! The eleven MIP-3 perp-deployer signing strings, pinned by digest.
 //!
 //! `perp_deploy` is an internal handler name. A caller never sends it. It sends
-//! one of NINE distinct typed actions, each with its own frozen EIP-712 string.
-//! `mip3_set_oracle_px` is the tenth deployer action — the repeating index-px
+//! one of TEN distinct typed actions, each with its own frozen EIP-712 string.
+//! `mip3_set_oracle_px` is the eleventh deployer action — the repeating index-px
 //! push, on its own frozen string. Every client that builds one must reproduce
 //! the digest byte-for-byte.
 //!
@@ -24,7 +24,7 @@ fn addr(b: u8) -> Address {
 }
 
 #[test]
-fn the_ten_perp_deployer_signing_strings_keep_their_digests() {
+fn the_eleven_perp_deployer_signing_strings_keep_their_digests() {
     let cases: Vec<(&str, TypedAction, &str)> = vec![
         (
             "perp_register_asset",
@@ -119,6 +119,17 @@ fn the_ten_perp_deployer_signing_strings_keep_their_digests() {
             "6e39d36bdd1f80375e71c3609d10ee15ad030004d3c41c246fcfbcb93df6750d",
         ),
         (
+            "perp_set_sub_deployer_perms",
+            TypedAction::PerpSetSubDeployerPerms {
+                metaflux_chain: CHAIN.to_string(),
+                asset: 1001,
+                sub_deployer: addr(0xaa),
+                permissions: 0x01ff,
+                nonce: 210,
+            },
+            "236b8ff7a7c11b0a7cf1221d60815ca9df77a8273f8af963add190a93fa896b7",
+        ),
+        (
             "mip3_set_oracle_px",
             TypedAction::Mip3SetOraclePx {
                 metaflux_chain: CHAIN.to_string(),
@@ -130,7 +141,7 @@ fn the_ten_perp_deployer_signing_strings_keep_their_digests() {
         ),
     ];
 
-    assert_eq!(cases.len(), 10, "all ten perp deployer actions covered");
+    assert_eq!(cases.len(), 11, "all eleven perp deployer actions covered");
     for (label, action, want) in &cases {
         assert_eq!(
             &hex::encode(_typed_digest_for_test(action)),

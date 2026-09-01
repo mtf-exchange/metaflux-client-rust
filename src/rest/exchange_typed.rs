@@ -2064,6 +2064,9 @@ impl<'a> Exchange<'a> {
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[deprecated(
+        note = "perp_set_oracle is retired: the mask was never read, and the node refuses the action from the release that lands per-handler sub-deployer permissions. Nothing replaces it; the deployer price control is mip3_set_oracle_px."
+    )]
     pub async fn perp_set_oracle_typed(
         &self,
         wallet: &Wallet,
@@ -2257,6 +2260,42 @@ impl<'a> Exchange<'a> {
                 "add": add,
             });
             (action, "perp_set_sub_deployers", params)
+        })
+        .await
+    }
+
+    /// Grant one delegate an exact permission mask under the typed scheme.
+    ///
+    /// One bit is one deployer action, so a grant can hand out the price push
+    /// without the fee rates. `permissions` of `0` revokes. A grant REPLACES:
+    /// send the full mask the delegate must end with.
+    ///
+    /// The delegate and the mask are both signed, so neither can be re-targeted
+    /// nor widened under a replayed signature.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_sub_deployer_perms_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        sub_deployer: crate::wallet::Address,
+        permissions: u16,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PerpSetSubDeployerPerms {
+                metaflux_chain: chain,
+                asset,
+                sub_deployer,
+                permissions,
+                nonce,
+            };
+            let params = json!({
+                "asset": asset,
+                "sub_deployer": sub_deployer,
+                "permissions": permissions,
+            });
+            (action, "perp_set_sub_deployer_perms", params)
         })
         .await
     }

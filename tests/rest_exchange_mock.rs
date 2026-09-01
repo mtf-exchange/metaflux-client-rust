@@ -1296,6 +1296,7 @@ async fn spot_seed_holders_refuses_unpaired_rows_before_signing() {
 /// names. A wrong tag or a renamed field is refused at the node's serde before
 /// any handler runs, and the caller cannot tell that from a rejected signature.
 #[tokio::test]
+#[allow(deprecated)]
 async fn the_perp_deployer_lane_posts_its_nine_tags_with_their_own_fields() {
     let (client, captor, wallet) = capturing_exchange().await;
     let ex = client.exchange();

@@ -250,6 +250,8 @@ const PERP_DEACTIVATE_MARKET_TYPE: &[u8] =
     b"MetaFluxTransaction:PerpDeactivateMarket(string metafluxChain,uint32 asset,uint64 nonce)";
 const PERP_SET_SUB_DEPLOYERS_TYPE: &[u8] =
     b"MetaFluxTransaction:PerpSetSubDeployers(string metafluxChain,uint32 asset,address subDeployer,bool add,uint64 nonce)";
+const PERP_SET_SUB_DEPLOYER_PERMS_TYPE: &[u8] =
+    b"MetaFluxTransaction:PerpSetSubDeployerPerms(string metafluxChain,uint32 asset,address subDeployer,uint16 permissions,uint64 nonce)";
 
 // The tenth MIP-3 deployer action: the repeating index-px push. `asset` and the
 // VERBATIM `px` string both sit inside the digest, so a relay can neither
@@ -1224,6 +1226,22 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `PerpSetSubDeployerPerms(string metafluxChain,uint32 asset,address subDeployer,uint16 permissions,uint64 nonce)`
+    ///
+    /// `sub_deployer` and `permissions` are both IN the digest, so no relay can
+    /// re-target the delegate or widen the mask.
+    PerpSetSubDeployerPerms {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Target market asset id.
+        asset: u32,
+        /// The delegate address.
+        sub_deployer: Address,
+        /// The permission bitmask; `0` revokes every bit.
+        permissions: u16,
+        /// Envelope nonce.
+        nonce: u64,
+    },
     /// `Mip3SetOraclePx(string metafluxChain,uint32 asset,string px,uint64 nonce)`
     ///
     /// `asset` and the verbatim `px` string are both IN the digest, so a relay
@@ -1322,6 +1340,7 @@ impl TypedAction {
             TypedAction::PerpActivateMarket { .. } => PERP_ACTIVATE_MARKET_TYPE,
             TypedAction::PerpDeactivateMarket { .. } => PERP_DEACTIVATE_MARKET_TYPE,
             TypedAction::PerpSetSubDeployers { .. } => PERP_SET_SUB_DEPLOYERS_TYPE,
+            TypedAction::PerpSetSubDeployerPerms { .. } => PERP_SET_SUB_DEPLOYER_PERMS_TYPE,
             TypedAction::Mip3SetOraclePx { .. } => MIP3_SET_ORACLE_PX_TYPE,
         }
     }
@@ -2168,6 +2187,19 @@ impl TypedAction {
                 enc_u32(*asset),
                 enc_addr(sub_deployer),
                 enc_bool(*add),
+                enc_u64(*nonce),
+            ],
+            TypedAction::PerpSetSubDeployerPerms {
+                metaflux_chain,
+                asset,
+                sub_deployer,
+                permissions,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_addr(sub_deployer),
+                enc_u16(*permissions),
                 enc_u64(*nonce),
             ],
             TypedAction::Mip3SetOraclePx {
