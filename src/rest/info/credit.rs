@@ -5,7 +5,7 @@
 //!
 //! ## Read the credit BEFORE you claim it
 //!
-//! `claim_referral_rewards` and `claim_builder_rewards` drain the whole balance
+//! `claim_referral_rewards` and `claim_broker_rewards` drain the whole balance
 //! and report no amount back. The claim response therefore cannot tell a caller
 //! what it just collected, and a claim on an empty balance looks the same as a
 //! claim on a full one. Read [`Info::referral_state`] or [`Info::builder_state`]
@@ -111,7 +111,7 @@ impl Info<'_> {
 
     /// Read a broker's accrued broker-code fee credit (`builder_state`).
     ///
-    /// Call this before `claim_builder_rewards`: the claim reports no amount.
+    /// Call this before `claim_broker_rewards`: the claim reports no amount.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

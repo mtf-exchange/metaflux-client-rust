@@ -71,6 +71,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Match on `e.code`; the message is prose and may change.
                 println!("order[{i}] rejected: {} — {}", e.code, e.message);
             }
+            OrderStatus::Noop(n) => {
+                // ACCEPTED, and it did nothing: a reduce-only order with nothing
+                // left to reduce. A retry only burns another nonce.
+                println!("order[{i}] no-op: {}", n.reason);
+            }
             OrderStatus::Chase {
                 chase_oid, leg_px, ..
             } => {

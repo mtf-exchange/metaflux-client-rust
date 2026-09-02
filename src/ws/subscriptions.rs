@@ -101,7 +101,8 @@ pub enum Subscription {
         user: Address,
     },
     /// Per-account order lifecycle — replaces the old `order_events`. `status`
-    /// is `open` / `filled` / `rejected` / `canceled` / `cancel_rejected`.
+    /// is `open` / `filled` / `rejected` / `canceled` / `cancel_rejected` /
+    /// `noop`.
     ///
     /// The record wraps the canonical order row under `order` and carries
     /// `filled_sz`, `avg_px`, `reason` and `time` as its OWN top-level fields.

@@ -79,9 +79,14 @@ pub struct WsOrderRow {
 
 /// One `order_updates` record: the order row plus its lifecycle outcome.
 ///
-/// `status` is `"open"`, `"filled"`, `"rejected"`, `"canceled"` or
-/// `"cancel_rejected"`. It stays a `String` because the node adds statuses as it
-/// covers more events; a closed enum would reject a newer server.
+/// `status` is `"open"`, `"filled"`, `"rejected"`, `"canceled"`,
+/// `"cancel_rejected"` or `"noop"`. It stays a `String` because the node adds
+/// statuses as it covers more events; a closed enum would reject a newer server.
+///
+/// **`"noop"` is a SUCCESS**, not a rejection: a `reduce_only` order with
+/// nothing left to reduce. It placed nothing, it carries no `oid`, and it must
+/// not be retried. Not live yet — it ships with the next node release, and
+/// until then the same outcome arrives as `"rejected"`.
 ///
 /// `filled_sz` is the executed size of THIS event, not a running total: a maker
 /// leg reports the size of the one match. `order.sz` is what REMAINS.
@@ -98,7 +103,8 @@ pub struct OrderUpdate {
     /// Average execution price of this event, decimal string.
     #[serde(default)]
     pub avg_px: Option<String>,
-    /// Rejection reason on `"rejected"` / `"cancel_rejected"`.
+    /// Rejection reason on `"rejected"` / `"cancel_rejected"`; on `"noop"` it
+    /// says why the order had no effect. Free prose — branch on `status`.
     #[serde(default)]
     pub reason: Option<String>,
     /// Event timestamp (unix ms) — the consensus block time on a live delta,

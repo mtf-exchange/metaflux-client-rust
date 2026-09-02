@@ -452,6 +452,7 @@ pub struct CancelAllOrders {
 /// {"resting": {"oid": 12345, "cloid": "0x..."}}
 /// {"filled":  {"total_sz": "100000000", "avg_px": "10050000000", "oid": 12345}}
 /// {"error":   {"code": "ORDER_INVALID_PRICE", "message": "...", "details": {…}}}
+/// {"noop":    {"reason": "position already flat, nothing to reduce"}}
 /// ```
 ///
 /// `total_sz` / `avg_px` are CANONICAL decimal **strings** on the wire
@@ -472,6 +473,16 @@ pub enum OrderStatus {
     /// This entry was rejected at admission or at commit (the rest of the
     /// batch may still have succeeded). Carries the typed rejection.
     Error(ApiError),
+    /// Accepted, and it changed nothing: a `reduce_only` entry with nothing
+    /// left to reduce. It burned the nonce, placed no order and carries no oid.
+    ///
+    /// **This is a SUCCESS. Do not retry it.** `Error` and `Noop` need opposite
+    /// handling, which is why they are two variants — branch on the variant,
+    /// never on `reason`.
+    ///
+    /// NOT LIVE YET: it ships with the next node release. Until then the same
+    /// outcome arrives as [`OrderStatus::Error`].
+    Noop(NoopStatus),
     /// A committed `chase_order`: the Chase registered and its first post-only
     /// leg rests.
     Chase {
@@ -505,7 +516,8 @@ pub enum OrderStatus {
 
 impl OrderStatus {
     /// The server-assigned `oid`, if this entry produced one (`resting` /
-    /// `filled`). `None` for an `error` entry.
+    /// `filled` / `chase`). `None` for `error`, `noop` and `pending`, none of
+    /// which created an order.
     #[must_use]
     pub fn oid(&self) -> Option<OrderId> {
         match self {
@@ -514,7 +526,10 @@ impl OrderStatus {
             // A Chase's handle is `chase_oid`; `leg_oid` moves on every reprice,
             // so it is not the id a caller cancels with.
             OrderStatus::Chase { chase_oid, .. } => Some(*chase_oid),
-            OrderStatus::Error(_) | OrderStatus::Pending { .. } | OrderStatus::Other(_) => None,
+            OrderStatus::Error(_)
+            | OrderStatus::Noop(_)
+            | OrderStatus::Pending { .. }
+            | OrderStatus::Other(_) => None,
         }
     }
 
@@ -523,6 +538,21 @@ impl OrderStatus {
     pub const fn is_error(&self) -> bool {
         matches!(self, OrderStatus::Error(_))
     }
+
+    /// `true` if this entry was accepted and had no effect. A no-op is a
+    /// success: resending it changes nothing and burns another nonce.
+    #[must_use]
+    pub const fn is_noop(&self) -> bool {
+        matches!(self, OrderStatus::Noop(_))
+    }
+}
+
+/// Payload of [`OrderStatus::Noop`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct NoopStatus {
+    /// Free prose naming which no-op it was. Never branch on it.
+    pub reason: String,
 }
 
 /// Payload of [`OrderStatus::Resting`].
@@ -756,6 +786,23 @@ mod tests {
         }
         assert_eq!(s.oid(), Some(OrderId(12345)));
         assert!(!s.is_error());
+    }
+
+    /// A `noop` entry is a SUCCESS with no oid. `is_error` must stay false, or
+    /// a caller retries an order the chain already accepted.
+    #[test]
+    fn order_status_decodes_noop_and_is_not_an_error() {
+        let j = serde_json::json!({
+            "noop": { "reason": "position already flat, nothing to reduce" }
+        });
+        let s: OrderStatus = serde_json::from_value(j).unwrap();
+        match &s {
+            OrderStatus::Noop(n) => assert!(n.reason.contains("flat")),
+            other => panic!("expected Noop, got {other:?}"),
+        }
+        assert!(s.is_noop());
+        assert!(!s.is_error());
+        assert_eq!(s.oid(), None);
     }
 
     #[test]

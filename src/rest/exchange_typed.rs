@@ -1709,23 +1709,36 @@ impl<'a> Exchange<'a> {
         .await
     }
 
-    /// Drain the sender's accrued builder-code fee credit under the typed scheme
-    /// (`claim_builder_rewards`). No params.
+    /// Drain the sender's accrued broker-code fee credit under the typed scheme.
+    /// No params.
     ///
-    /// The node variant carries a required (empty) `params` struct, so the wire
-    /// body is `{"type":"claim_builder_rewards","params":{}}`.
+    /// The POSTed action tag is `claim_broker_rewards`. The EIP-712 type string
+    /// stays `ClaimBuilderRewards`: it is consensus-frozen, so the two names
+    /// differ on purpose. The node variant carries a required (empty) `params`
+    /// struct, so the wire body is
+    /// `{"type":"claim_broker_rewards","params":{}}`.
+    ///
+    /// The claim reports no amount, so read `builder_state` first.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn claim_builder_rewards_typed(&self, wallet: &Wallet) -> Result<Value, ClientError> {
+    pub async fn claim_broker_rewards_typed(&self, wallet: &Wallet) -> Result<Value, ClientError> {
         self.post_signed_typed(wallet, |chain, nonce| {
             let action = TypedAction::ClaimBuilderRewards {
                 metaflux_chain: chain,
                 nonce,
             };
-            (action, "claim_builder_rewards", json!({}))
+            (action, "claim_broker_rewards", json!({}))
         })
         .await
+    }
+
+    /// Old name for [`Self::claim_broker_rewards_typed`].
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn claim_builder_rewards_typed(&self, wallet: &Wallet) -> Result<Value, ClientError> {
+        self.claim_broker_rewards_typed(wallet).await
     }
 
     /// Drain the sender's accrued referrer fee credit under the typed scheme
