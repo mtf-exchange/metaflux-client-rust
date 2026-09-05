@@ -29,6 +29,18 @@ pub struct ExchangeStatus {
     pub frozen: bool,
     /// Consensus ms this answer speaks for.
     pub timestamp: u64,
+    /// WHICH chain answered: `c<chain_id>-t<genesis ms>-g<16 hex of genesis hash>`,
+    /// or `underivable` on a node with no genesis file.
+    ///
+    /// Two chains can carry the same `chain_id`, so the id alone does not
+    /// identify a chain. Assert this against a configured constant at startup
+    /// and refuse to run on a mismatch. It moves only on a re-genesis of the
+    /// chain you are reading.
+    ///
+    /// `None` on a node older than the release that added it — treat that as
+    /// UNKNOWN, never as a match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chain_identity: Option<String>,
 }
 
 /// One row of [`VaultSummaries`].

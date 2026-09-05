@@ -49,9 +49,12 @@ use crate::wallet::Address;
 pub struct TokenBalance {
     /// Token symbol (e.g. `"USDC"`), else `asset:<id>`.
     pub name: String,
-    /// The uint32 to put in the `token` field of a signed `spotSend`, and in
-    /// `asset` of an `earnDeposit`. It has no other meaning: every row is keyed
+    /// The uint32 to put in the `asset` field of a signed `send_asset`, and in
+    /// `asset` of an `earn_deposit`. It has no other meaning: every row is keyed
     /// and joined by `name`.
+    ///
+    /// There is no `spot_send` action. That name is a `ledger_updates` record
+    /// kind; the node answers `unknown variant` to it.
     #[serde(default)]
     pub signing_id: u32,
     /// Total balance (spendable + hold), decimal string.

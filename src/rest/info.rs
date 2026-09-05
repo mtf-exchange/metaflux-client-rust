@@ -1526,12 +1526,15 @@ pub struct LedgerUpdate {
 }
 
 /// `user_non_funding_ledger_updates` response (the GATEWAY-served normalized
-/// union). The collection wire key is camelCase `ledgerUpdates`.
+/// union). The collection wire key is `ledger_updates`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct UserNonFundingLedgerUpdates {
-    /// Ledger-update records. Wire key is camelCase `ledgerUpdates`.
-    #[serde(rename = "ledgerUpdates", default)]
+    /// Ledger-update records.
+    // The wire key is `ledger_updates`. It was `ledgerUpdates` -- the one
+    // camelCase collection on an MTF-native snake_case wire -- so the rename
+    // that used to bridge the two is what would now break the read.
+    #[serde(default)]
     pub ledger_updates: Vec<LedgerUpdate>,
 }
 
