@@ -1134,9 +1134,9 @@ async fn user_ledger_updates_node_kind_decodes_envelope() {
     assert!(u.updates.is_empty());
 }
 
-/// `user_non_funding_ledger_updates` decodes the camelCase `ledgerUpdates` union.
+/// `user_non_funding_ledger_updates` decodes the `ledger_updates` union.
 #[tokio::test]
-async fn user_non_funding_ledger_updates_decodes_camel_union() {
+async fn user_non_funding_ledger_updates_decodes_union() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/info"))
@@ -1146,9 +1146,9 @@ async fn user_non_funding_ledger_updates_decodes_camel_union() {
         .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
             "user_non_funding_ledger_updates",
             json!({
-                "ledgerUpdates": [
+                "ledger_updates": [
                     { "coin": "USDC", "time": 1_784_800_000_001u64, "kind": "deposit",
-                      "delta": "100", "counterparty": "0xabc" },
+                      "delta": "100", "counterparty": "0xabc", "chain": "base" },
                     { "coin": "MTF", "time": 1_784_800_000_003u64, "kind": "trade",
                       "tid": 77u64, "realized_pnl": "1.5", "fee": "0.02",
                       "fee_token": "USDC" }
@@ -1167,6 +1167,7 @@ async fn user_non_funding_ledger_updates_decodes_camel_union() {
         .unwrap();
     assert_eq!(l.ledger_updates.len(), 2);
     assert_eq!(l.ledger_updates[0].coin, "USDC");
+    assert_eq!(l.ledger_updates[0].chain.as_deref(), Some("base"));
     assert_eq!(l.ledger_updates[1].tid, Some(77));
 }
 

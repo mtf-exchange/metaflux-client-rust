@@ -1492,6 +1492,9 @@ pub struct UserLedgerUpdates {
 /// Two row shapes (a trade row and a money-movement row) share `coin` + `time`;
 /// every other field is optional and varies per row. `coin` renders the market
 /// SYMBOL (a trade row) or the token SYMBOL (a money-movement row).
+///
+/// `market` is the exception: it is a market ID, not a symbol. It is the one
+/// market reference on this read the gateway does not resolve.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct LedgerUpdate {
@@ -1499,10 +1502,17 @@ pub struct LedgerUpdate {
     pub coin: String,
     /// Record timestamp (unix ms).
     pub time: u64,
-    /// Movement kind (`"deposit"` / `"spot_transfer"` / `"trade"` …).
+    /// Movement kind. Live today: `"deposit"`, `"withdraw"`, `"transfer"`,
+    /// `"liquidation"`. A VAULT deposit or withdrawal arrives as `"transfer"`.
+    ///
+    /// The next node release adds `"staking_deposit"`, `"staking_withdraw"`,
+    /// `"delegate"`, `"undelegate"`, `"staking_reward"`, `"earn_deposit"` and
+    /// `"earn_withdraw"`. This stays a free string, so a kind your build
+    /// predates decodes instead of failing.
     #[serde(default)]
     pub kind: Option<String>,
-    /// Signed balance delta, decimal string.
+    /// Signed balance delta, decimal string. Signed from the side the holder
+    /// could spend a moment earlier: `-` leaves that side.
     #[serde(default)]
     pub delta: Option<String>,
     /// Counterparty address (`0x`-hex) for a transfer.
@@ -1523,6 +1533,16 @@ pub struct LedgerUpdate {
     /// Fee token symbol for a trade row.
     #[serde(default)]
     pub fee_token: Option<String>,
+    /// Perp market ID the forced close ran on. `"liquidation"` rows only.
+    #[serde(default)]
+    pub market: Option<u32>,
+    /// Whole-USDC mark the forced close was priced from. `"liquidation"` rows
+    /// only, and absent when the market had no usable mark.
+    #[serde(default)]
+    pub mark_px: Option<String>,
+    /// Source chain of a bridge inbound credit. `"deposit"` rows only.
+    #[serde(default)]
+    pub chain: Option<String>,
 }
 
 /// `user_non_funding_ledger_updates` response (the GATEWAY-served normalized
@@ -3598,35 +3618,59 @@ mod tests {
         assert_eq!(f.start_time, None);
     }
 
-    /// `user_non_funding_ledger_updates`: the 3-row union under the camelCase
-    /// `ledgerUpdates` key (values from `ledger_canonical`).
+    /// `user_non_funding_ledger_updates`: the union under the snake_case
+    /// `ledger_updates` key, and the camelCase key it replaced.
     #[test]
-    fn user_non_funding_ledger_union_decodes_camel_key() {
+    fn user_non_funding_ledger_union_decodes_snake_key() {
         let data = serde_json::json!({
-            "ledgerUpdates": [
+            "ledger_updates": [
                 { "coin": "USDC", "time": 1_784_800_000_001u64, "kind": "deposit",
-                  "delta": "100", "counterparty": "0xabc" },
-                { "coin": "PURR", "time": 1_784_800_000_002u64,
-                  "kind": "spot_transfer", "delta": "5" },
-                { "coin": "MTF", "time": 1_784_800_000_003u64, "kind": "trade",
+                  "delta": "100", "counterparty": "0xabc", "chain": "base" },
+                { "coin": "USDC", "time": 1_784_800_000_002u64,
+                  "kind": "liquidation", "delta": "-12.5", "market": 7u32,
+                  "mark_px": "104.5" },
+                { "coin": "MTF", "time": 1_784_800_000_003u64,
+                  "kind": "staking_reward", "delta": "3" },
+                { "coin": "MTF", "time": 1_784_800_000_004u64, "kind": "trade",
                   "tid": 77u64, "realized_pnl": "1.5", "fee": "0.02",
                   "fee_token": "USDC" }
             ]
         });
         let l: UserNonFundingLedgerUpdates = serde_json::from_value(data).unwrap();
-        assert_eq!(l.ledger_updates.len(), 3);
-        // Money-movement row.
+        assert_eq!(l.ledger_updates.len(), 4);
+        // Money-movement row, with the bridge chain a deposit carries.
         assert_eq!(l.ledger_updates[0].coin, "USDC");
         assert_eq!(l.ledger_updates[0].kind.as_deref(), Some("deposit"));
         assert_eq!(l.ledger_updates[0].counterparty.as_deref(), Some("0xabc"));
+        assert_eq!(l.ledger_updates[0].chain.as_deref(), Some("base"));
         assert_eq!(l.ledger_updates[0].tid, None);
+        // Forced-close row: `market` is an ID, `mark_px` the price it used.
+        assert_eq!(l.ledger_updates[1].market, Some(7));
+        assert_eq!(l.ledger_updates[1].mark_px.as_deref(), Some("104.5"));
+        assert_eq!(l.ledger_updates[1].delta.as_deref(), Some("-12.5"));
+        // A kind this build predates still decodes.
+        assert_eq!(l.ledger_updates[2].kind.as_deref(), Some("staking_reward"));
         // Trade row.
-        assert_eq!(l.ledger_updates[2].tid, Some(77));
-        assert_eq!(l.ledger_updates[2].realized_pnl.as_deref(), Some("1.5"));
-        assert_eq!(l.ledger_updates[2].fee_token.as_deref(), Some("USDC"));
-        // Round-trips back to camelCase.
+        assert_eq!(l.ledger_updates[3].tid, Some(77));
+        assert_eq!(l.ledger_updates[3].realized_pnl.as_deref(), Some("1.5"));
+        assert_eq!(l.ledger_updates[3].fee_token.as_deref(), Some("USDC"));
+        // Serializes back to snake_case, never to the retired camelCase key.
         let j = serde_json::to_value(&l).unwrap();
-        assert!(j.get("ledgerUpdates").is_some());
+        assert!(j.get("ledger_updates").is_some());
+        assert!(j.get("ledgerUpdates").is_none());
+    }
+
+    /// The retired camelCase key is NOT accepted. This is the positive control
+    /// for the test above: it fails the same way if the field simply vanished.
+    #[test]
+    fn user_non_funding_ledger_rejects_retired_camel_key() {
+        let data = serde_json::json!({
+            "ledgerUpdates": [
+                { "coin": "USDC", "time": 1u64, "kind": "deposit", "delta": "1" }
+            ]
+        });
+        let l: UserNonFundingLedgerUpdates = serde_json::from_value(data).unwrap();
+        assert!(l.ledger_updates.is_empty());
     }
 
     /// `user_ledger_updates` (node kind): envelope decodes, records stay raw JSON.
