@@ -165,6 +165,54 @@ pub struct OptionLane {
     pub next_expiry: Option<u64>,
 }
 
+/// One scope's row of the [`Reservations`] ledger.
+///
+/// Served from the release AFTER 0.9.6. A 0.9.6 node omits the ledger, so
+/// [`AccountState::reservations`] decodes as `None` against such a node in every
+/// mode — read `None` as "this node is older", never as "reserved nothing".
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ProductReservation {
+    /// The cap the owner set for this scope, whole-USDC decimal string.
+    ///
+    /// A scope the owner never set reads `"0"`, and in `standard` mode `0`
+    /// admits NOTHING. The mode is fail-closed: a fresh `standard` account
+    /// trades nothing until it allocates.
+    pub reserved: String,
+    /// USDC this scope encumbers right now, whole-USDC decimal string: cross
+    /// plus isolated perp initial margin, spot-margin initial margin, or option
+    /// escrow.
+    pub held: String,
+    /// What the pre-trade gate still admits for NEW exposure in this scope,
+    /// whole-USDC decimal string, CLAMPED at zero.
+    ///
+    /// NOT `reserved - held`. A second arm subtracts every OTHER scope's unused
+    /// reservation from the pool, so this can read `"0"` while `reserved` still
+    /// exceeds `held`. It is the figure that explains a margin rejection on an
+    /// account that holds USDC.
+    pub available: String,
+}
+
+/// The per-product reservation ledger of a `standard`-mode account.
+///
+/// The three keys are reservation SCOPES, not markets. [`Self::spot`] covers
+/// spot AND spot margin — one reservation binds both — so it is WIDER than the
+/// `spot` of the fee-schedule product rows, which splits `spot_margin` off.
+///
+/// The ledger binds ADMISSION only. No engine path and no cash path reads it, so
+/// a reservation never holds back the owner's own money and never makes the
+/// account harder to liquidate.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Reservations {
+    /// Perps.
+    pub perp: ProductReservation,
+    /// Spot AND spot margin.
+    pub spot: ProductReservation,
+    /// Options.
+    pub option: ProductReservation,
+}
+
 /// `account_state` response — one coherent per-account snapshot keyed by
 /// `address`: the ACCOUNT truths at the top level, then one summary per LANE.
 ///
@@ -234,6 +282,15 @@ pub struct AccountState {
     pub health_deferred: bool,
     /// Margin abstraction class (`"unified"` / `"standard"` / `"portfolio"`).
     pub abstraction: Abstraction,
+    /// The per-product reservation ledger. `Some` ONLY when
+    /// [`Self::abstraction`] is [`Abstraction::Standard`] — the other two modes
+    /// have no ledger, because `user_set_abstraction` clears the reservations on
+    /// the way back to `unified` and refuses to set one in any other mode.
+    ///
+    /// Served from the release AFTER 0.9.6, so a 0.9.6 node decodes this as
+    /// `None` in every mode.
+    #[serde(default)]
+    pub reservations: Option<Reservations>,
     /// Portfolio-margin net account value, whole-USDC decimal string. CROSS-lane
     /// — see the type doc. `None` at [`AccountDetail::Margin`].
     #[serde(default)]

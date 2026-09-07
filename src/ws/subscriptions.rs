@@ -114,7 +114,10 @@ pub enum Subscription {
         /// User `0x` address.
         user: Address,
     },
-    /// Per-account risk / liquidation notifications.
+    /// Per-account notifications: the risk / liquidation kinds, plus
+    /// `action_dropped` for an action the commit loop dropped before dispatch.
+    /// A drop notice arrives only when the signature verified, so a badly
+    /// signed action produces none.
     Notifications {
         /// User `0x` address.
         user: Address,

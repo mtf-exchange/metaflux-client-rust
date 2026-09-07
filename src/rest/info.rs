@@ -57,7 +57,8 @@ mod venue;
 mod volume;
 
 pub use account::{
-    AccountDetail, AccountState, MarginLane, OptionLane, PerpLane, SpotLane, TokenBalance,
+    AccountDetail, AccountState, MarginLane, OptionLane, PerpLane, ProductReservation,
+    Reservations, SpotLane, TokenBalance,
 };
 pub use bridge::{
     BridgeChainConfigRow, BridgeOutboxEntry, BridgeOutboxStatus, BridgeScanPolicy,
