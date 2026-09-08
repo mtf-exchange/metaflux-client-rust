@@ -1131,6 +1131,11 @@ pub struct Fill {
     #[serde(deserialize_with = "crate::types::order::id_wire::u64_flex")]
     pub tid: u64,
     /// Fee charged, whole-USDC decimal string.
+    ///
+    /// A SPOT fill reads `"0"` on BOTH legs today. The seller's USDC fee IS
+    /// charged, but the spot lane records no fee on the fill, so the row cannot
+    /// report it. Derive a spot fee from the balance delta or from rate ×
+    /// notional; do not read `"0"` as free.
     pub fee: String,
     /// Coin symbol the `fee` is denominated in.
     ///
@@ -1142,11 +1147,20 @@ pub struct Fill {
     /// `None` on a record served by a node that predates the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fee_token: Option<String>,
-    /// Realized PnL of the closed portion, signed decimal string.
+    /// Realized PnL of the closed portion, signed decimal string. Always `"0"`
+    /// on a spot fill: spot holds no position, so it realizes no PnL.
     pub closed_pnl: String,
-    /// Human direction label (`"Open Long"` / `"Close Short"` / `"Buy"` …).
+    /// Human direction label.
+    ///
+    /// A PERP fill uses six tokens: `"Open Long"`, `"Close Long"`,
+    /// `"Open Short"`, `"Close Short"`, and — when the fill crosses through
+    /// zero — `"Long > Short"` or `"Short > Long"`.
+    ///
+    /// A SPOT fill uses `"Buy"` (side `"B"`) or `"Sell"` (side `"A"`): spot
+    /// holds no position, so no open/close token applies.
     pub dir: String,
-    /// Signed position size BEFORE the fill, size-plane decimal string.
+    /// Signed position size BEFORE the fill, size-plane decimal string. Always
+    /// `"0"` on a spot fill: spot holds no position leg.
     pub start_position: String,
     /// Committed block height. Present on a node-ring fill; absent on an
     /// archive-normalized fill.
@@ -1182,6 +1196,13 @@ pub struct Fill {
     /// The parent TWAP this slice belongs to. Present when `cause` is `"twap"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub twap_id: Option<u64>,
+    /// How many legs this row folds. Present ONLY on a response to
+    /// [`Info::user_fills_aggregated`]; `1` on a fill that stands alone.
+    ///
+    /// Read it before joining `tid` to the trade tape: a folded row carries the
+    /// FIRST leg's `tid`, so it joins one of its `n` prints, not all of them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n: Option<u32>,
 }
 
 /// One resting order inside an [`OrderStatus::Resting`] result.
@@ -2519,16 +2540,19 @@ impl<'a> Info<'a> {
 
     /// `user_fills` — account-scoped fill history, keyed by `address`.
     ///
-    /// One read, two asks. Pass no window for the recent records, newest first;
-    /// `limit` then caps the most-recent records (absent = the full ring). Pass
-    /// `start_time` / `end_time` to filter the same records by consensus `time`,
-    /// which returns them oldest first. Each bound is sent only when `Some`; an
-    /// absent bound is open, and the response echoes both.
+    /// One read, two asks. Pass no window for the recent records; `limit` then
+    /// caps the most-recent records (absent = the full ring). Pass `start_time`
+    /// / `end_time` to filter the same records by consensus `time`. Both return
+    /// NEWEST first. Each bound is sent only when `Some`; an absent bound is
+    /// open, and the response echoes both.
     ///
     /// The gateway merges deep archive history into the node fill serializer's
     /// own response and re-applies `limit`. A SPOT `sz` rides the raw integer
     /// plane today; the human plane is the owner-ruled target. A merged
     /// archive-normalized fill may omit `block`.
+    ///
+    /// For one row per ORDER instead of one row per leg, use
+    /// [`Info::user_fills_aggregated`].
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -2539,10 +2563,54 @@ impl<'a> Info<'a> {
         start_time: Option<u64>,
         end_time: Option<u64>,
     ) -> Result<UserFills, ClientError> {
+        self.user_fills_body(addr, limit, start_time, end_time, false)
+            .await
+    }
+
+    /// `user_fills` with `aggregate: true` — ONE row per order execution in one
+    /// block, instead of one row per leg.
+    ///
+    /// The folded row carries the size-weighted average `px`, the summed `sz` /
+    /// `fee` / `closed_pnl`, a `dir` classified from the whole size, and
+    /// [`Fill::n`], the leg count. `limit` counts FOLDED rows.
+    ///
+    /// Use it on the recent window only: a window old enough to reach the deep
+    /// archive returns those rows per-leg beside the folded ones.
+    ///
+    /// NOT LIVE YET. A node without it does not reject the field — it IGNORES
+    /// it and answers the per-leg rows, so this call succeeds and the fold
+    /// silently did not happen. Detect it by the presence of [`Fill::n`], never
+    /// by the row count: a folded response always carries `n`, and `n` is 1 for
+    /// a fill that stood alone.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn user_fills_aggregated(
+        &self,
+        addr: Address,
+        limit: Option<u32>,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+    ) -> Result<UserFills, ClientError> {
+        self.user_fills_body(addr, limit, start_time, end_time, true)
+            .await
+    }
+
+    async fn user_fills_body(
+        &self,
+        addr: Address,
+        limit: Option<u32>,
+        start_time: Option<u64>,
+        end_time: Option<u64>,
+        aggregate: bool,
+    ) -> Result<UserFills, ClientError> {
         let mut body = json!({ "type": "user_fills", "address": addr });
+        let obj = body.as_object_mut().expect("json! produced an object");
         if let Some(l) = limit {
-            let obj = body.as_object_mut().expect("json! produced an object");
             obj.insert("limit".into(), json!(l));
+        }
+        if aggregate {
+            obj.insert("aggregate".into(), json!(true));
         }
         insert_time_window(&mut body, start_time, end_time);
         self.client.post_json("/info", &body).await
