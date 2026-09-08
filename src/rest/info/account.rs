@@ -296,6 +296,14 @@ pub struct AccountState {
     /// pooled row until it re-enters the mode.
     #[serde(default)]
     pub reservations: Option<Reservations>,
+    /// `Some` ONLY when [`Self::abstraction`] is [`Abstraction::Standard`].
+    /// `true` = the account holds two USDC wallets (it entered `standard` under
+    /// the live split gate); `false` = one pooled balance, the posture of an
+    /// account that entered before the arm. Read it before you interpret
+    /// `reservations.spot`. Served from node 0.9.7; an older node decodes this
+    /// as `None`.
+    #[serde(default)]
+    pub split: Option<bool>,
     /// Portfolio-margin net account value, whole-USDC decimal string. CROSS-lane
     /// — see the type doc. `None` at [`AccountDetail::Margin`].
     #[serde(default)]
