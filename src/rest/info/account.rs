@@ -289,6 +289,11 @@ pub struct AccountState {
     ///
     /// Served from the release AFTER 0.9.6, so a 0.9.6 node decodes this as
     /// `None` in every mode.
+    ///
+    /// A split `standard` account (node 0.9.7 and later) has its own spot
+    /// wallet, so its `spot` row reads `reserved: "0"` and `available` is that
+    /// wallet. A `standard` account that entered before the split keeps the
+    /// pooled row until it re-enters the mode.
     #[serde(default)]
     pub reservations: Option<Reservations>,
     /// Portfolio-margin net account value, whole-USDC decimal string. CROSS-lane

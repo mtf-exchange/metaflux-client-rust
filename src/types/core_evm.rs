@@ -18,7 +18,9 @@
 //! 1. **Spot MTF**, when the balance covers the fee. A transfer OF MTF needs
 //!    `amount + fee`, because both debits hit one balance.
 //! 2. **USDC at the MTF reference price**, when spot MTF is short. It comes out of
-//!    withdrawable collateral, so collateral that backs a position cannot pay it.
+//!    withdrawable collateral — or, for a split `standard` account (node 0.9.7
+//!    and later), out of the spot wallet — so collateral that backs a position
+//!    cannot pay it.
 //! 3. **Neither covers the fee** — the whole transfer is refused:
 //!    `insufficient MTF or USDC for the core->evm fee`.
 //!

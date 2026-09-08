@@ -121,6 +121,9 @@ impl<'a> Exchange<'a> {
 
     /// Move USD between the spot and perp class under the typed scheme.
     ///
+    /// Accepted only by a split `standard` account (node 0.9.7 and later).
+    /// Every other account holds ONE USDC balance and is refused.
+    ///
     /// `ntl` is a canonical decimal string.
     ///
     /// # Errors
