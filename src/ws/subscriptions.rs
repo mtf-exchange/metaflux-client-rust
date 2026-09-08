@@ -5,7 +5,7 @@
 //! for inbound channel frames.
 //!
 //! Wire contract (MTF-native, snake_case `type`), mirroring the node's WS
-//! `subscribe` parser and verified against `wss://api.devnet.mtf.exchange`:
+//! `subscribe` parser and verified against `wss://api.testnet.mtf.exchange`:
 //!
 //! - **Per-market** channels carry `coin` — a **JSON string**, never a bare
 //!   number. The node canonicalizes it through the committed universe: a

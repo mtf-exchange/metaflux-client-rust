@@ -28,7 +28,7 @@ use metaflux_client::mip3::params::{PerpDeployBuilder, SpotDeployBuilder};
 use metaflux_client::mip3::templates::{PRESET_NAMES, preset_by_name};
 use metaflux_client::wallet::{Address, Wallet};
 
-const DEFAULT_RPC: &str = "https://api.devnet.mtf.exchange";
+const DEFAULT_RPC: &str = "https://api.testnet.mtf.exchange";
 
 #[derive(Parser, Debug)]
 #[command(

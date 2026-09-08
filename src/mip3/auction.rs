@@ -231,7 +231,7 @@ mod tests {
 
     #[tokio::test]
     async fn await_deploy_credit_rejects_zero_wait() {
-        let c = Client::new("https://api.devnet.mtf.exchange").unwrap();
+        let c = Client::new("https://api.testnet.mtf.exchange").unwrap();
         let w = Wallet::random_for_testing();
         #[allow(deprecated)]
         let err = c.await_deploy_credit(&w, Duration::ZERO).await.unwrap_err();
