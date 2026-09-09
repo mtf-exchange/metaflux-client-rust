@@ -53,6 +53,21 @@ struct FaucetRequest<'a> {
 /// `amount` is a whole-USDC integer; pass `None` for the faucet's full
 /// default grant (capped server-side).
 ///
+/// **One claim per address, EVER — and a partial claim FORFEITS the rest.**
+/// `Some(1)` grants 1 USDC and closes the address on both lanes. The address
+/// cannot claim the other 2999 USDC later. Pass `None` unless a smaller grant
+/// is worth more to you than the full one.
+///
+/// The source IP gets one claim per day. That window is NODE-LOCAL and it
+/// resets when the faucet node restarts, so it is a speed bump, not a sybil
+/// control. The per-address rule and the reserve balance bound the give-away.
+///
+/// **NOT LIVE YET.** The node change is landed and unreleased. The faucet node
+/// picks up both rules only when it restarts, at the next freeze-swap release.
+/// Until then the live faucet allows one claim per IP per MINUTE, and an
+/// address that claimed a partial `amount` can claim again after a faucet
+/// restart. Build against the rules above; do not depend on the old ones.
+///
 /// `faucet_base_url` is the faucet's OWN origin (e.g.
 /// `http://localhost:8080` on devnet, `https://api.testnet.mtf.exchange/faucet` in
 /// production) — NOT the trading API base URL.
@@ -64,9 +79,12 @@ struct FaucetRequest<'a> {
 /// - [`ClientError::Builder`] if `faucet_base_url` is not `http(s)://` or the
 ///   HTTP client cannot be constructed.
 /// - [`ClientError::ProtocolError`] on a non-2xx status, carrying the server's
-///   `{ "error": ... }` message — notably `429` (rate-limited: per-address
-///   once-ever, per-IP 1/minute), `400` (bad/zero address), `503` (backlog full),
-///   or a mainnet refusal.
+///   `{ "error": ... }` message — notably `429`, which covers two rules:
+///   `address already funded` for the once-ever per-address rule, and the
+///   per-IP window. NOT LIVE YET — see the notice above: today the live chain
+///   allows one grant per IP per MINUTE, and an address that took a partial
+///   `amount` can claim the remainder after the faucet node restarts. Also
+///   `400` (bad/zero address), `503` (backlog full), or a mainnet refusal.
 /// - [`ClientError::Http`] / [`ClientError::Decode`] on transport / decode
 ///   failure.
 pub async fn request_faucet(

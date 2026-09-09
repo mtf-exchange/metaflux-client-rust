@@ -42,6 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let b = Wallet::from_hex("0x4b2e8d6604f1a93cc0ddee0011223344556677889900aabbccddeeff00112233")?;
     println!("A(maker) {} / B(taker) {}", a.address(), b.address());
 
+    // Only ONE of these two can be funded per day: the faucet allows one grant
+    // per IP per day, and both claims leave from this host. The second prints
+    // "skipped" and the probe then runs against an unfunded taker. Fund B by
+    // another route, or run the two halves a day apart.
     for (who, w) in [("A", &a), ("B", &b)] {
         match request_faucet(&base, &w.address().to_string(), None).await {
             Ok(r) => println!("faucet {who}: usdc={} {}", r.usdc, r.status),

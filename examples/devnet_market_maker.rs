@@ -303,11 +303,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {}", w.address());
     }
 
-    // Top up every wallet a few times so reserved margin is comfortable.
-    for _ in 0..5 {
-        for w in &wallets {
-            let _ = request_faucet(&base, &w.address().to_string(), None).await;
-        }
+    // One grant per address, ever, and one per IP per day: a second pass would
+    // only collect 429s. Fund the wallets elsewhere if this is not enough.
+    for w in &wallets {
+        let _ = request_faucet(&base, &w.address().to_string(), None).await;
     }
     tokio::time::sleep(Duration::from_secs(3)).await;
 
