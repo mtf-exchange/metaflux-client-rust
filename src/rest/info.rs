@@ -630,6 +630,32 @@ pub struct Delegation {
     /// Accrued but unclaimed rewards for this delegation, canonical decimal
     /// string.
     pub pending_rewards: String,
+    /// The lock tier of this row, in months — `0` (flexible), `1`, `6` or `24`.
+    ///
+    /// CONTEXT ONLY: it tells a delegator which tier to move to. Never compute
+    /// the reward weight from it. Read [`Self::reward_weight`] instead.
+    ///
+    /// `None` on a node that predates the field. Absent means unknown, never
+    /// flexible.
+    #[serde(default)]
+    pub lock_months: Option<u8>,
+    /// The weight the chain applies to this row when it distributes a reward.
+    /// Canonical decimal string.
+    ///
+    /// THIS IS NOT DERIVABLE FROM [`Self::lock_months`]. The weight also depends
+    /// on the multiplier stored on the row, and on whether the validator holds a
+    /// locked-stake allowlist seat. A row on a validator without that seat is
+    /// capped to `amount` x1.0, however long the row is locked. That cap is not
+    /// zero: the row still earns, at the rate an unlocked row would earn if an
+    /// unlocked row earned at all.
+    ///
+    /// `"0"` beside a non-zero [`Self::amount`] means the row earns NOTHING from
+    /// a distribution. It does not mean "not paid yet".
+    ///
+    /// `None` on a node that predates the field. Absent means unknown, never
+    /// zero.
+    #[serde(default)]
+    pub reward_weight: Option<String>,
 }
 
 /// One pending (queued) undelegation.

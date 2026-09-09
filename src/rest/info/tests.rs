@@ -70,6 +70,34 @@ fn staking_snapshot_absent_free_pool_is_none_not_zero() {
     assert_eq!(s.undelegated_pool_balance.as_deref(), Some("250"));
 }
 
+/// A weight of `"0"` beside a large `amount` is the whole point of the field:
+/// the row earns nothing at its tier. An older node sends neither field, and
+/// absent must stay unknown so it cannot read as that zero.
+#[test]
+fn delegation_row_carries_lock_tier_and_weight() {
+    let served = serde_json::json!({
+        "validator": "0x0000000000000000000000000000000000000009",
+        "amount": "1000",
+        "since_ts": 1_700_000_000_000u64,
+        "pending_rewards": "0",
+        "lock_months": 0,
+        "reward_weight": "0",
+    });
+    let d: Delegation = serde_json::from_value(served).unwrap();
+    assert_eq!(d.lock_months, Some(0));
+    assert_eq!(d.reward_weight.as_deref(), Some("0"));
+
+    let legacy = serde_json::json!({
+        "validator": "0x0000000000000000000000000000000000000009",
+        "amount": "1000",
+        "since_ts": 1_700_000_000_000u64,
+        "pending_rewards": "0",
+    });
+    let d: Delegation = serde_json::from_value(legacy).unwrap();
+    assert_eq!(d.lock_months, None);
+    assert_eq!(d.reward_weight, None);
+}
+
 /// Stamp the committed as-of block onto an overview-shape fixture.
 fn with_as_of(mut body: serde_json::Value) -> serde_json::Value {
     body["height"] = serde_json::json!(562u64);

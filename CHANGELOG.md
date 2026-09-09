@@ -86,6 +86,25 @@ Earlier entries in this file are trimmed of the removed kind. The wire they
 described no longer exists, and a changelog that still teaches it misleads a
 reader who starts at the top.
 
+### Added
+
+- **`Delegation::lock_months` and `Delegation::reward_weight`** on every row of
+  `staking_state`. Both are `Option` and both default, so a row from a node that
+  predates them decodes as `None`.
+
+  `reward_weight` is the weight the chain applies to the row in a distribution.
+  It is NOT derivable from `lock_months`: it also follows the multiplier stored
+  on the row, and the validator's locked-stake allowlist seat. A row on a
+  validator without that seat is capped to `amount` x1.0, however long the row
+  is locked. That cap is not zero.
+
+  A weight of `"0"` beside a non-zero `amount` means the row earns nothing from
+  a distribution. Before these fields, that case and "not paid yet" both read as
+  `"pending_rewards": "0"`, and a delegator could not tell them apart.
+
+  `lock_months` is CONTEXT — it tells a delegator which tier to move to. Do not
+  compute the weight from it.
+
 ## [0.22.0] — 2026-08-29
 
 **The chain does not serve this shape yet.** The reshape ships in node 0.8.14,
