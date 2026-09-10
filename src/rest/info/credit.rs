@@ -117,7 +117,7 @@ impl Info<'_> {
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn builder_state(&self, user: Address) -> Result<BuilderState, ClientError> {
         self.client
-            .post_json("/info", &json!({ "type": "builder_state", "user": user }))
+            .post_json("/info", &json!({ "type": "broker_state", "address": user }))
             .await
     }
 
@@ -143,7 +143,7 @@ impl Info<'_> {
         self.client
             .post_json(
                 "/info",
-                &json!({ "type": "approved_builders", "address": addr }),
+                &json!({ "type": "approved_brokers", "address": addr }),
             )
             .await
     }
