@@ -896,6 +896,16 @@ pub struct MarketMeta {
     /// Whether the market is halted. `None` on the static `markets_meta` read.
     #[serde(default)]
     pub halted: Option<bool>,
+    /// `Some(true)` ONLY on a settled market: every order is refused, reduce-only
+    /// included, and the delist closed every open position at `settled_px`.
+    /// `None` on a live market and on the static `markets_meta` read. A settled
+    /// market also reads `halted: Some(true)`, so test this field first.
+    #[serde(default)]
+    pub settled: Option<bool>,
+    /// Whole-USDC price the delist closed every position at. `None` when no
+    /// position was open, or when the market is not settled.
+    #[serde(default)]
+    pub settled_px: Option<String>,
     /// Order-book mid price, whole-USDC decimal string; `None` when the book is
     /// one-sided or the read is static.
     #[serde(default)]
@@ -1018,6 +1028,15 @@ pub struct MarketDynamic {
     /// Whether the market is halted.
     #[serde(default)]
     pub halted: bool,
+    /// `Some(true)` ONLY on a settled market: every order is refused and the
+    /// delist closed every open position at `settled_px`. `None` otherwise. A
+    /// settled market also reads `halted: true`, so test this field first.
+    #[serde(default)]
+    pub settled: Option<bool>,
+    /// Whole-USDC price the delist closed every position at. `None` when no
+    /// position was open, or when the market is not settled.
+    #[serde(default)]
+    pub settled_px: Option<String>,
 }
 
 /// One spot pair inside a [`SpotMeta`].

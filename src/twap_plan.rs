@@ -287,6 +287,8 @@ mod tests {
             oi_cap: None,
             max_market_order_ntl: None,
             halted: Some(false),
+            settled: None,
+            settled_px: None,
             mid_px: None,
             impact_pxs: None,
             px_stale: None,
