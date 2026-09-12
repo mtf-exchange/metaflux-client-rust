@@ -208,7 +208,14 @@ impl<'a> Exchange<'a> {
     /// both the digest and the posted bytes are unchanged.
     ///
     /// `tif` accepts `ioc` / `gtc` / `alo`; a `gtc` / `alo` residual rests on the
-    /// book against escrowed funds. `limit_px` must be `> 0`.
+    /// book against escrowed funds. A `limit_px` of `0` places a MARKET order,
+    /// which needs `tif: ioc` — it has no price to rest at.
+    ///
+    /// From the release after node 0.9.7, an order the balance cannot fund at
+    /// all is refused: `insufficient spot balance`. Node 0.9.7 accepts the same
+    /// order and answers a fill of size `"0"`. One exception stays an accepted
+    /// no-op: a market buy that holds quote, on a pair that carries no ask from
+    /// another account.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

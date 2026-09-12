@@ -113,14 +113,25 @@ pub struct ConvertToMultiSigUser {
 
 /// Action — set the account's margin mode, or a per-product reservation.
 ///
-/// A reservation is a ceiling on ENCUMBRANCE, not on spending: it caps what a
-/// product may have committed at one time (perp margin, an option writer's
-/// escrow, a spot-margin borrow). An option premium and a plain spot buy are
-/// conversions, so no reservation bounds them.
+/// `standard` mode keeps two USDC wallets, a perp wallet and a spot wallet.
+/// `usd_class_transfer` moves USDC between them. A mode change needs a flat
+/// account.
 ///
-/// Entering `standard` mode with no reservations admits nothing — every ceiling
-/// starts at zero. A mode change needs a flat account; a reservation change does
-/// not, and lowering one is always allowed.
+/// A reservation (`kind` 1, 2 or 3) applies only to a pooled `standard`
+/// account: one that entered the mode before the split gate (block 5,710,001 on
+/// testnet), so `account_state` reads `split: false`. A reservation is a ceiling
+/// on ENCUMBRANCE, not on spending: it caps what a product may have committed
+/// at one time (perp margin, an option writer's escrow, a spot-margin borrow).
+/// An option premium and a plain spot buy are conversions, so no reservation
+/// bounds them. A scope with no reservation admits nothing. A reservation change
+/// does not need a flat account, and lowering one is always allowed.
+///
+/// From the release after node 0.9.7, a split account is refused every `kind`
+/// 1, 2 and 3, `"0"` included: `a split standard account has no reservations`.
+/// Node 0.9.7 still binds a split account by the `perp` and `option`
+/// reservations wherever they cap ENCUMBRANCE: it admits no perp order and no
+/// option WRITE until one is set. An option BUY is a conversion, so the perp
+/// wallet funds it and 0.9.7 admits it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct UserSetAbstraction {

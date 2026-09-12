@@ -698,8 +698,11 @@ pub enum Abstraction {
     /// Cross-collateral margin (the default).
     #[default]
     Unified,
-    /// Per-product reservations: collateral one product has committed is not
-    /// available to another. Set with `user_set_abstraction`.
+    /// Two USDC wallets, a perp wallet and a spot wallet, moved by
+    /// `usd_class_transfer`. Set with `user_set_abstraction`. An account that
+    /// entered before the split gate (block 5,710,001 on testnet) keeps one
+    /// pooled balance with per-product reservations until it leaves `standard`
+    /// and enters it again. Read [`AccountState::split`].
     Standard,
     /// Portfolio margin (the account is enrolled).
     Portfolio,

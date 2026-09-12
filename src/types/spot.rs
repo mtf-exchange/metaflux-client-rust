@@ -3,9 +3,9 @@
 //! The spot order engine is a separate CLOB from the perp book: orders
 //! reference a spot `pair` id (not a perp `market` id) and trade raw base lots
 //! against a quote. `tif` accepts `ioc`, `gtc` and `alo`; a `gtc` / `alo`
-//! residual RESTS on the book against escrowed funds. A limit is required
-//! (`limit_px > 0`) — the node rejects a market order. [`SpotOrder::ioc_limit`]
-//! defaults `tif` to [`TimeInForce::Ioc`].
+//! residual RESTS on the book against escrowed funds. A `limit_px` of `0`
+//! places a MARKET order, which needs `tif: ioc` — it has no price to rest at.
+//! [`SpotOrder::ioc_limit`] defaults `tif` to [`TimeInForce::Ioc`].
 //!
 //! ## Who owns the order
 //!
@@ -58,8 +58,10 @@ pub struct SpotOrder {
     pub side: Side,
     /// Size in raw base lots (u64).
     pub size: u64,
-    /// Limit price on the 1e8 fixed-point price plane (u64). Must be `> 0` — a
-    /// market (px = 0) order is rejected.
+    /// Limit price on the 1e8 fixed-point price plane (u64). `0` places a
+    /// MARKET order: it crosses the book at whatever price rests, and it never
+    /// rests itself, so it needs `tif: ioc`. A `gtc` / `alo` order at `0` is
+    /// rejected: `market order requires tif=ioc`.
     pub limit_px: u64,
     /// Time-in-force (`ioc` / `gtc` / `alo`). Defaults to [`TimeInForce::Ioc`]
     /// via [`SpotOrder::ioc_limit`].
@@ -78,8 +80,9 @@ impl SpotOrder {
     /// `tif` defaults to [`TimeInForce::Ioc`] and `stp_mode` to
     /// [`StpMode::CancelOldest`] (the engine default); set
     /// [`SpotOrder::cloid`] / [`SpotOrder::stp_mode`] afterwards to override.
-    /// `limit_px` must be `> 0` for the node to accept it. For agent-placed
-    /// orders add an owner with [`SpotOrder::with_owner`].
+    /// A `limit_px` of `0` makes it a market order, which the default `ioc`
+    /// allows. For agent-placed orders add an owner with
+    /// [`SpotOrder::with_owner`].
     #[must_use]
     pub const fn ioc_limit(pair: u32, side: Side, size: u64, limit_px: u64) -> Self {
         Self {
