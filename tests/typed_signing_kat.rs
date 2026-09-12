@@ -367,6 +367,55 @@ fn newly_typed_kat_vectors_match_pinned_digests() {
     }
 }
 
+/// (1c2) `vault_modify` signs every field the node applies, each optional one
+/// as a presence flag plus a value. Three vectors pin the rule that costs a
+/// leader the action when a signer gets it wrong: an ABSENT fee and an explicit
+/// `0` fee are different digests, and so are an absent pause and an explicit
+/// `false`.
+///
+/// The three answers are derived from the node's own type string with an
+/// INDEPENDENT EIP-712 build (foundry `cast keccak`), controlled against the
+/// `ApproveAgent` vector above, so they do not restate this encoder.
+///
+/// NOT LIVE YET: the node rebuilds this digest from the next release.
+#[test]
+fn vault_modify_kat_binds_every_applied_field() {
+    let vault_modify =
+        |fee: Option<u16>, paused: Option<bool>, lock: Option<u64>| TypedAction::VaultModify {
+            metaflux_chain: "Testnet".into(),
+            vault_id: 42,
+            new_name: "renamed-vault".into(),
+            has_new_lock_period_secs: lock.is_some(),
+            new_lock_period_secs: lock.unwrap_or_default(),
+            has_new_management_fee_bps: fee.is_some(),
+            new_management_fee_bps: fee.unwrap_or_default(),
+            has_new_paused: paused.is_some(),
+            new_paused: paused.unwrap_or_default(),
+            nonce: 17,
+        };
+    let cases: Vec<(TypedAction, &str)> = vec![
+        (
+            vault_modify(Some(250), Some(true), None),
+            "0eb6b7d3a72e593968d57ded92ce53ed85c8a7e5d98dacc86c9b1fdfa61b80d4",
+        ),
+        (
+            vault_modify(None, None, None),
+            "44d0d36ce7b3597ecf113e7e1e64c31365ea26252887adb099f17ce50816e4fb",
+        ),
+        (
+            vault_modify(Some(0), Some(false), None),
+            "45829ed47b2d3563c8ecb9e24040798156e1cd3323f5cc3f5e57383b0b6c9657",
+        ),
+    ];
+    for (action, want) in &cases {
+        assert_eq!(
+            hex::encode(_typed_digest_for_test(action)),
+            *want,
+            "vault_modify digest drift for {action:?}"
+        );
+    }
+}
+
 /// (1d) The optional-flatten ABSENT variants must reproduce the frozen
 /// contract digests the TS SDK + server pin: `create_sub_account` with NO index
 /// (`hasExplicitIndex=false`, `explicitIndex=0`) and `cancel_all_orders` with NO
@@ -707,6 +756,12 @@ fn every_typed_action_signs_and_recovers() {
             metaflux_chain: chain.clone(),
             vault_id: 42,
             new_name: "renamed".into(),
+            has_new_lock_period_secs: false,
+            new_lock_period_secs: 0,
+            has_new_management_fee_bps: true,
+            new_management_fee_bps: 250,
+            has_new_paused: true,
+            new_paused: true,
             nonce: 14,
         },
         TypedAction::SpotMarginClose {
