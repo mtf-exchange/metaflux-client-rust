@@ -174,8 +174,17 @@ const LINK_STAKING_USER_TYPE: &[u8] =
     b"MetaFluxTransaction:LinkStakingUser(string metafluxChain,address target,uint64 nonce)";
 const CREATE_VAULT_TYPE: &[u8] =
     b"MetaFluxTransaction:CreateVault(string metafluxChain,string name,uint64 lockPeriodSecs,uint8 kind,uint64 nonce)";
+/// Binds EVERY field `vault_modify` applies, so a relay cannot add a fee raise
+/// or a pause to a signature the leader gave for a rename. Each optional field
+/// is a presence flag plus a value: an absent key and an explicit `0` fee (or
+/// `false` pause) are DIFFERENT digests, so one signature covers exactly one
+/// wire form.
+///
+/// NOT LIVE YET: the node accepts it from the next release. The retired narrow
+/// form was `VaultModify(string metafluxChain,uint64 vaultId,string newName,
+/// uint64 nonce)`; the two forms do not interoperate in either direction.
 const VAULT_MODIFY_TYPE: &[u8] =
-    b"MetaFluxTransaction:VaultModify(string metafluxChain,uint64 vaultId,string newName,uint64 nonce)";
+    b"MetaFluxTransaction:VaultModify(string metafluxChain,uint64 vaultId,string newName,bool hasNewLockPeriodSecs,uint64 newLockPeriodSecs,bool hasNewManagementFeeBps,uint16 newManagementFeeBps,bool hasNewPaused,bool newPaused,uint64 nonce)";
 const SPOT_MARGIN_CLOSE_TYPE: &[u8] =
     b"MetaFluxTransaction:SpotMarginClose(string metafluxChain,uint32 pair,uint64 limitPx,uint64 nonce)";
 const UPDATE_ISOLATED_MARGIN_TYPE: &[u8] =
@@ -459,14 +468,32 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
-    /// `VaultModify(string metafluxChain,uint64 vaultId,string newName,uint64 nonce)`
+    /// `VaultModify(string metafluxChain,uint64 vaultId,string newName,bool hasNewLockPeriodSecs,uint64 newLockPeriodSecs,bool hasNewManagementFeeBps,uint16 newManagementFeeBps,bool hasNewPaused,bool newPaused,uint64 nonce)`
+    ///
+    /// Derive each `has_*` flag from the wire key's presence
+    /// (`Option::is_some()`) and each value from the same option
+    /// (`unwrap_or_default()`). A flag that disagrees with the payload signs a
+    /// digest the node does not rebuild, and the action is refused.
     VaultModify {
         /// Chain tag.
         metaflux_chain: String,
         /// Vault id.
         vault_id: u64,
-        /// New vault name.
+        /// New vault name (`""` when the payload sends no name; the node
+        /// refuses an empty name, so `""` can only mean unchanged).
         new_name: String,
+        /// The payload carries `new_lock_period_secs`.
+        has_new_lock_period_secs: bool,
+        /// New withdrawal lock in seconds (`0` when absent).
+        new_lock_period_secs: u64,
+        /// The payload carries `new_management_fee_bps`.
+        has_new_management_fee_bps: bool,
+        /// New management fee in bps (`0` when absent).
+        new_management_fee_bps: u16,
+        /// The payload carries `new_paused`.
+        has_new_paused: bool,
+        /// New paused flag (`false` when absent).
+        new_paused: bool,
         /// Envelope nonce.
         nonce: u64,
     },
@@ -1531,11 +1558,23 @@ impl TypedAction {
                 metaflux_chain,
                 vault_id,
                 new_name,
+                has_new_lock_period_secs,
+                new_lock_period_secs,
+                has_new_management_fee_bps,
+                new_management_fee_bps,
+                has_new_paused,
+                new_paused,
                 nonce,
             } => vec![
                 enc_string(metaflux_chain),
                 enc_u64(*vault_id),
                 enc_string(new_name),
+                enc_bool(*has_new_lock_period_secs),
+                enc_u64(*new_lock_period_secs),
+                enc_bool(*has_new_management_fee_bps),
+                enc_u16(*new_management_fee_bps),
+                enc_bool(*has_new_paused),
+                enc_bool(*new_paused),
                 enc_u64(*nonce),
             ],
             TypedAction::SpotMarginClose {

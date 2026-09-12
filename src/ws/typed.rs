@@ -80,8 +80,13 @@ pub struct WsOrderRow {
 /// One `order_updates` record: the order row plus its lifecycle outcome.
 ///
 /// `status` is `"open"`, `"filled"`, `"rejected"`, `"canceled"`,
-/// `"cancel_rejected"` or `"noop"`. It stays a `String` because the node adds
-/// statuses as it covers more events; a closed enum would reject a newer server.
+/// `"cancel_rejected"`, `"noop"` or `"parked"`. It stays a `String` because the
+/// node adds statuses as it covers more events; a closed enum would reject a
+/// newer server.
+///
+/// **`"parked"` is an ACCEPTANCE**: a TP / SL / stop leg registered off the
+/// book, awaiting its mark cross. `filled_sz`, `avg_px` and `reason` are all
+/// `null` on it. NOT LIVE YET — it ships with the next node release.
 ///
 /// **`"noop"` is a SUCCESS**, not a rejection: a `reduce_only` order with
 /// nothing left to reduce. It placed nothing, it carries no `oid`, and it must

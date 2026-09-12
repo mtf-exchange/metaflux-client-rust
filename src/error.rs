@@ -37,7 +37,14 @@ pub enum ErrorCode {
     OrderBelowMinNotional,
     /// `ORDER_SELF_TRADE`
     OrderSelfTrade,
-    /// `ORDER_DUPLICATE_CLOID`
+    /// `ORDER_DUPLICATE_CLOID` — a `cloid` names exactly one order, so the node
+    /// refuses a repeated one on the same account.
+    ///
+    /// From the next node release the rule applies PER LEG: `batch_order` dedups
+    /// every leg that carries a handle, and `scale_order` dedups its ladder
+    /// handle. Two legs of ONE action that share a handle refuse the WHOLE
+    /// action. An attempt the COMMIT refused gives its handle back, so a
+    /// re-signed retry may reuse it.
     OrderDuplicateCloid,
     /// `MARGIN_INSUFFICIENT` — carries `details` with the collateral bound.
     MarginInsufficient,
@@ -69,6 +76,20 @@ pub enum ErrorCode {
     /// `PRECONDITION_FAILED` — a state precondition the taxonomy does not
     /// name. Read `message` for the reason.
     PreconditionFailed,
+    /// `NONCE_REPLAYED` — the block builder dropped the action: this account
+    /// already used the nonce, or it sits more than 64 below the newest one the
+    /// account committed. NOTHING committed.
+    ///
+    /// It arrives at HTTP 200, because it is a commit verdict and not an
+    /// admission refusal: on an order action inside `statuses[0]`, on any other
+    /// action as the envelope's own `error`. **Do not retry the same nonce** —
+    /// re-sign above the account's newest committed nonce. One action signed
+    /// with a far-future nonce moves that anchor, and every later wall-clock
+    /// nonce is refused until the clock catches up.
+    ///
+    /// NOT LIVE YET: it ships with the next node release. Until then the same
+    /// drop reads as a timeout.
+    NonceReplayed,
     /// `INTERNAL` — a node defect, not caller input. Retry is safe.
     Internal,
     /// `UNAVAILABLE` — an upstream the request needs is down.
@@ -103,6 +124,7 @@ impl ErrorCode {
             Self::NotFound => "NOT_FOUND",
             Self::ActionUnsupported => "ACTION_UNSUPPORTED",
             Self::PreconditionFailed => "PRECONDITION_FAILED",
+            Self::NonceReplayed => "NONCE_REPLAYED",
             Self::Internal => "INTERNAL",
             Self::Unavailable => "UNAVAILABLE",
             Self::Unknown(s) => s,
@@ -135,6 +157,7 @@ impl ErrorCode {
             "NOT_FOUND" => Self::NotFound,
             "ACTION_UNSUPPORTED" => Self::ActionUnsupported,
             "PRECONDITION_FAILED" => Self::PreconditionFailed,
+            "NONCE_REPLAYED" => Self::NonceReplayed,
             "INTERNAL" => Self::Internal,
             "UNAVAILABLE" => Self::Unavailable,
             other => Self::Unknown(other.to_string()),

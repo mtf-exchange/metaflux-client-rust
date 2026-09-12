@@ -1016,8 +1016,27 @@ impl<'a> Exchange<'a> {
 
     /// As an approved agent, set an abstraction config value for `params.user`.
     ///
+    /// **NOT AVAILABLE.** The node refuses every call with
+    /// `PRECONDITION_FAILED`, whatever the sender, the target account or the
+    /// `kind`, and whether or not the sender is an approved agent of
+    /// `params.user`. An agent holds trading authority only, and the
+    /// abstraction mode is not a trading setting: leaving `standard` mode moves
+    /// the account's spot wallet into its perp wallet. The account owner signs
+    /// [`Exchange::user_set_abstraction`] from the master key instead.
+    ///
+    /// The action stays on the wire and keeps its signing type, which is
+    /// consensus-frozen. It never succeeds.
+    ///
+    /// NOT LIVE YET: the refusal ships with the next node release. Until then
+    /// an approved agent's call reports success and writes a placeholder value
+    /// that nothing reads.
+    ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[deprecated(
+        note = "the node refuses every call; the account owner must sign user_set_abstraction"
+    )]
+    #[allow(deprecated)]
     pub async fn agent_set_abstraction(
         &self,
         wallet: &Wallet,
@@ -1149,6 +1168,12 @@ impl<'a> Exchange<'a> {
 
     /// Leader updates vault configuration.
     ///
+    /// Every field rides the signed digest, so the lock period, the management
+    /// fee and the paused flag all reach the node. An earlier build signed the
+    /// name alone and dropped the other three.
+    ///
+    /// NOT LIVE YET: the node verifies this digest from the next release.
+    ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn vault_modify(
@@ -1156,15 +1181,7 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         params: &VaultModify,
     ) -> Result<Value, ClientError> {
-        // The typed `VaultModify` digest binds only `newName`; the node's frozen
-        // type string carries no lock-period / fee / paused fields, so those are
-        // dropped here.
-        self.vault_modify_typed(
-            wallet,
-            params.vault_id.0,
-            params.new_name.clone().unwrap_or_default(),
-        )
-        .await
+        self.vault_modify_typed(wallet, params).await
     }
 
     /// Follower redeems shares from a vault (subject to the per-vault lock).

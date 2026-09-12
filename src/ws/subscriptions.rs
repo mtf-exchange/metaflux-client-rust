@@ -175,8 +175,15 @@ pub enum Subscription {
         user: Address,
     },
     /// Per-(user, market) leverage / margin-mode / max-trade context.
+    ///
+    /// `coin` must name a REGISTERED PERP market. From the next node release a
+    /// spot pair, an unknown coin, or a coin that names no perp is refused with
+    /// an `error` frame (`market not found`) and no subscription is created.
+    /// Before it, such a subscribe answered a zeroed body that described no
+    /// market.
     ActiveAssetData {
-        /// Market symbol (`"BTC"`) or asset-id string (`"1"`).
+        /// Market symbol (`"BTC"`) or asset-id string (`"1"`). This channel
+        /// takes either; the REST read takes the symbol only.
         coin: String,
         /// User `0x` address.
         user: Address,

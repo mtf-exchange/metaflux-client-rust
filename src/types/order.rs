@@ -450,6 +450,7 @@ pub struct CancelAllOrders {
 ///
 /// ```json
 /// {"resting": {"oid": 12345, "cloid": "0x..."}}
+/// {"parked":  {"oid": 12346, "cloid": "0x..."}}
 /// {"filled":  {"total_sz": "100000000", "avg_px": "10050000000", "oid": 12345}}
 /// {"error":   {"code": "ORDER_INVALID_PRICE", "message": "...", "details": {…}}}
 /// {"noop":    {"reason": "position already flat, nothing to reduce"}}
@@ -483,6 +484,21 @@ pub enum OrderStatus {
     /// NOT LIVE YET: it ships with the next node release. Until then the same
     /// outcome arrives as [`OrderStatus::Error`].
     Noop(NoopStatus),
+    /// A TP / SL / stop leg ACCEPTED and parked off the book. It holds a real
+    /// oid and is an open order, but it never rests, so it carries no depth and
+    /// `l2_book` does not show it. The chain fires it when the mark crosses its
+    /// trigger price.
+    ///
+    /// **This is an ACCEPTANCE. Do not retry it.** Cancel it by its `oid`, or
+    /// by its `cloid` — both reach a parked leg.
+    ///
+    /// A `position_tpsl` group places no book order at all, so parked entries
+    /// are its WHOLE answer.
+    ///
+    /// NOT LIVE YET: it ships with the next node release. Until then a parked
+    /// leg is reported in no entry at all, so the array is shorter than the
+    /// legs the caller sent.
+    Parked(RestingStatus),
     /// A committed `chase_order`: the Chase registered and its first post-only
     /// leg rests.
     Chase {
@@ -521,7 +537,9 @@ impl OrderStatus {
     #[must_use]
     pub fn oid(&self) -> Option<OrderId> {
         match self {
-            OrderStatus::Resting(r) => Some(r.oid),
+            // A parked leg is not on the book, but its oid is real and it is
+            // the handle `cancel` takes.
+            OrderStatus::Resting(r) | OrderStatus::Parked(r) => Some(r.oid),
             OrderStatus::Filled(f) => Some(f.oid),
             // A Chase's handle is `chase_oid`; `leg_oid` moves on every reprice,
             // so it is not the id a caller cancels with.
@@ -555,7 +573,8 @@ pub struct NoopStatus {
     pub reason: String,
 }
 
-/// Payload of [`OrderStatus::Resting`].
+/// Payload of [`OrderStatus::Resting`] and of [`OrderStatus::Parked`]: the two
+/// carry the same pair of handles and differ only in where the order sits.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct RestingStatus {
@@ -803,6 +822,28 @@ mod tests {
         assert!(s.is_noop());
         assert!(!s.is_error());
         assert_eq!(s.oid(), None);
+    }
+
+    /// A `parked` entry is an ACCEPTANCE holding a real cancel handle. The node
+    /// serves the oid as a decimal-digit STRING, as it does on every other
+    /// entry. Before the variant existed the entry fell to `Other`, which drops
+    /// the oid and makes a `position_tpsl` answer unreadable.
+    #[test]
+    fn order_status_decodes_parked_and_keeps_its_cancel_handle() {
+        let j = serde_json::json!({
+            "parked": { "oid": "12346", "cloid": "0x000102030405060708090a0b0c0d0e0f" }
+        });
+        let s: OrderStatus = serde_json::from_value(j).unwrap();
+        match &s {
+            OrderStatus::Parked(p) => {
+                assert_eq!(p.oid, OrderId(12346));
+                assert!(p.cloid.is_some());
+            }
+            other => panic!("expected Parked, got {other:?}"),
+        }
+        assert_eq!(s.oid(), Some(OrderId(12346)));
+        assert!(!s.is_error());
+        assert!(!s.is_noop());
     }
 
     #[test]

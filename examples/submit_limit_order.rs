@@ -76,6 +76,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // left to reduce. A retry only burns another nonce.
                 println!("order[{i}] no-op: {}", n.reason);
             }
+            OrderStatus::Parked(p) => {
+                // ACCEPTED and off the book: a TP / SL / stop leg awaiting its
+                // mark cross. `l2_book` does not show it. Cancel it by `oid` or
+                // by `cloid`.
+                println!("order[{i}] parked: oid={} cloid={:?}", p.oid.0, p.cloid);
+            }
             OrderStatus::Chase {
                 chase_oid, leg_px, ..
             } => {

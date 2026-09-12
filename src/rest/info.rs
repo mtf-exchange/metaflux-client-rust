@@ -267,6 +267,9 @@ pub struct OpenOrder {
     pub orig_sz: Option<String>,
     /// Submit-time client order id (`0x`-hex), when the order carried one —
     /// the id-based binding key for reconcile / co-residency. `null` otherwise.
+    ///
+    /// A PARKED trigger row carries it from the next node release; it was
+    /// always `null` there before.
     #[serde(default)]
     pub cloid: Option<String>,
     /// Time-in-force token (`"alo"` / `"ioc"` / `"gtc"`), or `"trigger"` on a
@@ -1315,6 +1318,14 @@ pub struct TriggerOrderStatus {
     /// static level; when present, `trigger_px` is the RATCHETED level.
     #[serde(default)]
     pub trail_px: Option<String>,
+    /// Submit-time client order id (`0x`-hex), when the leg carried one. The
+    /// parked leg keeps it in committed state, so it survives a node restart
+    /// and `cancel_by_cloid` reaches the leg by it.
+    ///
+    /// NOT LIVE YET: it ships with the next node release. Until then a parked
+    /// leg reads `None` here whatever the submission carried.
+    #[serde(default)]
+    pub cloid: Option<String>,
 }
 
 /// `order_status` response — single-order lifecycle lookup by `oid` or `cloid`.
@@ -1370,6 +1381,17 @@ pub enum OrderStatus {
     /// Outside this node's retention view: never seen, evicted from the ring,
     /// or placed before the node last restarted. It is NOT proof the order
     /// never existed — read [`Info::historical_orders`] for the archive answer.
+    ///
+    /// Two cases leave this answer in the next node release. A cancelled SPOT
+    /// order resolves [`OrderStatus::Canceled`]. An order that neither rests nor
+    /// matches — a spot order or a scale rung — resolves
+    /// [`OrderStatus::Rejected`], as the perp lane already did.
+    ///
+    /// Still unknown after the fact: the old oid of a `modify` (query the
+    /// `cloid` or the new oid), and any order cancelled through `batch_cancel`,
+    /// `cancel_all_orders`, `cancel_scale` or `cancel_chase`. Those carry one
+    /// verdict for the whole action, so the node does not claim a per-order
+    /// outcome it cannot prove.
     Unknown,
 }
 

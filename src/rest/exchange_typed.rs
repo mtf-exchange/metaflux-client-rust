@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use crate::error::ClientError;
 use crate::rest::exchange::{Exchange, MTF_CHAIN_ID, next_nonce};
 use crate::types::defi::BorrowLendKind;
+use crate::types::vault::VaultModify;
 use crate::wallet::{
     Eip712, TypedAction, TypedActionDigest, TypedTradingAction, TypedTradingDigest, Wallet,
     metaflux_chain_tag,
@@ -475,26 +476,37 @@ impl<'a> Exchange<'a> {
         .await
     }
 
-    /// Modify a vault's name under the typed scheme.
+    /// Modify a vault's configuration under the typed scheme.
+    ///
+    /// The digest binds every field the node applies, so the posted payload
+    /// carries exactly the keys that were signed: a `None` field is signed as
+    /// absent and is left off the wire.
+    ///
+    /// NOT LIVE YET: the node verifies this digest from the next release. Until
+    /// then it rebuilds the retired narrow digest and refuses the signature.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     pub async fn vault_modify_typed(
         &self,
         wallet: &Wallet,
-        vault_id: u64,
-        new_name: impl Into<String>,
+        params: &VaultModify,
     ) -> Result<Value, ClientError> {
-        let new_name = new_name.into();
+        let wire = serde_json::to_value(params).map_err(ClientError::Decode)?;
         self.post_signed_typed(wallet, |chain, nonce| {
             let action = TypedAction::VaultModify {
                 metaflux_chain: chain,
-                vault_id,
-                new_name: new_name.clone(),
+                vault_id: params.vault_id.0,
+                new_name: params.new_name.clone().unwrap_or_default(),
+                has_new_lock_period_secs: params.new_lock_period_secs.is_some(),
+                new_lock_period_secs: params.new_lock_period_secs.unwrap_or_default(),
+                has_new_management_fee_bps: params.new_management_fee_bps.is_some(),
+                new_management_fee_bps: params.new_management_fee_bps.unwrap_or_default(),
+                has_new_paused: params.new_paused.is_some(),
+                new_paused: params.new_paused.unwrap_or_default(),
                 nonce,
             };
-            let params = json!({ "vault_id": vault_id, "new_name": new_name });
-            (action, "vault_modify", params)
+            (action, "vault_modify", wire)
         })
         .await
     }
@@ -837,10 +849,14 @@ impl<'a> Exchange<'a> {
     /// As an approved agent, set an abstraction config value for `user` under
     /// the typed scheme.
     ///
-    /// `value` is hashed verbatim as an EIP-712 string.
+    /// **NOT AVAILABLE** — see [`Exchange::agent_set_abstraction`]. The node
+    /// refuses every call. `value` is hashed verbatim as an EIP-712 string.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    #[deprecated(
+        note = "the node refuses every call; the account owner must sign user_set_abstraction"
+    )]
     pub async fn agent_set_abstraction_typed(
         &self,
         wallet: &Wallet,

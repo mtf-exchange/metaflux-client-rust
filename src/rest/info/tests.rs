@@ -897,7 +897,8 @@ fn order_status_triggered_decodes() {
         "trigger": {
             "oid": 9u64, "coin": "BTC", "side": "A", "trigger_px": "60000",
             "trigger_above": false, "sz": "1", "registered_at": 3u64,
-            "fired": false, "is_market": false, "limit_px": "59900"
+            "fired": false, "is_market": false, "limit_px": "59900",
+            "cloid": null
         }
     });
     let OrderStatus::Triggered { trigger } = serde_json::from_value(data).unwrap() else {
@@ -906,6 +907,9 @@ fn order_status_triggered_decodes() {
     assert!(!trigger.is_market);
     assert_eq!(trigger.limit_px.as_deref(), Some("59900"));
     assert!(!trigger.fired);
+    // The node writes the key on every parked leg; a leg with no handle sends
+    // `null`.
+    assert_eq!(trigger.cloid, None);
     // Market trigger: is_market true, limit_px null.
     let mkt = serde_json::json!({
         "status": "triggered",
@@ -930,13 +934,19 @@ fn order_status_triggered_decodes() {
                      "trigger_px": "59000", "trigger_above": false, "sz": "1",
                      "registered_at": 3u64, "fired": false,
                      "is_market": true, "limit_px": null,
-                     "group": 9u64, "trail_px": "250.5" }
+                     "group": 9u64, "trail_px": "250.5",
+                     "cloid": "0x000102030405060708090a0b0c0d0e0f" }
     });
     let OrderStatus::Triggered { trigger } = serde_json::from_value(ladder).unwrap() else {
         panic!("expected Triggered");
     };
     assert_eq!(trigger.group, Some(9));
     assert_eq!(trigger.trail_px.as_deref(), Some("250.5"));
+    // `cancel_by_cloid` reaches the parked leg by this handle.
+    assert_eq!(
+        trigger.cloid.as_deref(),
+        Some("0x000102030405060708090a0b0c0d0e0f")
+    );
 }
 
 /// `order_status` unknown branch.
