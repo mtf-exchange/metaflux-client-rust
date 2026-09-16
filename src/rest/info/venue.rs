@@ -92,17 +92,25 @@ pub struct UserRateLimit {
     pub lifetime_count: u64,
 }
 
-/// Per-market ceilings every deployer market must meet.
+/// Ceilings every deployer market must meet.
+///
+/// The field is named `per_market_limits`, but one pair of values applies to
+/// every perp. The two open-interest ceilings are therefore in WHOLE UNITS of
+/// the base asset, not in lots: a lot is a different real quantity on each
+/// market. The chain converts each ceiling into a market's own size plane
+/// before it applies it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PerMarketLimits {
-    /// Open-interest ceiling, base-unit decimal string.
+    /// Open-interest ceiling, WHOLE UNITS of the base asset as a decimal
+    /// string. Not lots — see the type docs.
     pub max_oi: String,
     /// Leverage ceiling.
     pub max_leverage: u8,
     /// Taker fee ceiling, whole-bps decimal string.
     pub max_taker_fee_bps: String,
-    /// Open-interest growth ceiling per second, base-unit decimal string.
+    /// Open-interest growth ceiling per second, WHOLE UNITS of the base asset
+    /// as a decimal string. Not lots — see the type docs.
     pub max_oi_per_second: String,
 }
 
