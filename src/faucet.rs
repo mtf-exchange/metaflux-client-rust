@@ -63,7 +63,7 @@ struct FaucetRequest<'a> {
 /// control. The per-address rule and the reserve balance bound the give-away.
 ///
 /// **NOT LIVE YET.** The node change is landed and unreleased. The faucet node
-/// picks up both rules only when it restarts, at the next freeze-swap release.
+/// picks up both rules only when it restarts, at the next node release.
 /// Until then the live faucet allows one claim per IP per MINUTE, and an
 /// address that claimed a partial `amount` can claim again after a faucet
 /// restart. Build against the rules above; do not depend on the old ones.

@@ -1158,7 +1158,7 @@ pub struct SpotMeta {
 /// `block` is present on a node-ring fill (the committed height) and ABSENT on an
 /// archive-normalized fill — hence `Option`. A SPOT fill renders `sz` on the RAW
 /// integer plane today (the node-tape `szd=0` pin). The TARGET is the human plane
-/// (owner-ruled); the flip rides a fork-gated node-tape fix. The field stays a
+/// The flip rides a later node release. The field stays a
 /// decimal string either way — read it verbatim, do not assume a plane.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -2618,7 +2618,7 @@ impl<'a> Info<'a> {
     ///
     /// The gateway merges deep archive history into the node fill serializer's
     /// own response and re-applies `limit`. A SPOT `sz` rides the raw integer
-    /// plane today; the human plane is the owner-ruled target. A merged
+    /// plane today; the human plane is the intended target. A merged
     /// archive-normalized fill may omit `block`.
     ///
     /// For one row per ORDER instead of one row per leg, use

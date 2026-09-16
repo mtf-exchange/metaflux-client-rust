@@ -7,11 +7,35 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
-**The chain does not serve this shape yet.** The standard-European reshape is
-landed in the node working tree and is not released. Until it swaps in, the live
-chain still answers the old option wire. Read this entry the way you read an
-upgrade notice: the types below are the TARGET, and a decode against the live
-node fails on `settle_asset` until the swap.
+### Changed
+
+- **Breaking: `VaultModify` binds every field it carries.** The EIP-712 type now
+  covers the whole payload, so a signature commits to each value instead of a
+  prefix of them. Re-sign any stored envelope; a digest built by an older client
+  no longer verifies.
+- **Breaking: a perp dex is NAMED.** `PerpRegisterAsset` carries `name`, and the
+  deploy lane signs the new digest.
+- The two open-interest ceilings on `per_market_limits` are documented as WHOLE
+  UNITS of the base asset, not raw lots. The values did not move; the unit was
+  stated wrongly before.
+
+### Added
+
+- `user_fills_aggregated`, `user_volume_history` and `user_interest` reads.
+- `account_state` states the standard-mode `split` posture and its reservation
+  ledger; delegation rows carry `lock_months` and `reward_weight`; a markets row
+  can say its perp market is settled.
+- The WebSocket client negotiates and decodes the gateway's zstd frames.
+- `claim_broker_rewards`, the granular sub-deployer grant, and the typed no-op
+  order status.
+
+## [0.23.0] — 2026-08-30
+
+**This shape is LIVE.** The node half shipped in the same release that carries
+the running chain, so the types below decode against the live node. An earlier
+copy of this entry said the chain did not serve the shape yet and that a decode
+failed on `settle_asset`; that was true when it was written and stopped being
+true at the node release. It is corrected here rather than left to mislead.
 
 ### Changed
 

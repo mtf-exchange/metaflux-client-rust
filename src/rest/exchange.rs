@@ -624,7 +624,7 @@ impl<'a> Exchange<'a> {
             .await
     }
 
-    // ---- SCALE ladder (node-native; fork-gated `scale_order` feature) ----
+    // ---- SCALE ladder (node-native; the `scale_order` capability) ----
 
     /// Place a SCALE ladder: one signed compact ladder the node expands
     /// DETERMINISTICALLY into `n` resting limit legs between `px_low` and
