@@ -40,11 +40,10 @@ pub enum ErrorCode {
     /// `ORDER_DUPLICATE_CLOID` — a `cloid` names exactly one order, so the node
     /// refuses a repeated one on the same account.
     ///
-    /// From the next node release the rule applies PER LEG: `batch_order` dedups
-    /// every leg that carries a handle, and `scale_order` dedups its ladder
-    /// handle. Two legs of ONE action that share a handle refuse the WHOLE
-    /// action. An attempt the COMMIT refused gives its handle back, so a
-    /// re-signed retry may reuse it.
+    /// The rule applies PER LEG: `batch_order` dedups every leg that carries a
+    /// handle, and `scale_order` dedups its ladder handle. Two legs of ONE
+    /// action that share a handle refuse the WHOLE action. An attempt the
+    /// COMMIT refused gives its handle back, so a re-signed retry may reuse it.
     OrderDuplicateCloid,
     /// `MARGIN_INSUFFICIENT` — carries `details` with the collateral bound.
     MarginInsufficient,
@@ -86,9 +85,6 @@ pub enum ErrorCode {
     /// re-sign above the account's newest committed nonce. One action signed
     /// with a far-future nonce moves that anchor, and every later wall-clock
     /// nonce is refused until the clock catches up.
-    ///
-    /// NOT LIVE YET: it ships with the next node release. Until then the same
-    /// drop reads as a timeout.
     NonceReplayed,
     /// `INTERNAL` — a node defect, not caller input. Retry is safe.
     Internal,

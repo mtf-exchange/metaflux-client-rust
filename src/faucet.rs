@@ -62,12 +62,6 @@ struct FaucetRequest<'a> {
 /// resets when the faucet node restarts, so it is a speed bump, not a sybil
 /// control. The per-address rule and the reserve balance bound the give-away.
 ///
-/// **NOT LIVE YET.** The node change is landed and unreleased. The faucet node
-/// picks up both rules only when it restarts, at the next node release.
-/// Until then the live faucet allows one claim per IP per MINUTE, and an
-/// address that claimed a partial `amount` can claim again after a faucet
-/// restart. Build against the rules above; do not depend on the old ones.
-///
 /// `faucet_base_url` is the faucet's OWN origin (e.g.
 /// `http://localhost:8080` on devnet, `https://api.testnet.mtf.exchange/faucet` in
 /// production) — NOT the trading API base URL.
@@ -81,10 +75,8 @@ struct FaucetRequest<'a> {
 /// - [`ClientError::ProtocolError`] on a non-2xx status, carrying the server's
 ///   `{ "error": ... }` message — notably `429`, which covers two rules:
 ///   `address already funded` for the once-ever per-address rule, and the
-///   per-IP window. NOT LIVE YET — see the notice above: today the live chain
-///   allows one grant per IP per MINUTE, and an address that took a partial
-///   `amount` can claim the remainder after the faucet node restarts. Also
-///   `400` (bad/zero address), `503` (backlog full), or a mainnet refusal.
+///   per-IP window. Also `400` (bad/zero address), `503` (backlog full), or a
+///   mainnet refusal.
 /// - [`ClientError::Http`] / [`ClientError::Decode`] on transport / decode
 ///   failure.
 pub async fn request_faucet(

@@ -376,8 +376,6 @@ fn newly_typed_kat_vectors_match_pinned_digests() {
 /// The three answers are derived from the node's own type string with an
 /// INDEPENDENT EIP-712 build (foundry `cast keccak`), controlled against the
 /// `ApproveAgent` vector above, so they do not restate this encoder.
-///
-/// NOT LIVE YET: the node rebuilds this digest from the next release.
 #[test]
 fn vault_modify_kat_binds_every_applied_field() {
     let vault_modify =

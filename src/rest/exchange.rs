@@ -211,11 +211,9 @@ impl<'a> Exchange<'a> {
     /// book against escrowed funds. A `limit_px` of `0` places a MARKET order,
     /// which needs `tif: ioc` — it has no price to rest at.
     ///
-    /// From the release after node 0.9.7, an order the balance cannot fund at
-    /// all is refused: `insufficient spot balance`. Node 0.9.7 accepts the same
-    /// order and answers a fill of size `"0"`. One exception stays an accepted
-    /// no-op: a market buy that holds quote, on a pair that carries no ask from
-    /// another account.
+    /// An order the balance cannot fund at all is refused: `insufficient spot
+    /// balance`. One exception is an accepted no-op: a market buy that holds
+    /// quote, on a pair that carries no ask from another account.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -725,8 +723,9 @@ impl<'a> Exchange<'a> {
     /// [`Self::cancel_chase`].
     ///
     /// Self-trading: the signing wallet owns the chase (leave `params.owner`
-    /// `None`). For operator / vault trading use [`Self::chase_order_as`]. Chase
-    /// is perp markets only in v1.
+    /// `None`). For operator / vault trading use [`Self::chase_order_as`].
+    /// `params.market` names a perp market or a spot pair — see
+    /// [`crate::types::chase`] for the spot lane's extra rules.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -808,8 +807,8 @@ impl<'a> Exchange<'a> {
     ///
     /// A HEDGE account MUST set [`TwapOrder::position_side`] and a one-way
     /// account MUST NOT: the wrong one is admitted and then rejected at commit,
-    /// reported on no channel. `params.market` is a PERP market today — see
-    /// [`crate::types::twap`] for the spot lane, which is not live yet.
+    /// reported on no channel. `params.market` names a perp market or a spot
+    /// pair — see [`crate::types::twap`] for the spot lane's extra rules.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -1027,10 +1026,6 @@ impl<'a> Exchange<'a> {
     /// The action stays on the wire and keeps its signing type, which is
     /// consensus-frozen. It never succeeds.
     ///
-    /// NOT LIVE YET: the refusal ships with the next node release. Until then
-    /// an approved agent's call reports success and writes a placeholder value
-    /// that nothing reads.
-    ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
     #[deprecated(
@@ -1169,10 +1164,7 @@ impl<'a> Exchange<'a> {
     /// Leader updates vault configuration.
     ///
     /// Every field rides the signed digest, so the lock period, the management
-    /// fee and the paused flag all reach the node. An earlier build signed the
-    /// name alone and dropped the other three.
-    ///
-    /// NOT LIVE YET: the node verifies this digest from the next release.
+    /// fee and the paused flag all reach the node.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

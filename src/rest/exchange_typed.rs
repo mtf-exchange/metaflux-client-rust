@@ -122,8 +122,8 @@ impl<'a> Exchange<'a> {
 
     /// Move USD between the spot and perp class under the typed scheme.
     ///
-    /// Accepted only by a split `standard` account (node 0.9.7 and later).
-    /// Every other account holds ONE USDC balance and is refused.
+    /// Accepted only by a split `standard` account. Every other account holds
+    /// ONE USDC balance and is refused.
     ///
     /// `ntl` is a canonical decimal string.
     ///
@@ -481,9 +481,6 @@ impl<'a> Exchange<'a> {
     /// The digest binds every field the node applies, so the posted payload
     /// carries exactly the keys that were signed: a `None` field is signed as
     /// absent and is left off the wire.
-    ///
-    /// NOT LIVE YET: the node verifies this digest from the next release. Until
-    /// then it rebuilds the retired narrow digest and refuses the signature.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

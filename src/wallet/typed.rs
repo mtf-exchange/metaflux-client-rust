@@ -179,10 +179,6 @@ const CREATE_VAULT_TYPE: &[u8] =
 /// is a presence flag plus a value: an absent key and an explicit `0` fee (or
 /// `false` pause) are DIFFERENT digests, so one signature covers exactly one
 /// wire form.
-///
-/// NOT LIVE YET: the node accepts it from the next release. The retired narrow
-/// form was `VaultModify(string metafluxChain,uint64 vaultId,string newName,
-/// uint64 nonce)`; the two forms do not interoperate in either direction.
 const VAULT_MODIFY_TYPE: &[u8] =
     b"MetaFluxTransaction:VaultModify(string metafluxChain,uint64 vaultId,string newName,bool hasNewLockPeriodSecs,uint64 newLockPeriodSecs,bool hasNewManagementFeeBps,uint16 newManagementFeeBps,bool hasNewPaused,bool newPaused,uint64 nonce)";
 const SPOT_MARGIN_CLOSE_TYPE: &[u8] =

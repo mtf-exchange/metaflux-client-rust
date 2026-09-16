@@ -480,9 +480,6 @@ pub enum OrderStatus {
     /// **This is a SUCCESS. Do not retry it.** `Error` and `Noop` need opposite
     /// handling, which is why they are two variants — branch on the variant,
     /// never on `reason`.
-    ///
-    /// NOT LIVE YET: it ships with the next node release. Until then the same
-    /// outcome arrives as [`OrderStatus::Error`].
     Noop(NoopStatus),
     /// A TP / SL / stop leg ACCEPTED and parked off the book. It holds a real
     /// oid and is an open order, but it never rests, so it carries no depth and
@@ -494,10 +491,6 @@ pub enum OrderStatus {
     ///
     /// A `position_tpsl` group places no book order at all, so parked entries
     /// are its WHOLE answer.
-    ///
-    /// NOT LIVE YET: it ships with the next node release. Until then a parked
-    /// leg is reported in no entry at all, so the array is shorter than the
-    /// legs the caller sent.
     Parked(RestingStatus),
     /// A committed `chase_order`: the Chase registered and its first post-only
     /// leg rests.

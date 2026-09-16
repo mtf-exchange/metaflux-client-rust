@@ -86,12 +86,11 @@ pub struct WsOrderRow {
 ///
 /// **`"parked"` is an ACCEPTANCE**: a TP / SL / stop leg registered off the
 /// book, awaiting its mark cross. `filled_sz`, `avg_px` and `reason` are all
-/// `null` on it. NOT LIVE YET — it ships with the next node release.
+/// `null` on it.
 ///
 /// **`"noop"` is a SUCCESS**, not a rejection: a `reduce_only` order with
 /// nothing left to reduce. It placed nothing, it carries no `oid`, and it must
-/// not be retried. Not live yet — it ships with the next node release, and
-/// until then the same outcome arrives as `"rejected"`.
+/// not be retried.
 ///
 /// `filled_sz` is the executed size of THIS event, not a running total: a maker
 /// leg reports the size of the one match. `order.sz` is what REMAINS.
@@ -125,9 +124,9 @@ pub struct OrderUpdate {
 /// node adds kinds as it attributes more causes, and a closed enum would reject
 /// a newer server. Known kinds today are `usd_send` / `usd_receive`, `spot_send`
 /// / `spot_receive`, `asset_send` / `asset_receive`, `withdraw`,
-/// `system_credit`, `sub_account_transfer`, `sub_account_spot_transfer` and
-/// `vault_transfer`. `deposit` (a bridge inbound credit) and `liquidation` (a
-/// forced-close settlement) arrive in a later node release.
+/// `system_credit`, `sub_account_transfer`, `sub_account_spot_transfer`,
+/// `vault_transfer`, `deposit` (a bridge inbound credit) and `liquidation` (a
+/// forced-close settlement).
 ///
 /// Only `kind`, `amount` and `time` ride every record; every other field is
 /// per-kind. `amount` is UNSIGNED — read the direction from `kind` — except on
@@ -174,17 +173,15 @@ pub struct WsLedgerUpdate {
     /// `true` when the asset moves to the perp side.
     #[serde(default)]
     pub to_perp: Option<bool>,
-    /// Perp market a `liquidation` record's forced close ran on. Not live yet.
+    /// Perp market a `liquidation` record's forced close ran on.
     #[serde(default)]
     pub market: Option<String>,
     /// Forced-close cause on a `liquidation` record, e.g. `"forced_close_full"`.
-    /// Not live yet.
     #[serde(default)]
     pub cause: Option<String>,
     /// Whole-USDC mark a `liquidation` slice was priced from. Absent when the
     /// market had no usable mark. On a `liquidation` record `amount` is SIGNED
-    /// (negative on a loss) — the one signed exception on this channel. Not
-    /// live yet.
+    /// (negative on a loss) — the one signed exception on this channel.
     #[serde(default)]
     pub mark_px: Option<String>,
 }

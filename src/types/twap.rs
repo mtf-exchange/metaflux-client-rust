@@ -17,21 +17,20 @@
 //! A HEDGE account MUST send `position_side` and a one-way account MUST NOT: the
 //! wrong one is admitted to the mempool and rejected at commit, on no channel.
 //!
-//! ## Perp markets only today
+//! ## The spot lane
 //!
-//! A spot pair id in `market` is refused at commit with `no perp market for
-//! asset`. The spot lane is built and waits for an activation height. Above it
-//! each slice is an IOC through the spot order path, priced off the base token's
-//! oracle mark rather than off the touch, and three fields are REFUSED rather
-//! than dropped — the whole action is rejected:
+//! `market` names a perp market or a spot pair. Each spot slice is an IOC
+//! through the spot order path, priced off the base token's oracle mark rather
+//! than off the touch, and three fields are REFUSED rather than dropped — the
+//! whole action is rejected:
 //!
 //! - `reduce_only: true` — `spot has no position to reduce: reduce_only is not supported`
 //! - `position_side` — `spot has no position side`
 //! - `randomize: true` — `spot twap does not support randomize`
 //!
 //! One live-parent budget covers perp and spot parents together, and
-//! [`TwapCancel`] takes a spot parent's id unchanged. The wire shape does not
-//! change, so these types need no new field for the spot lane.
+//! [`TwapCancel`] takes a spot parent's id unchanged. The wire shape is the
+//! same on both lanes.
 //!
 //! ## Who owns the parent
 //!

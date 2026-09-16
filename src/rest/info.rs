@@ -267,9 +267,7 @@ pub struct OpenOrder {
     pub orig_sz: Option<String>,
     /// Submit-time client order id (`0x`-hex), when the order carried one —
     /// the id-based binding key for reconcile / co-residency. `null` otherwise.
-    ///
-    /// A PARKED trigger row carries it from the next node release; it was
-    /// always `null` there before.
+    /// A PARKED trigger row carries it too.
     #[serde(default)]
     pub cloid: Option<String>,
     /// Time-in-force token (`"alo"` / `"ioc"` / `"gtc"`), or `"trigger"` on a
@@ -1157,9 +1155,9 @@ pub struct SpotMeta {
 ///
 /// `block` is present on a node-ring fill (the committed height) and ABSENT on an
 /// archive-normalized fill — hence `Option`. A SPOT fill renders `sz` on the RAW
-/// integer plane today (the node-tape `szd=0` pin). The TARGET is the human plane
-/// The flip rides a later node release. The field stays a
-/// decimal string either way — read it verbatim, do not assume a plane.
+/// integer plane today (the node-tape `szd=0` pin). The TARGET is the human
+/// plane, and the flip rides a later node release. The field stays a decimal
+/// string either way — read it verbatim, do not assume a plane.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct Fill {
@@ -1321,9 +1319,6 @@ pub struct TriggerOrderStatus {
     /// Submit-time client order id (`0x`-hex), when the leg carried one. The
     /// parked leg keeps it in committed state, so it survives a node restart
     /// and `cancel_by_cloid` reaches the leg by it.
-    ///
-    /// NOT LIVE YET: it ships with the next node release. Until then a parked
-    /// leg reads `None` here whatever the submission carried.
     #[serde(default)]
     pub cloid: Option<String>,
 }
@@ -1382,10 +1377,10 @@ pub enum OrderStatus {
     /// or placed before the node last restarted. It is NOT proof the order
     /// never existed — read [`Info::historical_orders`] for the archive answer.
     ///
-    /// Two cases leave this answer in the next node release. A cancelled SPOT
-    /// order resolves [`OrderStatus::Canceled`]. An order that neither rests nor
-    /// matches — a spot order or a scale rung — resolves
-    /// [`OrderStatus::Rejected`], as the perp lane already did.
+    /// Two cases never reach this answer. A cancelled SPOT order resolves
+    /// [`OrderStatus::Canceled`]. An order that neither rests nor matches — a
+    /// spot order or a scale rung — resolves [`OrderStatus::Rejected`], like
+    /// the perp lane.
     ///
     /// Still unknown after the fact: the old oid of a `modify` (query the
     /// `cloid` or the new oid), and any order cancelled through `batch_cancel`,
@@ -1600,13 +1595,11 @@ pub struct LedgerUpdate {
     pub coin: String,
     /// Record timestamp (unix ms).
     pub time: u64,
-    /// Movement kind. Live today: `"deposit"`, `"withdraw"`, `"transfer"`,
-    /// `"liquidation"`. A VAULT deposit or withdrawal arrives as `"transfer"`.
-    ///
-    /// The next node release adds `"staking_deposit"`, `"staking_withdraw"`,
-    /// `"delegate"`, `"undelegate"`, `"staking_reward"`, `"earn_deposit"` and
-    /// `"earn_withdraw"`. This stays a free string, so a kind your build
-    /// predates decodes instead of failing.
+    /// Movement kind: `"deposit"`, `"withdraw"`, `"transfer"`, `"liquidation"`,
+    /// `"staking_deposit"`, `"staking_withdraw"`, `"delegate"`, `"undelegate"`,
+    /// `"staking_reward"`, `"earn_deposit"` or `"earn_withdraw"`. A VAULT
+    /// deposit or withdrawal arrives as `"transfer"`. This stays a free string,
+    /// so a kind your build predates decodes instead of failing.
     #[serde(default)]
     pub kind: Option<String>,
     /// Signed balance delta, decimal string. Signed from the side the holder
@@ -1732,8 +1725,6 @@ pub struct InterestBorrow {
 }
 
 /// `user_interest` response — the borrow interest one account owes.
-///
-/// **NOT LIVE YET** — see [`Info::user_interest`].
 ///
 /// The request key is `user` (0x hex) — NOT `address`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2577,11 +2568,6 @@ impl<'a> Info<'a> {
     /// `user_interest` — the borrow interest one account owes, per open
     /// borrow, whatever lane charged it.
     ///
-    /// **NOT LIVE YET.** The node read is landed and unreleased; a live node
-    /// answers `unknown info type` until the next swap. This type ships ahead of
-    /// it deliberately, so a caller can build against the shape — but do not
-    /// treat a rejection as a client bug before that release.
-    ///
     /// The request key is `user` (0x hex), NOT `address`. Build an "Interest"
     /// view on this read: a second interest-charging lane joins its `borrows`
     /// array rather than getting its own query type.
@@ -2647,11 +2633,9 @@ impl<'a> Info<'a> {
     /// Use it on the recent window only: a window old enough to reach the deep
     /// archive returns those rows per-leg beside the folded ones.
     ///
-    /// NOT LIVE YET. A node without it does not reject the field — it IGNORES
-    /// it and answers the per-leg rows, so this call succeeds and the fold
-    /// silently did not happen. Detect it by the presence of [`Fill::n`], never
-    /// by the row count: a folded response always carries `n`, and `n` is 1 for
-    /// a fill that stood alone.
+    /// Detect the fold by the presence of [`Fill::n`], never by the row count:
+    /// a folded response always carries `n`, and `n` is 1 for a fill that stood
+    /// alone.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

@@ -5,7 +5,12 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
-## [Unreleased]
+## [0.24.0] — 2026-09-16
+
+**This shape is LIVE.** The node half shipped in release 0.9.10, which the
+running chain swapped to on 2026-09-16, so every type below verifies against the
+live node. A signature built by 0.23.0 for `VaultModify` no longer verifies —
+that is the point of the change.
 
 ### Changed
 

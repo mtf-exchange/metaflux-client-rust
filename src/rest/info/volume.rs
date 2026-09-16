@@ -1,10 +1,5 @@
 //! `/info` — daily traded volume for one account.
 //!
-//! **NOT LIVE YET.** The archive serves this and the gateway routes it, but
-//! neither is released — a live gateway answers `400 UNKNOWN_TYPE` until the
-//! next indexer and gateway swap. The type ships ahead so a caller can build
-//! against the shape; a rejection before that release is not a client bug.
-//!
 //! ONE query: [`Info::user_volume_history`], the read behind a "Your Volume
 //! History" panel. It is served by the historical archive, not by a validator.
 //!

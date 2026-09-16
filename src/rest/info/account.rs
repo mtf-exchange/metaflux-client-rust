@@ -173,10 +173,8 @@ pub struct OptionLane {
 
 /// One scope's row of the [`Reservations`] ledger.
 ///
-/// Served from the release AFTER 0.9.6. A 0.9.6 node omits the ledger, so
-/// [`AccountState::reservations`] decodes as `None` against such a node in every
-/// mode. From the release after node 0.9.7, a split account has no ledger
-/// either. Read `None` as "no ledger", never as "reserved nothing".
+/// A split account has no ledger, so [`AccountState::reservations`] decodes as
+/// `None` on one. Read `None` as "no ledger", never as "reserved nothing".
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ProductReservation {
@@ -299,16 +297,8 @@ pub struct AccountState {
     /// clears the reservations on the way back to `unified` and refuses to set
     /// one in any other mode.
     ///
-    /// Served from the release AFTER 0.9.6, so a 0.9.6 node decodes this as
-    /// `None` in every mode.
-    ///
-    /// From the release after node 0.9.7 a split account has no ledger either,
-    /// so `Some` then means a pooled account ([`Self::split`] is `Some(false)`).
-    /// Node 0.9.7 still serves a ledger to a split account: the `spot` row reads
-    /// `reserved: "0"` with `available` = the spot wallet, and the `perp` and
-    /// `option` rows still cap ENCUMBRANCE. On 0.9.7 a split account admits no
-    /// perp order and no option WRITE until it sets a reservation. An option BUY
-    /// is a conversion, so the perp wallet funds it and 0.9.7 admits it.
+    /// A split account has no ledger, so `Some` means a pooled account
+    /// ([`Self::split`] is `Some(false)`).
     #[serde(default)]
     pub reservations: Option<Reservations>,
     /// `Some` ONLY when [`Self::abstraction`] is [`Abstraction::Standard`].
@@ -316,13 +306,11 @@ pub struct AccountState {
     /// under the split gate (block 5,710,001 on testnet). `false` = a pooled
     /// account: one USDC balance, because it entered before the gate. A pooled
     /// account stays pooled until it leaves `standard` and enters it again.
-    /// Served from node 0.9.7; an older node decodes this as `None`.
     ///
     /// On a split account, [`Self::account_value`] and [`Self::withdrawable`]
     /// are the perp wallet, and the USDC row of [`SpotLane::balances`] is the
     /// spot wallet. Add `account_value` and that row's `total` for the equity of
-    /// both wallets. From the release after node 0.9.7, [`Self::reservations`]
-    /// is `None` on a split account.
+    /// both wallets. [`Self::reservations`] is `None` on a split account.
     #[serde(default)]
     pub split: Option<bool>,
     /// Portfolio-margin net account value, whole-USDC decimal string. CROSS-lane

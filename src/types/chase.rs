@@ -26,13 +26,12 @@
 //! chase WS channel — correlate the leg placements and the fills by `cloid` on
 //! the existing `order_updates` / `open_orders` / `fills` feeds.
 //!
-//! PERP MARKETS ONLY TODAY. A spot pair id in `market` is refused at commit with
-//! `chase market has no tick/lot grid`. The spot lane is built and waits for an
-//! activation height: above it the leg pegs inside the SPOT touch,
-//! `position_side` is refused, a reprice that needs more free quote than the
-//! owner holds is SKIPPED without cancelling the current leg, and a failed
-//! re-place RETIRES the chase. The wire shape does not change, so these types
-//! need no new field.
+//! `market` names a perp market or a spot pair. On the spot lane the leg pegs
+//! inside the SPOT touch, `position_side` is refused, a reprice that needs more
+//! free quote than the owner holds is SKIPPED without cancelling the current
+//! leg, and a failed re-place RETIRES the chase. A market with no tick/lot grid
+//! is refused at commit with `chase market has no tick/lot grid`. The wire shape
+//! is the same on both lanes.
 
 use serde::{Deserialize, Serialize};
 

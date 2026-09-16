@@ -126,12 +126,8 @@ pub struct ConvertToMultiSigUser {
 /// bounds them. A scope with no reservation admits nothing. A reservation change
 /// does not need a flat account, and lowering one is always allowed.
 ///
-/// From the release after node 0.9.7, a split account is refused every `kind`
-/// 1, 2 and 3, `"0"` included: `a split standard account has no reservations`.
-/// Node 0.9.7 still binds a split account by the `perp` and `option`
-/// reservations wherever they cap ENCUMBRANCE: it admits no perp order and no
-/// option WRITE until one is set. An option BUY is a conversion, so the perp
-/// wallet funds it and 0.9.7 admits it.
+/// A split account is refused every `kind` 1, 2 and 3, `"0"` included:
+/// `a split standard account has no reservations`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct UserSetAbstraction {
