@@ -50,7 +50,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let key = std::env::var("MTF_LEADER_KEY")
         .map_err(|_| "set MTF_LEADER_KEY=<0x + 64 hex> — the VAULT LEADER key")?;
     let wallet = Wallet::from_hex(&key)?;
-    let client = Client::new("https://api.testnet.mtf.exchange")?;
+    let base = std::env::var("MTF_API_URL")
+        .unwrap_or_else(|_| "https://api.testnet.mtf.exchange".to_string());
+    let client = Client::new(&base)?;
+    println!("endpoint   : {base}");
 
     println!("signing as  : {:?}", wallet.address());
     println!("vault_id    : {vault_id}");
