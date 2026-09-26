@@ -234,7 +234,7 @@ const SPOT_SEED_HOLDERS_TYPE: &[u8] =
 const SPOT_FINALIZE_SUPPLY_TYPE: &[u8] =
     b"MetaFluxTransaction:SpotFinalizeSupply(string metafluxChain,uint32 asset,string maxSupply,uint64 nonce)";
 
-// The nine MIP-3 perp-deployer signing strings, one per sub-action. Each binds
+// The MIP-3 perp-deployer signing strings, one per sub-action. Each binds
 // ONLY the fields its own sub-handler reads. None carries `bid`: the legacy
 // gas-auction lane is dead and the node rejects a non-zero bid.
 const PERP_REGISTER_ASSET_TYPE: &[u8] =
@@ -249,6 +249,8 @@ const PERP_SET_MAKER_REBATE_TYPE: &[u8] =
     b"MetaFluxTransaction:PerpSetMakerRebate(string metafluxChain,uint32 asset,uint16 rebateBps,uint64 nonce)";
 const PERP_SET_MIN_SIZE_TYPE: &[u8] =
     b"MetaFluxTransaction:PerpSetMinSize(string metafluxChain,uint32 asset,uint64 minOrderSize,uint64 nonce)";
+const PERP_SET_OI_CAP_TYPE: &[u8] =
+    b"MetaFluxTransaction:PerpSetOiCap(string metafluxChain,uint32 asset,uint64 oiCapUnits,uint64 nonce)";
 const PERP_ACTIVATE_MARKET_TYPE: &[u8] =
     b"MetaFluxTransaction:PerpActivateMarket(string metafluxChain,uint32 asset,uint64 nonce)";
 const PERP_DEACTIVATE_MARKET_TYPE: &[u8] =
@@ -258,7 +260,7 @@ const PERP_SET_SUB_DEPLOYERS_TYPE: &[u8] =
 const PERP_SET_SUB_DEPLOYER_PERMS_TYPE: &[u8] =
     b"MetaFluxTransaction:PerpSetSubDeployerPerms(string metafluxChain,uint32 asset,address subDeployer,uint16 permissions,uint64 nonce)";
 
-// The tenth MIP-3 deployer action: the repeating index-px push. `asset` and the
+// The one repeating MIP-3 deployer action: the index-px push. `asset` and the
 // VERBATIM `px` string both sit inside the digest, so a relay can neither
 // reprice a push nor re-target it at another market.
 const MIP3_SET_ORACLE_PX_TYPE: &[u8] =
@@ -1215,6 +1217,20 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `PerpSetOiCap(string metafluxChain,uint32 asset,uint64 oiCapUnits,uint64 nonce)`
+    ///
+    /// NOT LIVE: the node half ships in the release after 2026-10-01. Until
+    /// then the live chain answers `unknown variant`.
+    PerpSetOiCap {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Target market asset id.
+        asset: u32,
+        /// Open-interest cap in WHOLE UNITS of the base asset; `0` removes it.
+        oi_cap_units: u64,
+        /// Envelope nonce.
+        nonce: u64,
+    },
     /// `PerpActivateMarket(string metafluxChain,uint32 asset,uint64 nonce)`
     PerpActivateMarket {
         /// Chain tag.
@@ -1360,6 +1376,7 @@ impl TypedAction {
             TypedAction::PerpSetFeeTier { .. } => PERP_SET_FEE_TIER_TYPE,
             TypedAction::PerpSetMakerRebate { .. } => PERP_SET_MAKER_REBATE_TYPE,
             TypedAction::PerpSetMinSize { .. } => PERP_SET_MIN_SIZE_TYPE,
+            TypedAction::PerpSetOiCap { .. } => PERP_SET_OI_CAP_TYPE,
             TypedAction::PerpActivateMarket { .. } => PERP_ACTIVATE_MARKET_TYPE,
             TypedAction::PerpDeactivateMarket { .. } => PERP_DEACTIVATE_MARKET_TYPE,
             TypedAction::PerpSetSubDeployers { .. } => PERP_SET_SUB_DEPLOYERS_TYPE,
@@ -2199,6 +2216,17 @@ impl TypedAction {
                 enc_string(metaflux_chain),
                 enc_u32(*asset),
                 enc_u64(*min_order_size),
+                enc_u64(*nonce),
+            ],
+            TypedAction::PerpSetOiCap {
+                metaflux_chain,
+                asset,
+                oi_cap_units,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_u32(*asset),
+                enc_u64(*oi_cap_units),
                 enc_u64(*nonce),
             ],
             TypedAction::PerpActivateMarket {

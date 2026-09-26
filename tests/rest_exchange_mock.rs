@@ -22,8 +22,8 @@ use metaflux_client::{
         },
         perp::{
             Mip3SetOraclePx, PerpActivateMarket, PerpDeactivateMarket, PerpRegisterAsset,
-            PerpSetFeeTier, PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOracle,
-            PerpSetSubDeployers,
+            PerpSetFeeTier, PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOiCap,
+            PerpSetOracle, PerpSetSubDeployers,
         },
         spot::{
             EarnWithdraw, SpotFinalizeSupply, SpotMarginOpen, SpotRegisterPair, SpotRegisterToken,
@@ -1292,12 +1292,12 @@ async fn spot_seed_holders_refuses_unpaired_rows_before_signing() {
 
 // ---- MIP-3 perp deployer lane ----
 
-/// Each of the nine deployer actions posts its OWN tag with its own field
+/// Each of the ten deployer actions posts its OWN tag with its own field
 /// names. A wrong tag or a renamed field is refused at the node's serde before
 /// any handler runs, and the caller cannot tell that from a rejected signature.
 #[tokio::test]
 #[allow(deprecated)]
-async fn the_perp_deployer_lane_posts_its_nine_tags_with_their_own_fields() {
+async fn the_perp_deployer_lane_posts_its_ten_tags_with_their_own_fields() {
     let (client, captor, wallet) = capturing_exchange().await;
     let ex = client.exchange();
 
@@ -1407,6 +1407,23 @@ async fn the_perp_deployer_lane_posts_its_nine_tags_with_their_own_fields() {
     assert_eq!(a["params"]["min_order_size"], json!(1000));
 
     let _: Value = ex
+        .perp_set_oi_cap(
+            &wallet,
+            &PerpSetOiCap {
+                asset: 1001,
+                oi_cap_units: 250_000,
+            },
+        )
+        .await
+        .unwrap();
+    let a = captor.last.lock().await.clone().unwrap()["action"].clone();
+    assert_eq!(a["type"].as_str(), Some("perp_set_oi_cap"));
+    assert_eq!(
+        a["params"],
+        json!({ "asset": 1001, "oi_cap_units": 250_000 })
+    );
+
+    let _: Value = ex
         .perp_activate_market(&wallet, &PerpActivateMarket { asset: 1001 })
         .await
         .unwrap();
@@ -1471,6 +1488,37 @@ async fn perp_set_sub_deployers_signs_the_posted_delegate() {
         asset: 1001,
         sub_deployer,
         add: true,
+        nonce,
+    });
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(
+        _recover_for_test(&digest, &sig).expect("recover"),
+        wallet.address()
+    );
+}
+
+/// The cap is signed as whole units. Pin that the posted number is the signed one.
+#[tokio::test]
+async fn perp_set_oi_cap_signs_the_posted_cap() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let _: Value = client
+        .exchange()
+        .perp_set_oi_cap(
+            &wallet,
+            &PerpSetOiCap {
+                asset: 1001,
+                oi_cap_units: 250_000,
+            },
+        )
+        .await
+        .unwrap();
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _typed_digest_for_test(&TypedAction::PerpSetOiCap {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        asset: 1001,
+        oi_cap_units: 250_000,
         nonce,
     });
     let sig = decode_sig(body["signature"].as_str().unwrap());

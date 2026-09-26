@@ -1118,6 +1118,12 @@ fn every_typed_action_signs_and_recovers() {
             min_order_size: 1000,
             nonce: 64,
         },
+        TypedAction::PerpSetOiCap {
+            metaflux_chain: chain.clone(),
+            asset: 1001,
+            oi_cap_units: 250_000,
+            nonce: 211,
+        },
         TypedAction::PerpActivateMarket {
             metaflux_chain: chain.clone(),
             asset: 1001,
@@ -1143,7 +1149,7 @@ fn every_typed_action_signs_and_recovers() {
             nonce: 44,
         },
     ];
-    assert_eq!(actions.len(), 68, "all 68 reachable typed actions covered");
+    assert_eq!(actions.len(), 69, "all 69 reachable typed actions covered");
 
     for action in &actions {
         let digest = _typed_digest_for_test(action);

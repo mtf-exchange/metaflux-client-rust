@@ -1,8 +1,8 @@
-//! The eleven MIP-3 perp-deployer signing strings, pinned by digest.
+//! The twelve MIP-3 perp-deployer signing strings, pinned by digest.
 //!
 //! `perp_deploy` is an internal handler name. A caller never sends it. It sends
-//! one of TEN distinct typed actions, each with its own frozen EIP-712 string.
-//! `mip3_set_oracle_px` is the eleventh deployer action — the repeating index-px
+//! one of ELEVEN distinct typed actions, each with its own frozen EIP-712 string.
+//! `mip3_set_oracle_px` is the twelfth deployer action: the repeating index-px
 //! push, on its own frozen string. Every client that builds one must reproduce
 //! the digest byte-for-byte.
 //!
@@ -24,7 +24,7 @@ fn addr(b: u8) -> Address {
 }
 
 #[test]
-fn the_eleven_perp_deployer_signing_strings_keep_their_digests() {
+fn the_twelve_perp_deployer_signing_strings_keep_their_digests() {
     let cases: Vec<(&str, TypedAction, &str)> = vec![
         (
             "perp_register_asset",
@@ -90,6 +90,16 @@ fn the_eleven_perp_deployer_signing_strings_keep_their_digests() {
             "db58e1837626e4e08b8887e6055cf0fb35a7016d1b9efe6e1a0e0f4302dc131c",
         ),
         (
+            "perp_set_oi_cap",
+            TypedAction::PerpSetOiCap {
+                metaflux_chain: CHAIN.to_string(),
+                asset: 1001,
+                oi_cap_units: 250_000,
+                nonce: 211,
+            },
+            "ebf3e4481721177291ff46a1fa8dad3c55246dc05575f38272088738da451915",
+        ),
+        (
             "perp_activate_market",
             TypedAction::PerpActivateMarket {
                 metaflux_chain: CHAIN.to_string(),
@@ -141,7 +151,7 @@ fn the_eleven_perp_deployer_signing_strings_keep_their_digests() {
         ),
     ];
 
-    assert_eq!(cases.len(), 11, "all eleven perp deployer actions covered");
+    assert_eq!(cases.len(), 12, "all twelve perp deployer actions covered");
     for (label, action, want) in &cases {
         assert_eq!(
             &hex::encode(_typed_digest_for_test(action)),

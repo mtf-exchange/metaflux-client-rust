@@ -47,8 +47,8 @@ use crate::types::{
     },
     perp::{
         Mip3SetOraclePx, PerpActivateMarket, PerpDeactivateMarket, PerpRegisterAsset,
-        PerpSetFeeTier, PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOracle,
-        PerpSetSubDeployers,
+        PerpSetFeeTier, PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOiCap,
+        PerpSetOracle, PerpSetSubDeployers,
     },
     rfq::{RfqAccept, RfqRequest},
     scale::{CancelScaleParams, ScaleDist, ScaleParams},
@@ -1558,6 +1558,20 @@ impl<'a> Exchange<'a> {
         params: &PerpSetMinSize,
     ) -> Result<Value, ClientError> {
         self.perp_set_min_size_typed(wallet, params.asset, params.min_order_size)
+            .await
+    }
+
+    /// Set a market's open-interest cap, in whole units of the base asset.
+    /// NOT LIVE until the release after 2026-10-01; see [`PerpSetOiCap`].
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_oi_cap(
+        &self,
+        wallet: &Wallet,
+        params: &PerpSetOiCap,
+    ) -> Result<Value, ClientError> {
+        self.perp_set_oi_cap_typed(wallet, params.asset, params.oi_cap_units)
             .await
     }
 

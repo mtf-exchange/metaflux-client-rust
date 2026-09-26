@@ -1,20 +1,21 @@
-//! MIP-3 perp deployer types — the nine `perp_*` deploy actions and the
+//! MIP-3 perp deployer types: the ten `perp_*` deploy actions and the
 //! deployer-oracle push (`/exchange`).
 //!
-//! Nine sender-authorized actions build a perp market. The signer IS the
+//! Ten sender-authorized actions build a perp market. The signer IS the
 //! deployer, so no action carries an `owner`. `perp_deploy` is a node-internal
 //! handler name that no caller sends: each sub-action posts its OWN tag and
 //! signs its OWN frozen EIP-712 string.
 //!
 //! The usual order is: register the asset, bind its oracle sources, set
 //! leverage, fees, the maker rebate and the min size, then activate the market.
+//! [`PerpSetOiCap`] sets the market's open-interest cap at any time.
 //! [`PerpSetSubDeployers`] delegates the lane to another address, and
 //! [`PerpDeactivateMarket`] closes the market to new orders.
 //!
-//! [`Mip3SetOraclePx`] is the tenth action and the only repeating one. A market
+//! [`Mip3SetOraclePx`] is the eleventh action and the only repeating one. A market
 //! may run its OWN index feed instead of the venue-weighted median; the
 //! deployer then pushes every price. It rides a SEPARATE fork feature from the
-//! nine, so read its doc before you build against it.
+//! ten, so read its doc before you build against it.
 //!
 //! Wire shape (MTF-native, snake_case):
 //!
@@ -27,9 +28,12 @@
 //! Availability is PER NETWORK. Do not assume it — probe one call against your
 //! target network and read the error.
 //!
-//! On the primary networks the node knows all ten tags: an unknown action gets
-//! `unknown variant`, and these do not. A malformed one gets a field or
-//! signature error instead, which means the tag resolved.
+//! On the primary networks the node knows ten of the eleven tags: an unknown
+//! action gets `unknown variant`, and these do not. A malformed one gets a field
+//! or signature error instead, which means the tag resolved.
+//!
+//! [`PerpSetOiCap`] is NOT LIVE yet. Its node half ships in the release after
+//! 2026-10-01, and until then the live chain answers `unknown variant`.
 //!
 //! [`Mip3SetOraclePx`] additionally sits behind the `mip3_deployer_oracle` fork
 //! feature. That feature is ACTIVE FROM GENESIS on a fresh chain; only a legacy
@@ -145,6 +149,24 @@ pub struct PerpSetMinSize {
     pub min_order_size: u64,
 }
 
+/// Set a market's open-interest cap. NOT LIVE yet: the live chain answers
+/// `unknown variant` until the release after 2026-10-01.
+///
+/// The deployer, or a delegate that holds permission bit 9 (value `512`), sends
+/// it. With bit 9 the every-bit mask is `1023`. A cap under the current open
+/// interest closes no position. The node refuses orders that raise open
+/// interest at the cap, and closing orders still pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PerpSetOiCap {
+    /// Target market asset id.
+    pub asset: u32,
+    /// Cap in WHOLE UNITS of the base asset, not lots and not USD. The node
+    /// converts it to the market's size plane once, at the write. `0` removes
+    /// the cap.
+    pub oi_cap_units: u64,
+}
+
 /// Open a market to trading.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -240,6 +262,17 @@ mod tests {
         let jm = serde_json::to_value(m).unwrap();
         assert_eq!(jm["min_order_size"], serde_json::json!(1000));
         assert_eq!(m, serde_json::from_value(jm).unwrap());
+
+        let c = PerpSetOiCap {
+            asset: 1001,
+            oi_cap_units: 250_000,
+        };
+        let jc = serde_json::to_value(c).unwrap();
+        assert_eq!(
+            jc,
+            serde_json::json!({ "asset": 1001, "oi_cap_units": 250000 })
+        );
+        assert_eq!(c, serde_json::from_value(jc).unwrap());
     }
 
     /// The two fee planes sit side by side in ONE struct, so pin that they stay

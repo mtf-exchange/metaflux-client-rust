@@ -2046,7 +2046,7 @@ impl<'a> Exchange<'a> {
 
     // ---- MIP-3 perp deployer lane ----
     //
-    // Nine sub-actions, nine tags, nine frozen signing strings. Each method
+    // One tag and one frozen signing string per sub-action. Each method
     // posts only the fields ITS sub-handler reads. No method carries a bid: the
     // gas-auction lane is dead and the node rejects a non-zero one.
 
@@ -2217,6 +2217,33 @@ impl<'a> Exchange<'a> {
             };
             let params = json!({ "asset": asset, "min_order_size": min_order_size });
             (action, "perp_set_min_size", params)
+        })
+        .await
+    }
+
+    /// Set a market's open-interest cap under the typed scheme.
+    ///
+    /// NOT LIVE: the node half ships in the release after 2026-10-01. Until
+    /// then the live chain answers `unknown variant`. See
+    /// [`crate::types::perp::PerpSetOiCap`] for the units and the rules.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn perp_set_oi_cap_typed(
+        &self,
+        wallet: &Wallet,
+        asset: u32,
+        oi_cap_units: u64,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::PerpSetOiCap {
+                metaflux_chain: chain,
+                asset,
+                oi_cap_units,
+                nonce,
+            };
+            let params = json!({ "asset": asset, "oi_cap_units": oi_cap_units });
+            (action, "perp_set_oi_cap", params)
         })
         .await
     }
