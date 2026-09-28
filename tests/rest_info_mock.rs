@@ -1107,33 +1107,6 @@ async fn user_funding_inserts_window_when_present() {
     assert_eq!(f.end_time, Some(9));
 }
 
-/// `user_ledger_updates` (node kind) posts `{type, address}` and decodes the
-/// envelope with raw records.
-#[tokio::test]
-async fn user_ledger_updates_node_kind_decodes_envelope() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/info"))
-        .and(body_partial_json(json!({
-            "type": "user_ledger_updates", "address": ADDR
-        })))
-        .respond_with(ResponseTemplate::new(200).set_body_json(envelope(
-            "user_ledger_updates",
-            json!({ "address": ADDR, "start_time": null, "end_time": null, "updates": [] }),
-        )))
-        .mount(&server)
-        .await;
-
-    let client = Client::new(server.uri()).unwrap();
-    let u = client
-        .rest()
-        .info()
-        .user_ledger_updates(test_addr(), None, None)
-        .await
-        .unwrap();
-    assert!(u.updates.is_empty());
-}
-
 /// `user_non_funding_ledger_updates` decodes the `ledger_updates` union.
 #[tokio::test]
 async fn user_non_funding_ledger_updates_decodes_union() {

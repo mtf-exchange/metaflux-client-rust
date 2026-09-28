@@ -24,6 +24,11 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   - The deployer, or a delegate that holds permission bit 9 (value `512`), may
     send it. The every-bit mask is now `1023`.
 
+### Breaking
+
+- Removed `Info::user_ledger_updates` and `UserLedgerUpdates`: the read is
+  retired; use `user_non_funding_ledger_updates`.
+
 ## [0.24.0] — 2026-09-16
 
 **This shape is LIVE.** The node half shipped in release 0.9.10, which the

@@ -1556,30 +1556,6 @@ pub struct UserFunding {
     pub fundings: Vec<FundingRecord>,
 }
 
-/// `user_ledger_updates` response envelope (the NODE kind).
-///
-/// The node returns `[]` today; its future per-record shape is doc-locked ONLY
-/// and diverges from the gateway union (`amount` / `amount_units` vs `delta`), so
-/// this types the ENVELOPE and leaves each record as raw JSON. Use
-/// [`Info::user_non_funding_ledger_updates`] for the gateway-served NORMALIZED
-/// union.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub struct UserLedgerUpdates {
-    /// Echo of the resolved account address.
-    pub address: Address,
-    /// Echo of the request `start_time` (unix ms); `null` when absent.
-    #[serde(default)]
-    pub start_time: Option<u64>,
-    /// Echo of the request `end_time` (unix ms); `null` when absent.
-    #[serde(default)]
-    pub end_time: Option<u64>,
-    /// Raw ledger-update records (record shape not yet locked — decode per your
-    /// own schema).
-    #[serde(default)]
-    pub updates: Vec<Value>,
-}
-
 /// One record inside a [`UserNonFundingLedgerUpdates`] union.
 ///
 /// Two row shapes (a trade row and a money-movement row) share `coin` + `time`;
@@ -2514,28 +2490,9 @@ impl<'a> Info<'a> {
         self.client.post_json("/info", &body).await
     }
 
-    /// `user_ledger_updates` — the NODE ledger kind, keyed by `address`.
-    ///
-    /// The node returns `[]` today and its record shape is not yet locked, so the
-    /// records stay raw JSON. For the gateway-served NORMALIZED union use
-    /// [`Info::user_non_funding_ledger_updates`].
-    ///
-    /// # Errors
-    /// HTTP / decode / protocol errors per [`crate::ClientError`].
-    pub async fn user_ledger_updates(
-        &self,
-        addr: Address,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-    ) -> Result<UserLedgerUpdates, ClientError> {
-        let mut body = json!({ "type": "user_ledger_updates", "address": addr });
-        insert_time_window(&mut body, start_time, end_time);
-        self.client.post_json("/info", &body).await
-    }
-
     /// `user_non_funding_ledger_updates` — the gateway-served normalized ledger
     /// union (deposits / withdrawals / transfers / trade rows), keyed by
-    /// `address`. The collection wire key is camelCase `ledgerUpdates`.
+    /// `address`. The collection wire key is `ledger_updates`.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

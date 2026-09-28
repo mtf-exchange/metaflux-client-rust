@@ -1128,19 +1128,6 @@ fn user_non_funding_ledger_rejects_retired_camel_key() {
     assert!(l.ledger_updates.is_empty());
 }
 
-/// `user_ledger_updates` (node kind): envelope decodes, records stay raw JSON.
-#[test]
-fn user_ledger_updates_envelope_decodes_raw_records() {
-    let data = serde_json::json!({
-        "address": "0x4242424242424242424242424242424242424242",
-        "start_time": 5u64, "end_time": 9u64, "updates": []
-    });
-    let u: UserLedgerUpdates = serde_json::from_value(data).unwrap();
-    assert_eq!(u.start_time, Some(5));
-    assert_eq!(u.end_time, Some(9));
-    assert!(u.updates.is_empty());
-}
-
 /// `spot_margin_state`: SYMBOLIZED pair name, `params` present and null.
 #[test]
 fn spot_margin_state_decodes() {
