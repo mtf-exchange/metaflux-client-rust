@@ -10,8 +10,12 @@
 //! `claim_referral_rewards` and `claim_broker_rewards` drain the whole balance
 //! and report no amount back. The claim response therefore cannot tell a caller
 //! what it just collected, and a claim on an empty balance looks the same as a
-//! claim on a full one. Read [`Info::referral_state`] or [`Info::builder_state`]
+//! claim on a full one. Read [`Info::referral_state`] and [`Info::builder_state`]
 //! first: that is the only place the claimable figure is published.
+//!
+//! From the next node release, either claim drains BOTH credits, so the
+//! claimable figure is the sum of the two `claimable_rewards`. A live node still
+//! drains only the credit that matches the action.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;

@@ -39,6 +39,17 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
     `referrer_reward_cap_usd`; `FeeScheduleUser` gains
     `referee_discount_permille`.
 
+### Changed
+
+- `claim_referral_rewards_typed` and `claim_broker_rewards_typed` (and its old
+  name `claim_builder_rewards_typed`) now each drain BOTH the referral credit
+  and the broker-code credit. **NOT LIVE** until the next node release; a live
+  node drains only the credit that matches the action. No signature, wire body
+  or return type changes. The reply still reports no amount: read
+  `Info::referral_state` and `Info::builder_state` first, and show their sum.
+  The node's `node_actions` row of the claim carries `claimed`, `referral` and
+  `broker`.
+
 ### Fixed
 
 - `FeeSchedule::referrer_share_bps` is a share of the taker fee in bps of the
