@@ -13,7 +13,7 @@ use metaflux_client::{
     rest::exchange_typed::{_typed_digest_for_test, _typed_trade_digest_for_test},
     types::{
         Cloid, MarketId, OrderId, VaultId,
-        account::{ApproveBrokerFee, UpdateLeverage},
+        account::{ApproveBrokerFee, RegisterReferralCode, SetReferrerByCode, UpdateLeverage},
         chase::{CancelChaseParams, ChaseParams},
         defi::{BorrowLend, BorrowLendKind},
         order::{
@@ -1596,4 +1596,81 @@ async fn noop_posts_a_bare_tag_and_signs_the_chain_and_nonce() {
         _recover_for_test(&digest, &sig).expect("recover"),
         wallet.address()
     );
+}
+
+/// Both referral-code actions post `{"code"}` under their own tag and sign
+/// the string field. A malformed code is refused before signing.
+#[tokio::test]
+async fn referral_code_actions_post_their_tags_and_sign_the_code() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let chain = metaflux_chain_tag(MTF_CHAIN_ID).to_string();
+    for tag in ["register_referral_code", "set_referrer_by_code"] {
+        let _: Value = if tag == "register_referral_code" {
+            let params = RegisterReferralCode {
+                code: "alice1".into(),
+            };
+            client
+                .exchange()
+                .register_referral_code(&wallet, &params)
+                .await
+        } else {
+            let params = SetReferrerByCode {
+                code: "alice1".into(),
+            };
+            client
+                .exchange()
+                .set_referrer_by_code(&wallet, &params)
+                .await
+        }
+        .unwrap();
+
+        let body = captor.last.lock().await.clone().expect("body captured");
+        assert_eq!(body["action"]["type"].as_str(), Some(tag));
+        assert_eq!(body["action"]["params"], json!({ "code": "alice1" }));
+        let nonce = body["nonce"].as_u64().unwrap();
+        let typed = if tag == "register_referral_code" {
+            TypedAction::RegisterReferralCode {
+                metaflux_chain: chain.clone(),
+                code: "alice1".into(),
+                nonce,
+            }
+        } else {
+            TypedAction::SetReferrerByCode {
+                metaflux_chain: chain.clone(),
+                code: "alice1".into(),
+                nonce,
+            }
+        };
+        let sig = decode_sig(body["signature"].as_str().unwrap());
+        assert_eq!(
+            _recover_for_test(&_typed_digest_for_test(&typed), &sig).expect("recover"),
+            wallet.address()
+        );
+    }
+
+    for bad in ["ab", "Alice1", "alice_1", "abcdefghijklmnopq", ""] {
+        let err = client
+            .exchange()
+            .register_referral_code(&wallet, &RegisterReferralCode { code: bad.into() })
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, metaflux_client::ClientError::Validation(m)
+                if m == "referral code must be 3-16 characters, a-z and 0-9"),
+            "{bad:?} -> {err}"
+        );
+        let err = client
+            .exchange()
+            .set_referrer_by_code(&wallet, &SetReferrerByCode { code: bad.into() })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, metaflux_client::ClientError::Validation(_)));
+    }
+    for good in ["abc", "0123456789abcdef"] {
+        let _: Value = client
+            .exchange()
+            .register_referral_code(&wallet, &RegisterReferralCode { code: good.into() })
+            .await
+            .unwrap();
+    }
 }

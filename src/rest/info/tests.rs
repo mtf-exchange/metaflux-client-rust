@@ -1477,3 +1477,73 @@ fn sub_accounts_decodes_equity() {
     assert_eq!(s.sub_accounts[0].equity, "1234.5");
     assert_eq!(s.sub_accounts[1].equity, "0");
 }
+
+/// The full `referral_state` body. A bound referee with no discount cap reads
+/// `None` for the remaining volume, which is "no cap", not "zero left".
+#[test]
+fn referral_state_decodes_the_full_body() {
+    let s: ReferralState = serde_json::from_value(serde_json::json!({
+        "type": "referral_state",
+        "user": "0x00000000000000000000000000000000000000aa",
+        "address": "0x00000000000000000000000000000000000000aa",
+        "claimable_rewards": "4.5",
+        "referrer": "0x00000000000000000000000000000000000000bb",
+        "referrer_code": "alice1",
+        "code": "bob22",
+        "referee": {
+            "bound_ms": 1_700_000_000_000u64, "volume_since_bind": "120000",
+            "fees_paid": "54", "rewarded": "5.4", "discount_permille": 40,
+            "discount_volume_remaining": null, "share_volume_remaining": "999880000"
+        },
+        "referrer_stats": {
+            "referee_count": 2, "referred_fees": "300", "rewarded": "30", "claimed": "25.5"
+        },
+        "code_requirement": {
+            "enabled": true, "min_volume_30d": "10000", "volume_30d": "120000", "eligible": true
+        }
+    }))
+    .unwrap();
+    assert_eq!(s.referrer_code.as_deref(), Some("alice1"));
+    assert_eq!(s.code.as_deref(), Some("bob22"));
+    let r = s.referee.expect("bound");
+    assert_eq!(r.discount_permille, 40);
+    assert_eq!(r.discount_volume_remaining, None);
+    assert_eq!(r.share_volume_remaining.as_deref(), Some("999880000"));
+    assert_eq!(s.referrer_stats.expect("stats").claimed, "25.5");
+    assert!(s.code_requirement.expect("requirement").eligible);
+
+    let old: ReferralState = serde_json::from_value(serde_json::json!({
+        "user": "0x00000000000000000000000000000000000000aa",
+        "claimable_rewards": "0", "referrer": null
+    }))
+    .unwrap();
+    assert!(old.referee.is_none() && old.referrer_stats.is_none() && old.code.is_none());
+}
+
+/// The referral fee fields: a SHARE of the fee, a permille discount, and
+/// three whole-USDC thresholds where `"0"` means off or no cap.
+#[test]
+fn fee_schedule_decodes_the_referral_fields() {
+    let f: FeeSchedule = serde_json::from_value(serde_json::json!({
+        "tiers": [], "burn_ratio": "0.7",
+        "referrer_share_bps": "1000",
+        "referee_discount_permille": 40,
+        "referral_code_min_volume_usd": "10000",
+        "referee_discount_cap_usd": "25000000",
+        "referrer_reward_cap_usd": "0",
+        "user": {
+            "address": "0x00000000000000000000000000000000000000aa",
+            "taker_volume_30d": "0", "maker_volume_30d": "0",
+            "taker_bps": "4.5", "maker_bps": "1.5",
+            "effective_taker_bps": "4.32", "effective_maker_bps": "1.5",
+            "staking_discount_permille": 0, "referee_discount_permille": 40,
+            "maker_rebate_bps": "0"
+        }
+    }))
+    .unwrap();
+    assert_eq!(f.referee_discount_permille, Some(40));
+    assert_eq!(f.referral_code_min_volume_usd.as_deref(), Some("10000"));
+    assert_eq!(f.referee_discount_cap_usd.as_deref(), Some("25000000"));
+    assert_eq!(f.referrer_reward_cap_usd.as_deref(), Some("0"));
+    assert_eq!(f.user.expect("user").referee_discount_permille, Some(40));
+}

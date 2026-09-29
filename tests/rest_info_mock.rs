@@ -1517,3 +1517,77 @@ async fn bridge_withdrawal_history_carries_the_folded_configs() {
     assert_eq!(row.effective_release_retention_ms, 86_400_000);
     assert_eq!(row.scan_policy.effective_confirmations, 5);
 }
+
+#[tokio::test]
+async fn referral_reads_send_the_documented_bodies() {
+    let server = MockServer::start().await;
+    let row = json!({ "user": ADDR, "bound_ms": 1_700_000_000_000u64,
+        "volume_since_bind": "250000", "fees_paid": "112.5", "rewarded": "11.25" });
+    let cases = [
+        (
+            json!({ "type": "referral_code", "code": "alice1" }),
+            envelope("referral_code", json!({ "code": "alice1", "owner": ADDR })),
+        ),
+        (
+            json!({ "type": "referral_referees", "address": ADDR }),
+            envelope(
+                "referral_referees",
+                json!({ "address": ADDR, "referees": [row.clone()] }),
+            ),
+        ),
+        (
+            json!({ "type": "referral_referees", "address": ADDR, "limit": 5 }),
+            envelope(
+                "referral_referees",
+                json!({ "address": ADDR, "referees": [] }),
+            ),
+        ),
+        (
+            json!({ "type": "referral_leaderboard" }),
+            envelope(
+                "referral_leaderboard",
+                json!({ "rows": [{ "address": ADDR, "code": null, "referee_count": 3u64,
+                    "referred_fees": "900", "rewarded": "90", "claimed": "40" }] }),
+            ),
+        ),
+        (
+            json!({ "type": "referral_leaderboard", "limit": 10 }),
+            envelope("referral_leaderboard", json!({ "rows": [] })),
+        ),
+    ];
+    for (body, reply) in cases {
+        Mock::given(method("POST"))
+            .and(path("/info"))
+            .and(body_json(body))
+            .respond_with(ResponseTemplate::new(200).set_body_json(reply))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let client = Client::new(server.uri()).unwrap();
+    let info = client.rest().info();
+    let code = info.referral_code("alice1").await.unwrap();
+    assert_eq!(code.owner.as_deref(), Some(ADDR));
+    let referees = info.referral_referees(test_addr(), None).await.unwrap();
+    assert_eq!(referees.referees.len(), 1);
+    assert_eq!(referees.referees[0].rewarded, "11.25");
+    assert_eq!(referees.referees[0].bound_ms, 1_700_000_000_000);
+    assert!(
+        info.referral_referees(test_addr(), Some(5))
+            .await
+            .unwrap()
+            .referees
+            .is_empty()
+    );
+    let board = info.referral_leaderboard(None).await.unwrap();
+    assert_eq!(board.rows[0].referee_count, 3);
+    assert_eq!(board.rows[0].code, None);
+    assert!(
+        info.referral_leaderboard(Some(10))
+            .await
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+}

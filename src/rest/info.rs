@@ -66,7 +66,8 @@ pub use bridge::{
 };
 pub use credit::{
     ApprovedBuilder, ApprovedBuilders, BuilderState, DelegatorRewardRow, DelegatorRewards,
-    ReferralState,
+    RefereeRow, ReferralCode, ReferralCodeRequirement, ReferralLeaderboard, ReferralLeaderboardRow,
+    ReferralRefereeState, ReferralReferees, ReferralState, ReferrerStats,
 };
 pub use discovery::{AdvertisedPeer, GossipRootIps};
 pub use options::{OptionKind, OptionPosition, OptionSeries, OptionSeriesRegistry, OptionState};
@@ -446,8 +447,28 @@ pub struct FeeSchedule {
     /// Top-level base taker fee, bps decimal string. See `maker_bps`.
     #[serde(default)]
     pub taker_bps: Option<String>,
-    /// Referrer share of the base taker take, bps decimal string (e.g. `"5.0"`).
+    /// The referrer's share of a referee's taker fee, in bps OF THE FEE,
+    /// decimal string. `"1000"` = 10% of the fee. A share, not a fee rate.
     pub referrer_share_bps: String,
+    /// The taker discount a referee gets, in permille. The fee path takes the
+    /// larger of this and the staking discount, never the sum.
+    ///
+    /// The four referral fields below are absent from a node before the
+    /// release that ships referral codes.
+    #[serde(default)]
+    pub referee_discount_permille: Option<u32>,
+    /// 30-day volume an account needs to register a referral code, whole-USDC
+    /// decimal string. `"0"` = the code program is off.
+    #[serde(default)]
+    pub referral_code_min_volume_usd: Option<String>,
+    /// Referee volume after which the referee discount stops, whole-USDC
+    /// decimal string. `"0"` = no cap.
+    #[serde(default)]
+    pub referee_discount_cap_usd: Option<String>,
+    /// Referee volume after which the referrer share stops, whole-USDC decimal
+    /// string. `"0"` = no cap.
+    #[serde(default)]
+    pub referrer_reward_cap_usd: Option<String>,
     /// Burn fraction of the non-referrer remainder, fraction in `[0, 1]`
     /// (e.g. `"0.8"`). NOT bps.
     pub burn_ratio: String,
@@ -545,6 +566,11 @@ pub struct FeeScheduleUser {
     pub effective_maker_bps: String,
     /// Taker-only staking discount, per mille (`100` = 10%).
     pub staking_discount_permille: u32,
+    /// The referee taker discount that applies to this account now, per mille.
+    /// `effective_taker_bps` uses the larger of this and the staking discount.
+    /// Absent from a node before the release that ships referral codes.
+    #[serde(default)]
+    pub referee_discount_permille: Option<u32>,
     /// The PERP maker rebate, before it is subtracted. Decimal bps string.
     pub maker_rebate_bps: String,
     /// Per-product resolved rates. A server that predates per-product fees sends

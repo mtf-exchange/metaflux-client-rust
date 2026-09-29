@@ -213,6 +213,10 @@ const CLAIM_BUILDER_REWARDS_TYPE: &[u8] =
     b"MetaFluxTransaction:ClaimBuilderRewards(string metafluxChain,uint64 nonce)";
 const CLAIM_REFERRAL_REWARDS_TYPE: &[u8] =
     b"MetaFluxTransaction:ClaimReferralRewards(string metafluxChain,uint64 nonce)";
+const REGISTER_REFERRAL_CODE_TYPE: &[u8] =
+    b"MetaFluxTransaction:RegisterReferralCode(string metafluxChain,string code,uint64 nonce)";
+const SET_REFERRER_BY_CODE_TYPE: &[u8] =
+    b"MetaFluxTransaction:SetReferrerByCode(string metafluxChain,string code,uint64 nonce)";
 const BORROW_LEND_TYPE: &[u8] =
     b"MetaFluxTransaction:BorrowLend(string metafluxChain,uint8 kind,string amount,uint64 nonce)";
 const REGISTER_METALIQUIDITY_OPERATOR_TYPE: &[u8] =
@@ -598,6 +602,24 @@ pub enum TypedAction {
     ClaimReferralRewards {
         /// Chain tag.
         metaflux_chain: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `RegisterReferralCode(string metafluxChain,string code,uint64 nonce)`
+    RegisterReferralCode {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Referral code, `^[a-z0-9]{3,16}$`.
+        code: String,
+        /// Envelope nonce.
+        nonce: u64,
+    },
+    /// `SetReferrerByCode(string metafluxChain,string code,uint64 nonce)`
+    SetReferrerByCode {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// Referral code of the referrer.
+        code: String,
         /// Envelope nonce.
         nonce: u64,
     },
@@ -1358,6 +1380,8 @@ impl TypedAction {
             TypedAction::VaultDistribute { .. } => VAULT_DISTRIBUTE_TYPE,
             TypedAction::ClaimBuilderRewards { .. } => CLAIM_BUILDER_REWARDS_TYPE,
             TypedAction::ClaimReferralRewards { .. } => CLAIM_REFERRAL_REWARDS_TYPE,
+            TypedAction::RegisterReferralCode { .. } => REGISTER_REFERRAL_CODE_TYPE,
+            TypedAction::SetReferrerByCode { .. } => SET_REFERRER_BY_CODE_TYPE,
             TypedAction::RfqQuote { owner: None, .. } => account::RFQ_QUOTE_TYPE,
             TypedAction::RfqQuote { owner: Some(_), .. } => account::RFQ_QUOTE_WITH_OWNER_TYPE,
             TypedAction::BorrowLend { .. } => BORROW_LEND_TYPE,
@@ -2007,6 +2031,20 @@ impl TypedAction {
                 metaflux_chain,
                 nonce,
             } => vec![enc_string(metaflux_chain), enc_u64(*nonce)],
+            TypedAction::RegisterReferralCode {
+                metaflux_chain,
+                code,
+                nonce,
+            }
+            | TypedAction::SetReferrerByCode {
+                metaflux_chain,
+                code,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_string(code),
+                enc_u64(*nonce),
+            ],
             TypedAction::RfqQuote {
                 metaflux_chain,
                 owner,
@@ -2579,6 +2617,22 @@ mod tests {
                     nonce: 19,
                 },
                 "3a3f54fcf37ab322eaea12dee2696e11048c107c344a8b59c962dc1e8e65cfa4",
+            ),
+            (
+                TypedAction::RegisterReferralCode {
+                    metaflux_chain: "Testnet".into(),
+                    code: "alice1".into(),
+                    nonce: 2,
+                },
+                "d31467d6596ca7304914c25e5b658ad8d7264486d9c62d289bf969afd2cd4684",
+            ),
+            (
+                TypedAction::SetReferrerByCode {
+                    metaflux_chain: "Testnet".into(),
+                    code: "alice1".into(),
+                    nonce: 3,
+                },
+                "3ba414f7b7fc217e0446f3fb420c0a344d81d8b2320ca2513af80d72cc59d318",
             ),
         ];
         for (action, want) in cases {

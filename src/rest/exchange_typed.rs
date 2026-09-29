@@ -68,6 +68,20 @@ fn core_side_to_u8(side: crate::types::rfq::CoreSide) -> u8 {
     }
 }
 
+fn validate_referral_code(code: &str) -> Result<(), ClientError> {
+    let ok = (3..=16).contains(&code.len())
+        && code
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit());
+    if ok {
+        Ok(())
+    } else {
+        Err(ClientError::Validation(
+            "referral code must be 3-16 characters, a-z and 0-9".into(),
+        ))
+    }
+}
+
 impl<'a> Exchange<'a> {
     // ---- typed-scheme signed actions (structured EIP-712) ----
     //
@@ -233,6 +247,52 @@ impl<'a> Exchange<'a> {
                 nonce,
             };
             (action, "set_referrer", json!({ "referrer": referrer }))
+        })
+        .await
+    }
+
+    /// Register a referral code under the typed scheme
+    /// (`register_referral_code`).
+    ///
+    /// # Errors
+    /// [`ClientError::Validation`] when the code breaks `^[a-z0-9]{3,16}$`;
+    /// otherwise HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn register_referral_code_typed(
+        &self,
+        wallet: &Wallet,
+        code: &str,
+    ) -> Result<Value, ClientError> {
+        validate_referral_code(code)?;
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::RegisterReferralCode {
+                metaflux_chain: chain,
+                code: code.to_owned(),
+                nonce,
+            };
+            (action, "register_referral_code", json!({ "code": code }))
+        })
+        .await
+    }
+
+    /// Bind the referrer that holds `code` under the typed scheme
+    /// (`set_referrer_by_code`).
+    ///
+    /// # Errors
+    /// [`ClientError::Validation`] when the code breaks `^[a-z0-9]{3,16}$`;
+    /// otherwise HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn set_referrer_by_code_typed(
+        &self,
+        wallet: &Wallet,
+        code: &str,
+    ) -> Result<Value, ClientError> {
+        validate_referral_code(code)?;
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::SetReferrerByCode {
+                metaflux_chain: chain,
+                code: code.to_owned(),
+                nonce,
+            };
+            (action, "set_referrer_by_code", json!({ "code": code }))
         })
         .await
     }

@@ -23,6 +23,26 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
     orders that raise open interest at the cap; closing orders still pass.
   - The deployer, or a delegate that holds permission bit 9 (value `512`), may
     send it. The every-bit mask is now `1023`.
+- Referral codes. **NOT LIVE** until the node release that ships them; until
+  then the node answers `unknown variant` for both actions and omits the new
+  read fields.
+  - `RegisterReferralCode` / `register_referral_code` and `SetReferrerByCode` /
+    `set_referrer_by_code`, both `{"code": <string>}`. A code matches
+    `^[a-z0-9]{3,16}$`. The SDK refuses any other code before it signs, with
+    the node's message.
+  - `Info::referral_code`, `Info::referral_referees` and
+    `Info::referral_leaderboard`.
+  - `ReferralState` gains `address`, `referrer_code`, `code`, `referee`,
+    `referrer_stats` and `code_requirement`. Each is `None` on an older node.
+  - `FeeSchedule` gains `referee_discount_permille`,
+    `referral_code_min_volume_usd`, `referee_discount_cap_usd` and
+    `referrer_reward_cap_usd`; `FeeScheduleUser` gains
+    `referee_discount_permille`.
+
+### Fixed
+
+- `FeeSchedule::referrer_share_bps` is a share of the taker fee in bps of the
+  fee (`"1000"` = 10%), not a fee rate. The doc said otherwise.
 
 ### Breaking
 

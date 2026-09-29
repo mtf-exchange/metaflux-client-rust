@@ -33,8 +33,9 @@ use crate::rest::RestClient;
 use crate::types::{
     account::{
         AgentSetAbstraction, ApproveAgent, ApproveBrokerFee, ApproveBuilderFee,
-        ConvertToMultiSigUser, PriorityBid, SetDisplayName, SetReferrer, TopUpIsolatedOnlyMargin,
-        UpdateIsolatedMargin, UpdateLeverage, UserPortfolioMargin, UserSetAbstraction,
+        ConvertToMultiSigUser, PriorityBid, RegisterReferralCode, SetDisplayName, SetReferrer,
+        SetReferrerByCode, TopUpIsolatedOnlyMargin, UpdateIsolatedMargin, UpdateLeverage,
+        UserPortfolioMargin, UserSetAbstraction,
     },
     chase::{CancelChaseParams, ChaseParams},
     defi::BorrowLend,
@@ -941,6 +942,33 @@ impl<'a> Exchange<'a> {
         params: &SetReferrer,
     ) -> Result<Value, ClientError> {
         self.set_referrer_typed(wallet, params.referrer).await
+    }
+
+    /// Register a referral code for this account.
+    ///
+    /// # Errors
+    /// [`ClientError::Validation`] when the code breaks `^[a-z0-9]{3,16}$`;
+    /// otherwise HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn register_referral_code(
+        &self,
+        wallet: &Wallet,
+        params: &RegisterReferralCode,
+    ) -> Result<Value, ClientError> {
+        self.register_referral_code_typed(wallet, &params.code)
+            .await
+    }
+
+    /// Bind the referrer that holds a referral code (one-time, immutable).
+    ///
+    /// # Errors
+    /// [`ClientError::Validation`] when the code breaks `^[a-z0-9]{3,16}$`;
+    /// otherwise HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn set_referrer_by_code(
+        &self,
+        wallet: &Wallet,
+        params: &SetReferrerByCode,
+    ) -> Result<Value, ClientError> {
+        self.set_referrer_by_code_typed(wallet, &params.code).await
     }
 
     /// Approve an agent wallet to sign on behalf of this account.

@@ -70,6 +70,24 @@ pub struct SetReferrer {
     pub referrer: Address,
 }
 
+/// Action — register a referral code for this account (`register_referral_code`).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RegisterReferralCode {
+    /// The code, `^[a-z0-9]{3,16}$`. Lowercase only: the node rejects, it does
+    /// not fold case.
+    pub code: String,
+}
+
+/// Action — bind the referrer that holds a referral code (`set_referrer_by_code`).
+/// The binding is permanent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SetReferrerByCode {
+    /// The referrer's code, `^[a-z0-9]{3,16}$`.
+    pub code: String,
+}
+
 /// Action — approve an agent wallet to sign on behalf of this account.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
