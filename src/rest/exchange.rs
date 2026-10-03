@@ -1590,7 +1590,7 @@ impl<'a> Exchange<'a> {
     }
 
     /// Set a market's open-interest cap, in whole units of the base asset.
-    /// NOT LIVE until the release after 2026-10-01; see [`PerpSetOiCap`].
+    /// Needs node 0.9.16 or later; see [`PerpSetOiCap`].
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

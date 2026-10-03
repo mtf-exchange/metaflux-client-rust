@@ -453,8 +453,7 @@ pub struct FeeSchedule {
     /// The taker discount a referee gets, in permille. The fee path takes the
     /// larger of this and the staking discount, never the sum.
     ///
-    /// The four referral fields below are absent from a node before the
-    /// release that ships referral codes.
+    /// The four referral fields below are absent from a node before 0.9.16.
     #[serde(default)]
     pub referee_discount_permille: Option<u32>,
     /// 30-day volume an account needs to register a referral code, whole-USDC
@@ -568,7 +567,7 @@ pub struct FeeScheduleUser {
     pub staking_discount_permille: u32,
     /// The referee taker discount that applies to this account now, per mille.
     /// `effective_taker_bps` uses the larger of this and the staking discount.
-    /// Absent from a node before the release that ships referral codes.
+    /// Absent from a node before 0.9.16.
     #[serde(default)]
     pub referee_discount_permille: Option<u32>,
     /// The PERP maker rebate, before it is subtracted. Decimal bps string.

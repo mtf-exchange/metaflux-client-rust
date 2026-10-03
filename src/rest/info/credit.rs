@@ -13,9 +13,8 @@
 //! claim on a full one. Read [`Info::referral_state`] and [`Info::builder_state`]
 //! first: that is the only place the claimable figure is published.
 //!
-//! From the next node release, either claim drains BOTH credits, so the
-//! claimable figure is the sum of the two `claimable_rewards`. A live node still
-//! drains only the credit that matches the action.
+//! From node 0.9.16, either claim drains BOTH credits, so the claimable figure
+//! is the sum of the two `claimable_rewards`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -27,8 +26,8 @@ use crate::wallet::Address;
 /// `referral_state` — one account's referral position, as referee and as
 /// referrer.
 ///
-/// The fields after `referrer` are absent from a node before the release that
-/// ships referral codes, so they decode as `None` there.
+/// The fields after `referrer` are absent from a node before 0.9.16, so they
+/// decode as `None` there.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ReferralState {
@@ -67,8 +66,8 @@ pub struct ReferralState {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ReferralRefereeState {
-    /// Consensus ms of the binding. `0` for a binding made before the release
-    /// that ships referral codes; its counters start at zero.
+    /// Consensus ms of the binding. `0` for a binding made before node 0.9.16;
+    /// its counters start at zero.
     pub bound_ms: u64,
     /// Taker notional traded since the binding.
     pub volume_since_bind: String,
@@ -137,8 +136,7 @@ pub struct ReferralCode {
 pub struct RefereeRow {
     /// The referee, `0x` hex.
     pub user: String,
-    /// Consensus ms of the binding. `0` for a binding made before the release
-    /// that ships referral codes.
+    /// Consensus ms of the binding. `0` for a binding made before node 0.9.16.
     pub bound_ms: u64,
     /// Taker notional traded since the binding.
     pub volume_since_bind: String,

@@ -55,9 +55,8 @@ impl Info<'_> {
     /// Per-node config, NOT committed state: nodes that carry the same roster
     /// answer identically, and nodes that do not may differ.
     ///
-    /// The node release that serves this shape has not fired yet. Against an
-    /// older node the decode fails on the missing `peers` field, which is
-    /// deliberate — a silent empty roster is indistinguishable from a
+    /// Against an older node the decode fails on the missing `peers` field,
+    /// which is deliberate — a silent empty roster is indistinguishable from a
     /// deployment that advertises nothing.
     ///
     /// # Errors

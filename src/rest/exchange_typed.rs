@@ -1788,9 +1788,8 @@ impl<'a> Exchange<'a> {
     /// Drain the sender's accrued broker-code AND referral fee credit under the
     /// typed scheme. No params.
     ///
-    /// This is the same claim as [`Self::claim_referral_rewards_typed`]: either
-    /// action drains both credits. NOT LIVE until the next node release; a live
-    /// node drains only the broker credit here.
+    /// This is the same claim as [`Self::claim_referral_rewards_typed`]: from
+    /// node 0.9.16, either action drains both credits.
     ///
     /// The POSTed action tag is `claim_broker_rewards`. The EIP-712 type string
     /// stays `ClaimBuilderRewards`: it is consensus-frozen, so the two names
@@ -1825,11 +1824,8 @@ impl<'a> Exchange<'a> {
     /// Drain the sender's accrued referrer AND broker-code fee credit under the
     /// typed scheme (`claim_referral_rewards`). No params.
     ///
-    /// This is the same claim as [`Self::claim_broker_rewards_typed`]: either
-    /// action drains both credits. NOT LIVE until the next node release; a live
-    /// node drains only the referral credit here. On a live node, read both
-    /// balances after the claim commits and send the other claim if its
-    /// balance is still above zero.
+    /// This is the same claim as [`Self::claim_broker_rewards_typed`]: from
+    /// node 0.9.16, either action drains both credits.
     ///
     /// The node variant carries a required (empty) `params` struct, so the wire
     /// body is `{"type":"claim_referral_rewards","params":{}}`. The reply
@@ -2295,9 +2291,8 @@ impl<'a> Exchange<'a> {
 
     /// Set a market's open-interest cap under the typed scheme.
     ///
-    /// NOT LIVE: the node half ships in the release after 2026-10-01. Until
-    /// then the live chain answers `unknown variant`. See
-    /// [`crate::types::perp::PerpSetOiCap`] for the units and the rules.
+    /// Needs node 0.9.16 or later. See [`crate::types::perp::PerpSetOiCap`]
+    /// for the units and the rules.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].

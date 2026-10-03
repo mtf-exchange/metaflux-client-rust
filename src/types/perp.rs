@@ -28,12 +28,12 @@
 //! Availability is PER NETWORK. Do not assume it — probe one call against your
 //! target network and read the error.
 //!
-//! On the primary networks the node knows ten of the eleven tags: an unknown
-//! action gets `unknown variant`, and these do not. A malformed one gets a field
-//! or signature error instead, which means the tag resolved.
+//! On the primary networks the node knows all eleven tags: an unknown action
+//! gets `unknown variant`, and these do not. A malformed one gets a field or
+//! signature error instead, which means the tag resolved.
 //!
-//! [`PerpSetOiCap`] is NOT LIVE yet. Its node half ships in the release after
-//! 2026-10-01, and until then the live chain answers `unknown variant`.
+//! [`PerpSetOiCap`] needs node 0.9.16 or later. An older node answers
+//! `unknown variant`.
 //!
 //! [`Mip3SetOraclePx`] additionally sits behind the `mip3_deployer_oracle` fork
 //! feature. That feature is ACTIVE FROM GENESIS on a fresh chain; only a legacy
@@ -149,8 +149,8 @@ pub struct PerpSetMinSize {
     pub min_order_size: u64,
 }
 
-/// Set a market's open-interest cap. NOT LIVE yet: the live chain answers
-/// `unknown variant` until the release after 2026-10-01.
+/// Set a market's open-interest cap. Needs node 0.9.16 or later; an older node
+/// answers `unknown variant`.
 ///
 /// The deployer, or a delegate that holds permission bit 9 (value `512`), sends
 /// it. With bit 9 the every-bit mask is `1023`. A cap under the current open

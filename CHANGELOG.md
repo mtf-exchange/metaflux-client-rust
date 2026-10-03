@@ -7,8 +7,9 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
-**NOT LIVE.** The node half of `perp_set_oi_cap` ships in the release after
-2026-10-01. Until then the live chain answers `unknown variant` for it.
+## [0.25.0] — 2026-10-04
+
+Needs node 0.9.16 or later.
 
 ### Added
 
@@ -23,9 +24,7 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
     orders that raise open interest at the cap; closing orders still pass.
   - The deployer, or a delegate that holds permission bit 9 (value `512`), may
     send it. The every-bit mask is now `1023`.
-- Referral codes. **NOT LIVE** until the node release that ships them; until
-  then the node answers `unknown variant` for both actions and omits the new
-  read fields.
+- Referral codes.
   - `RegisterReferralCode` / `register_referral_code` and `SetReferrerByCode` /
     `set_referrer_by_code`, both `{"code": <string>}`. A code matches
     `^[a-z0-9]{3,16}$`. The SDK refuses any other code before it signs, with
@@ -43,12 +42,10 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 - `claim_referral_rewards_typed` and `claim_broker_rewards_typed` (and its old
   name `claim_builder_rewards_typed`) now each drain BOTH the referral credit
-  and the broker-code credit. **NOT LIVE** until the next node release; a live
-  node drains only the credit that matches the action. No signature, wire body
-  or return type changes. The reply still reports no amount: read
-  `Info::referral_state` and `Info::builder_state` first, and show their sum.
-  The node's `node_actions` row of the claim carries `claimed`, `referral` and
-  `broker`.
+  and the broker-code credit. No signature, wire body or return type changes.
+  The reply still reports no amount: read `Info::referral_state` and
+  `Info::builder_state` first, and show their sum. The node's `node_actions`
+  row of the claim carries `claimed`, `referral` and `broker`.
 
 ### Fixed
 

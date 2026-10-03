@@ -1241,8 +1241,7 @@ pub enum TypedAction {
     },
     /// `PerpSetOiCap(string metafluxChain,uint32 asset,uint64 oiCapUnits,uint64 nonce)`
     ///
-    /// NOT LIVE: the node half ships in the release after 2026-10-01. Until
-    /// then the live chain answers `unknown variant`.
+    /// Needs node 0.9.16 or later. An older node answers `unknown variant`.
     PerpSetOiCap {
         /// Chain tag.
         metaflux_chain: String,
