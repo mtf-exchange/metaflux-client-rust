@@ -6,6 +6,7 @@
 
 use metaflux_client::{
     Client, request_faucet,
+    rest::exchange::MTF_CHAIN_ID,
     types::{
         MarketId,
         order::{Order, OrderKind, Side, StpMode, TimeInForce},
@@ -41,7 +42,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // A is the pre-funded dev account (genesis USDC). Only B needs the faucet —
     // a single request avoids the per-IP rate limit (both would share one IP via
     // the tunnel).
-    let r = request_faucet(&base, &b.address().to_string(), None).await?;
+    let r = request_faucet(&base, &b, MTF_CHAIN_ID).await?;
     println!(
         "faucet B {}: usdc={} mtf={} {}",
         r.address, r.usdc, r.mtf, r.status

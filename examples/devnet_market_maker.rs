@@ -45,6 +45,7 @@ use tiny_keccak::{Hasher, Keccak};
 use metaflux_client::{
     Client,
     faucet::request_faucet,
+    rest::exchange::MTF_CHAIN_ID,
     types::{
         MarketId,
         order::{
@@ -306,7 +307,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // One grant per address, ever, and one per IP per day: a second pass would
     // only collect 429s. Fund the wallets elsewhere if this is not enough.
     for w in &wallets {
-        let _ = request_faucet(&base, &w.address().to_string(), None).await;
+        let _ = request_faucet(&base, w, MTF_CHAIN_ID).await;
     }
     tokio::time::sleep(Duration::from_secs(3)).await;
 
