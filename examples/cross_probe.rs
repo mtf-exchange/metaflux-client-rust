@@ -9,6 +9,7 @@
 use metaflux_client::{
     Client,
     faucet::request_faucet,
+    rest::exchange::MTF_CHAIN_ID,
     types::{
         MarketId,
         order::{BatchOrder, Order, OrderGrouping, OrderKind, Side, StpMode, TimeInForce},
@@ -47,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // "skipped" and the probe then runs against an unfunded taker. Fund B by
     // another route, or run the two halves a day apart.
     for (who, w) in [("A", &a), ("B", &b)] {
-        match request_faucet(&base, &w.address().to_string(), None).await {
+        match request_faucet(&base, w, MTF_CHAIN_ID).await {
             Ok(r) => println!("faucet {who}: usdc={} {}", r.usdc, r.status),
             Err(e) => println!("faucet {who}: skipped ({e})"),
         }

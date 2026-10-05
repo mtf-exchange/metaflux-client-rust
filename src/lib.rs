@@ -62,7 +62,10 @@ pub mod wallet;
 pub mod ws;
 
 pub use error::{ApiError, ClientError, ErrorCode, ErrorDetails};
-pub use faucet::{FaucetResponse, request_faucet};
+pub use faucet::{
+    FAUCET_CLAIM_TTL_SECS, FaucetClaim, FaucetResponse, faucet_claim_message, request_faucet,
+    request_faucet_with_claim,
+};
 pub use grid::{GridError, GridOrder, round_order_to_grid};
 pub use rest::RestClient;
 pub use twap_plan::{

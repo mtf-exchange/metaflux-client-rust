@@ -7,6 +7,26 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking.** The recipient signs every faucet claim.
+  `request_faucet(faucet_base_url, &wallet, chain_id)` signs with the wallet,
+  and the wallet's address is the recipient. The body is
+  `{"address","expires","signature"}`.
+  - The `amount` argument is gone. From the next node release the grant is
+    fixed and the node ignores `amount`: the signature does not cover it, so a
+    copier of a signed body could otherwise spend the claim on a tiny grant.
+  - The signature is an EIP-191 `personal_sign` over `faucet_claim_message`:
+    `MetaFlux faucet claim\naddress: <0x lowercase>\nchain: <chain id>\nexpires: <unix seconds>`.
+  - `expires` is the current time plus `FAUCET_CLAIM_TTL_SECS` (300 s). The node refuses a
+    past value and a value more than 600 s ahead.
+  - `request_faucet_with_claim` sends a `FaucetClaim` that another wallet
+    signed.
+  - The node also refuses a recipient that holds less than 0.01 ETH on
+    Ethereum mainnet. `ProtocolError.msg` carries its text as it is.
+  - A node before the next release ignores the new fields, so a signed claim
+    works on it too.
+
 ## [0.25.0] — 2026-10-04
 
 Needs node 0.9.16 or later.
