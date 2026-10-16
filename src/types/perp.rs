@@ -106,7 +106,7 @@ pub struct PerpSetOracle {
 pub struct PerpSetLeverage {
     /// Target market asset id.
     pub asset: u32,
-    /// Max leverage. The node bounds it to 1..=50.
+    /// Max leverage. The node bounds it to 1..=100 on a MIP-3 market and to 1..=50 by default.
     pub max_leverage: u8,
 }
 

@@ -62,13 +62,13 @@ fn perp_set_fees_action_contains_all_three_fee_fields() {
 }
 
 #[test]
-fn perp_builder_rejects_leverage_over_fifty() {
+fn perp_builder_rejects_leverage_over_one_hundred() {
     let err = PerpDeployBuilder::new(
         "FOO",
         "F",
         8,
         vec![OracleSource::Binance],
-        51, // > 50
+        101, // > 100
         10,
         10,
         100,

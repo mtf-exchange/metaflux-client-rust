@@ -25,7 +25,7 @@
 //!
 //! 1. `register_asset`     — book the asset name / symbol / size decimals.
 //! 2. `set_oracle`         — pin the 10-source subset for the oracle.
-//! 3. `set_leverage`       — max leverage (1..=50).
+//! 3. `set_leverage`       — max leverage (1..=100).
 //! 4. `set_fees`           — taker/maker bps + the deployer's MIP-3 fee.
 //! 5. `set_min_order_size` — floor on size in post-decimal units.
 //! 6. `set_funding_params` — default funding clamps (handled by the SDK).
@@ -134,7 +134,7 @@ pub enum Action {
     PerpSetLeverage {
         /// Asset name (echo).
         asset_name: String,
-        /// 1..=50.
+        /// 1..=100. Above 50 also needs a validator vote that raises the per-market limit.
         max_leverage: u8,
     },
     /// Set taker/maker fee + MIP-3 deployer fee (sub-action 4/8).
@@ -348,7 +348,7 @@ pub struct PerpDeployBuilder {
     pub decimals: u8,
     /// Subset of the 10 supported oracle sources.
     pub oracle_sources: Vec<OracleSource>,
-    /// Max leverage, in `1..=50`.
+    /// Max leverage, in `1..=100`.
     pub max_leverage: u8,
     /// Taker fee in bps × 10. Hard cap 50 (5 bps).
     pub taker_fee_bps: i16,
@@ -484,7 +484,7 @@ impl PerpDeployBuilder {
     /// # Errors
     /// Returns [`ClientError::Validation`] on any violation:
     /// - asset name / symbol empty
-    /// - max_leverage outside `1..=50`
+    /// - max_leverage outside `1..=100`
     /// - taker_fee_bps > 100 (10 bps) or < 0  — same `bps × 10` convention as `fee_schedule`
     /// - maker_fee_bps > 100 or < -20 (rebate floor -2 bps)
     /// - deployer_fee_bps > 50 (5 bps, scaled ×10)
@@ -509,9 +509,9 @@ impl PerpDeployBuilder {
                 self.decimals
             )));
         }
-        if self.max_leverage == 0 || self.max_leverage > 50 {
+        if self.max_leverage == 0 || self.max_leverage > 100 {
             return Err(ClientError::Validation(format!(
-                "max_leverage {} out of range [1, 50]",
+                "max_leverage {} out of range [1, 100]",
                 self.max_leverage
             )));
         }
@@ -844,7 +844,7 @@ mod tests {
             "X",
             8,
             vec![OracleSource::Binance],
-            51, // out of range
+            101, // out of range
             10,
             10,
             10,
@@ -852,6 +852,18 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(e, ClientError::Validation(_)));
+        PerpDeployBuilder::new(
+            "X-PERP",
+            "X",
+            8,
+            vec![OracleSource::Binance],
+            100,
+            10,
+            10,
+            10,
+            5,
+        )
+        .expect("100x is the MIP-3 ceiling");
     }
 
     #[test]
