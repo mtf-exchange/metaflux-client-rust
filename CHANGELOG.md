@@ -35,6 +35,12 @@ Needs node 0.9.16 or later.
 
 ### Added
 
+- `Exchange::update_leverage_as` / `update_leverage_typed_as`: an approved
+  agent sets `owner`'s leverage and margin mode. The wire gains a params-level
+  `owner`; the digest stays owner-less. The node has accepted this `owner`
+  since 0.9.16. A vault operator needs it: a deployer-oracle market refuses a
+  cross open, and a vault has no key of its own to switch to isolated. The
+  `vault_leverage` example signs it.
 - `PerpSetOiCap` / `perp_set_oi_cap`: a MIP-3 deployer sets the open-interest
   cap of its own market. The wire is
   `{"type":"perp_set_oi_cap","params":{"asset":<u32>,"oi_cap_units":<u64>}}`,

@@ -4,8 +4,9 @@
 //! state mutates, and the wire carries no `owner`. The three margin actions are
 //! the exception. [`UpdateLeverage`], [`UpdateIsolatedMargin`] and
 //! [`TopUpIsolatedOnlyMargin`] each accept an agent-resolved `owner` on the
-//! wire, which this SDK does not build yet. That `owner` routes admission only;
-//! the EIP-712 digest stays owner-less for all three. Decimal magnitudes
+//! wire. `Exchange::update_leverage_as` builds it for leverage; the other two
+//! do not have an `_as` form yet. That `owner` routes admission only; the
+//! EIP-712 digest stays owner-less for all three. Decimal magnitudes
 //! (`delta` / `amount` / `value`) ride the wire as JSON **strings** to preserve
 //! fractional precision; ids, leverage, and bps are plain integers.
 

@@ -80,6 +80,10 @@ name = "create_vault"
 path = "examples/create_vault.rs"
 
 [[example]]
+name = "vault_leverage"
+path = "examples/vault_leverage.rs"
+
+[[example]]
 name = "mip3_full_deploy"
 path = "examples/mip3_full_deploy.rs"
 

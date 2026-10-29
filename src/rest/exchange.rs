@@ -852,6 +852,28 @@ impl<'a> Exchange<'a> {
             .await
     }
 
+    /// As an approved agent of `owner`, set `owner`'s per-asset leverage (and
+    /// optionally flip it to isolated margin). A vault operator uses this to set
+    /// the vault's margin mode, which the vault has no key to set itself.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn update_leverage_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        params: &UpdateLeverage,
+    ) -> Result<Value, ClientError> {
+        self.update_leverage_typed_as(
+            wallet,
+            owner,
+            params.asset.0,
+            params.leverage,
+            params.is_isolated,
+        )
+        .await
+    }
+
     /// Add or remove isolated margin on an open position.
     ///
     /// # Errors

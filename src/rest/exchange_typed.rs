@@ -450,6 +450,41 @@ impl<'a> Exchange<'a> {
         .await
     }
 
+    /// As an approved agent, set `owner`'s per-asset leverage (and optionally
+    /// isolated margin) under the typed scheme.
+    ///
+    /// `owner` rides in the params only. The digest stays owner-less: the node
+    /// resolves `owner` at admission and binds the action to that account.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn update_leverage_typed_as(
+        &self,
+        wallet: &Wallet,
+        owner: crate::wallet::Address,
+        asset: u32,
+        leverage: u32,
+        is_isolated: bool,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let action = TypedAction::UpdateLeverage {
+                metaflux_chain: chain,
+                asset,
+                leverage,
+                is_isolated,
+                nonce,
+            };
+            let params = json!({
+                "owner": owner,
+                "asset": asset,
+                "leverage": leverage,
+                "is_isolated": is_isolated,
+            });
+            (action, "update_leverage", params)
+        })
+        .await
+    }
+
     /// Claim staking rewards under the typed scheme.
     ///
     /// Pass [`crate::wallet::Address::ZERO`] for the validator to claim across
