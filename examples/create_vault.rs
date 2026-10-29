@@ -1,10 +1,13 @@
-//! Create a user vault, query its NAV.
+//! Create a vault, query its NAV.
 //!
 //! Requires `MTF_PRIVATE_KEY` env var. Run with:
 //!
 //! ```bash
-//! MTF_PRIVATE_KEY=0x... cargo run --example create_vault
+//! MTF_PRIVATE_KEY=0x... cargo run --example create_vault -- [<name> [user|metaliquidity]]
 //! ```
+//!
+//! A `metaliquidity` vault needs a leader that governance has approved as a
+//! liquidity provider; any other leader gets `Unauthorized`.
 
 use metaflux_client::{
     Client,
@@ -14,17 +17,29 @@ use metaflux_client::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let name = args.first().map(String::as_str).unwrap_or("my-vault");
+    let kind = match args.get(1).map(String::as_str) {
+        None | Some("user") => VaultKind::User,
+        Some("metaliquidity") => VaultKind::Metaliquidity,
+        Some(other) => {
+            return Err(format!("kind must be user or metaliquidity, got {other}").into());
+        }
+    };
     let priv_hex = std::env::var("MTF_PRIVATE_KEY")
         .map_err(|_| "set MTF_PRIVATE_KEY=<64-char hex> to run this example")?;
-    let wallet = Wallet::from_hex(&priv_hex)?;
-    let client = Client::new("https://api.testnet.mtf.exchange")?;
+    let wallet = Wallet::from_hex(priv_hex.trim())?;
+    let base = std::env::var("MTF_API_URL")
+        .unwrap_or_else(|_| "https://api.testnet.mtf.exchange".to_string());
+    let client = Client::new(&base)?;
+    println!("leader: {:?}", wallet.address());
 
     // The signing wallet becomes the vault leader.
     let create = CreateVault {
-        name: "my-vault".into(),
+        name: name.to_string(),
         lock_period_secs: 4 * 86_400, // 4-day follower lock
         parent: None,
-        kind: VaultKind::User,
+        kind,
     };
     let resp = client.exchange().create_vault(&wallet, &create).await?;
     println!("create_vault response: {resp:?}");

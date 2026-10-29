@@ -84,6 +84,10 @@ name = "vault_leverage"
 path = "examples/vault_leverage.rs"
 
 [[example]]
+name = "address"
+path = "examples/address.rs"
+
+[[example]]
 name = "mip3_full_deploy"
 path = "examples/mip3_full_deploy.rs"
 
