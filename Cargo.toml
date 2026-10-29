@@ -88,6 +88,10 @@ name = "address"
 path = "examples/address.rs"
 
 [[example]]
+name = "vault_transfer"
+path = "examples/vault_transfer.rs"
+
+[[example]]
 name = "mip3_full_deploy"
 path = "examples/mip3_full_deploy.rs"
 
