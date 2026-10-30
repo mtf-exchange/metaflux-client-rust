@@ -54,6 +54,15 @@ pub(crate) fn keccak(input: &[u8]) -> [u8; 32] {
 }
 
 /// `address` → 20 bytes right-aligned in a 32-byte word (12 zero-byte left pad).
+/// Insert the agent-resolved `owner` word right after `metafluxChain`, the
+/// slot every `*_WITH_OWNER` string reserves. `None` returns the words as is.
+fn bind_owner(mut words: Vec<[u8; 32]>, owner: Option<&Address>) -> Vec<[u8; 32]> {
+    if let Some(o) = owner {
+        words.insert(1, enc_addr(o));
+    }
+    words
+}
+
 pub(crate) fn enc_addr(a: &Address) -> [u8; 32] {
     let mut out = [0u8; 32];
     out[12..].copy_from_slice(a.as_bytes());
@@ -160,6 +169,8 @@ const SET_DISPLAY_NAME_TYPE: &[u8] =
     b"MetaFluxTransaction:SetDisplayName(string metafluxChain,string displayName,uint64 nonce)";
 const SET_POSITION_MODE_TYPE: &[u8] =
     b"MetaFluxTransaction:SetPositionMode(string metafluxChain,bool hedge,uint64 nonce)";
+const SET_POSITION_MODE_WITH_OWNER_TYPE: &[u8] =
+    b"MetaFluxTransaction:SetPositionMode(string metafluxChain,address owner,bool hedge,uint64 nonce)";
 const USER_PORTFOLIO_MARGIN_TYPE: &[u8] =
     b"MetaFluxTransaction:UserPortfolioMargin(string metafluxChain,bool enroll,uint64 nonce)";
 const CONVERT_TO_MULTI_SIG_USER_TYPE: &[u8] =
@@ -168,6 +179,8 @@ const MULTI_SIG_TYPE: &[u8] =
     b"MetaFluxTransaction:MultiSig(string metafluxChain,address user,bytes innerActionBlob,bytes[] signatures,uint64 nonce)";
 const UPDATE_LEVERAGE_TYPE: &[u8] =
     b"MetaFluxTransaction:UpdateLeverage(string metafluxChain,uint32 asset,uint32 leverage,bool isIsolated,uint64 nonce)";
+const UPDATE_LEVERAGE_WITH_OWNER_TYPE: &[u8] =
+    b"MetaFluxTransaction:UpdateLeverage(string metafluxChain,address owner,uint32 asset,uint32 leverage,bool isIsolated,uint64 nonce)";
 const CLAIM_REWARDS_TYPE: &[u8] =
     b"MetaFluxTransaction:ClaimRewards(string metafluxChain,address validator,uint64 nonce)";
 const LINK_STAKING_USER_TYPE: &[u8] =
@@ -185,8 +198,12 @@ const SPOT_MARGIN_CLOSE_TYPE: &[u8] =
     b"MetaFluxTransaction:SpotMarginClose(string metafluxChain,uint32 pair,uint64 limitPx,uint64 nonce)";
 const UPDATE_ISOLATED_MARGIN_TYPE: &[u8] =
     b"MetaFluxTransaction:UpdateIsolatedMargin(string metafluxChain,uint32 asset,string delta,uint64 nonce)";
+const UPDATE_ISOLATED_MARGIN_WITH_OWNER_TYPE: &[u8] =
+    b"MetaFluxTransaction:UpdateIsolatedMargin(string metafluxChain,address owner,uint32 asset,string delta,uint64 nonce)";
 const TOP_UP_ISOLATED_ONLY_MARGIN_TYPE: &[u8] =
     b"MetaFluxTransaction:TopUpIsolatedOnlyMargin(string metafluxChain,uint32 asset,string amount,uint64 nonce)";
+const TOP_UP_ISOLATED_ONLY_MARGIN_WITH_OWNER_TYPE: &[u8] =
+    b"MetaFluxTransaction:TopUpIsolatedOnlyMargin(string metafluxChain,address owner,uint32 asset,string amount,uint64 nonce)";
 const TOKEN_DELEGATE_TYPE: &[u8] =
     b"MetaFluxTransaction:TokenDelegate(string metafluxChain,address validator,string amount,bool isUndelegate,uint8 lockMonths,uint64 nonce)";
 const VAULT_TRANSFER_TYPE: &[u8] =
@@ -372,10 +389,15 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
-    /// `SetPositionMode(string metafluxChain,bool hedge,uint64 nonce)`
+    /// `SetPositionMode(string metafluxChain,bool hedge,uint64 nonce)`, or its
+    /// `*_WITH_OWNER` shape when an agent-resolved `owner` is bound.
     SetPositionMode {
         /// Chain tag.
         metaflux_chain: String,
+        /// Agent-resolved params-level `owner`. `None` signs the owner-less
+        /// digest (the owner's own signature); `Some` binds the owner right
+        /// after `metafluxChain`.
+        owner: Option<Address>,
         /// Hedge mode enabled.
         hedge: bool,
         /// Envelope nonce.
@@ -425,10 +447,13 @@ pub enum TypedAction {
         /// Envelope nonce — equals the inner nonce the roster signed.
         nonce: u64,
     },
-    /// `UpdateLeverage(string metafluxChain,uint32 asset,uint32 leverage,bool isIsolated,uint64 nonce)`
+    /// `UpdateLeverage(string metafluxChain,uint32 asset,uint32 leverage,bool isIsolated,uint64 nonce)`,
+    /// or its `*_WITH_OWNER` shape when an agent-resolved `owner` is bound.
     UpdateLeverage {
         /// Chain tag.
         metaflux_chain: String,
+        /// Agent-resolved params-level `owner`; see [`Self::SetPositionMode`].
+        owner: Option<Address>,
         /// Asset id.
         asset: u32,
         /// Leverage multiplier.
@@ -510,10 +535,13 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
-    /// `UpdateIsolatedMargin(string metafluxChain,uint32 asset,string delta,uint64 nonce)`
+    /// `UpdateIsolatedMargin(string metafluxChain,uint32 asset,string delta,uint64 nonce)`,
+    /// or its `*_WITH_OWNER` shape when an agent-resolved `owner` is bound.
     UpdateIsolatedMargin {
         /// Chain tag.
         metaflux_chain: String,
+        /// Agent-resolved params-level `owner`; see [`Self::SetPositionMode`].
+        owner: Option<Address>,
         /// Asset id.
         asset: u32,
         /// Signed margin delta as a canonical decimal string (e.g. `"-100.5"`).
@@ -521,10 +549,13 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
-    /// `TopUpIsolatedOnlyMargin(string metafluxChain,uint32 asset,string amount,uint64 nonce)`
+    /// `TopUpIsolatedOnlyMargin(string metafluxChain,uint32 asset,string amount,uint64 nonce)`,
+    /// or its `*_WITH_OWNER` shape when an agent-resolved `owner` is bound.
     TopUpIsolatedOnlyMargin {
         /// Chain tag.
         metaflux_chain: String,
+        /// Agent-resolved params-level `owner`; see [`Self::SetPositionMode`].
+        owner: Option<Address>,
         /// Asset id.
         asset: u32,
         /// Top-up amount as a canonical decimal string.
@@ -1330,18 +1361,30 @@ impl TypedAction {
             TypedAction::SetReferrer { .. } => SET_REFERRER_TYPE,
             TypedAction::ApproveBuilderFee { .. } => APPROVE_BUILDER_FEE_TYPE,
             TypedAction::SetDisplayName { .. } => SET_DISPLAY_NAME_TYPE,
-            TypedAction::SetPositionMode { .. } => SET_POSITION_MODE_TYPE,
+            TypedAction::SetPositionMode { owner: None, .. } => SET_POSITION_MODE_TYPE,
+            TypedAction::SetPositionMode { owner: Some(_), .. } => {
+                SET_POSITION_MODE_WITH_OWNER_TYPE
+            }
             TypedAction::UserPortfolioMargin { .. } => USER_PORTFOLIO_MARGIN_TYPE,
             TypedAction::ConvertToMultiSigUser { .. } => CONVERT_TO_MULTI_SIG_USER_TYPE,
             TypedAction::MultiSig { .. } => MULTI_SIG_TYPE,
-            TypedAction::UpdateLeverage { .. } => UPDATE_LEVERAGE_TYPE,
+            TypedAction::UpdateLeverage { owner: None, .. } => UPDATE_LEVERAGE_TYPE,
+            TypedAction::UpdateLeverage { owner: Some(_), .. } => UPDATE_LEVERAGE_WITH_OWNER_TYPE,
             TypedAction::ClaimRewards { .. } => CLAIM_REWARDS_TYPE,
             TypedAction::LinkStakingUser { .. } => LINK_STAKING_USER_TYPE,
             TypedAction::CreateVault { .. } => CREATE_VAULT_TYPE,
             TypedAction::VaultModify { .. } => VAULT_MODIFY_TYPE,
             TypedAction::SpotMarginClose { .. } => SPOT_MARGIN_CLOSE_TYPE,
-            TypedAction::UpdateIsolatedMargin { .. } => UPDATE_ISOLATED_MARGIN_TYPE,
-            TypedAction::TopUpIsolatedOnlyMargin { .. } => TOP_UP_ISOLATED_ONLY_MARGIN_TYPE,
+            TypedAction::UpdateIsolatedMargin { owner: None, .. } => UPDATE_ISOLATED_MARGIN_TYPE,
+            TypedAction::UpdateIsolatedMargin { owner: Some(_), .. } => {
+                UPDATE_ISOLATED_MARGIN_WITH_OWNER_TYPE
+            }
+            TypedAction::TopUpIsolatedOnlyMargin { owner: None, .. } => {
+                TOP_UP_ISOLATED_ONLY_MARGIN_TYPE
+            }
+            TypedAction::TopUpIsolatedOnlyMargin { owner: Some(_), .. } => {
+                TOP_UP_ISOLATED_ONLY_MARGIN_WITH_OWNER_TYPE
+            }
             TypedAction::TokenDelegate { .. } => TOKEN_DELEGATE_TYPE,
             TypedAction::VaultTransfer { .. } => VAULT_TRANSFER_TYPE,
             TypedAction::VaultWithdraw { .. } => VAULT_WITHDRAW_TYPE,
@@ -1506,13 +1549,17 @@ impl TypedAction {
             ],
             TypedAction::SetPositionMode {
                 metaflux_chain,
+                owner,
                 hedge,
                 nonce,
-            } => vec![
-                enc_string(metaflux_chain),
-                enc_bool(*hedge),
-                enc_u64(*nonce),
-            ],
+            } => bind_owner(
+                vec![
+                    enc_string(metaflux_chain),
+                    enc_bool(*hedge),
+                    enc_u64(*nonce),
+                ],
+                owner.as_ref(),
+            ),
             TypedAction::UserPortfolioMargin {
                 metaflux_chain,
                 enroll,
@@ -1548,17 +1595,21 @@ impl TypedAction {
             ],
             TypedAction::UpdateLeverage {
                 metaflux_chain,
+                owner,
                 asset,
                 leverage,
                 is_isolated,
                 nonce,
-            } => vec![
-                enc_string(metaflux_chain),
-                enc_u32(*asset),
-                enc_u32(*leverage),
-                enc_bool(*is_isolated),
-                enc_u64(*nonce),
-            ],
+            } => bind_owner(
+                vec![
+                    enc_string(metaflux_chain),
+                    enc_u32(*asset),
+                    enc_u32(*leverage),
+                    enc_bool(*is_isolated),
+                    enc_u64(*nonce),
+                ],
+                owner.as_ref(),
+            ),
             TypedAction::ClaimRewards {
                 metaflux_chain,
                 validator,
@@ -1626,26 +1677,34 @@ impl TypedAction {
             ],
             TypedAction::UpdateIsolatedMargin {
                 metaflux_chain,
+                owner,
                 asset,
                 delta,
                 nonce,
-            } => vec![
-                enc_string(metaflux_chain),
-                enc_u32(*asset),
-                enc_string(delta),
-                enc_u64(*nonce),
-            ],
+            } => bind_owner(
+                vec![
+                    enc_string(metaflux_chain),
+                    enc_u32(*asset),
+                    enc_string(delta),
+                    enc_u64(*nonce),
+                ],
+                owner.as_ref(),
+            ),
             TypedAction::TopUpIsolatedOnlyMargin {
                 metaflux_chain,
+                owner,
                 asset,
                 amount,
                 nonce,
-            } => vec![
-                enc_string(metaflux_chain),
-                enc_u32(*asset),
-                enc_string(amount),
-                enc_u64(*nonce),
-            ],
+            } => bind_owner(
+                vec![
+                    enc_string(metaflux_chain),
+                    enc_u32(*asset),
+                    enc_string(amount),
+                    enc_u64(*nonce),
+                ],
+                owner.as_ref(),
+            ),
             TypedAction::TokenDelegate {
                 metaflux_chain,
                 validator,
@@ -2504,6 +2563,7 @@ mod tests {
             (
                 TypedAction::UpdateIsolatedMargin {
                     metaflux_chain: "Testnet".into(),
+                    owner: None,
                     asset: 1,
                     delta: "-100.5".into(),
                     nonce: 9,
@@ -2513,6 +2573,7 @@ mod tests {
             (
                 TypedAction::TopUpIsolatedOnlyMargin {
                     metaflux_chain: "Testnet".into(),
+                    owner: None,
                     asset: 1,
                     amount: "50".into(),
                     nonce: 10,

@@ -121,6 +121,7 @@ fn extended_kat_vectors_match_pinned_digests() {
         (
             TypedAction::UpdateIsolatedMargin {
                 metaflux_chain: "Testnet".into(),
+                owner: None,
                 asset: 1,
                 delta: "-100.5".into(),
                 nonce: 9,
@@ -130,6 +131,7 @@ fn extended_kat_vectors_match_pinned_digests() {
         (
             TypedAction::TopUpIsolatedOnlyMargin {
                 metaflux_chain: "Testnet".into(),
+                owner: None,
                 asset: 1,
                 amount: "50".into(),
                 nonce: 10,
@@ -712,6 +714,7 @@ fn every_typed_action_signs_and_recovers() {
         },
         TypedAction::SetPositionMode {
             metaflux_chain: chain.clone(),
+            owner: None,
             hedge: true,
             nonce: 6,
         },
@@ -728,6 +731,7 @@ fn every_typed_action_signs_and_recovers() {
         },
         TypedAction::UpdateLeverage {
             metaflux_chain: chain.clone(),
+            owner: None,
             asset: 1,
             leverage: 10,
             is_isolated: true,
@@ -770,12 +774,14 @@ fn every_typed_action_signs_and_recovers() {
         },
         TypedAction::UpdateIsolatedMargin {
             metaflux_chain: chain.clone(),
+            owner: None,
             asset: 1,
             delta: "-100.5".into(),
             nonce: 18,
         },
         TypedAction::TopUpIsolatedOnlyMargin {
             metaflux_chain: chain.clone(),
+            owner: None,
             asset: 1,
             amount: "50".into(),
             nonce: 19,

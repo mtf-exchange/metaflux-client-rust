@@ -45,6 +45,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::MarketId;
 use crate::types::order::{PositionSide, Side};
+use crate::wallet::Address;
 
 /// Action — submit a sliced (TWAP) order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,6 +77,11 @@ pub struct TwapOrder {
     /// `false` omits the field on the wire and keeps the older signing strings.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub randomize: bool,
+    /// Optional agent-resolved owner. `None` = the signer acts for itself.
+    /// Bound into the `*_WITH_OWNER` digest when present; omitted from the
+    /// wire otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<Address>,
 }
 
 /// Action — cancel a running TWAP parent by id.
@@ -100,6 +106,7 @@ mod tests {
             reduce_only: true,
             position_side: None,
             randomize: false,
+            owner: None,
         }
     }
 

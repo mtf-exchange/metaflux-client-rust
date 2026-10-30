@@ -5,6 +5,38 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
+## [0.28.0] — 2026-10-31
+
+Takes effect at the next node release. After that swap the node refuses an
+agent signature in the old owner-less form for the actions below.
+
+### Changed
+
+- **Agent signatures bind the owner.** Eleven type strings gain an
+  `address owner` word right after `metafluxChain`: `submit_order` (both the
+  plain and the trailing form), `cancel_order`, `schedule_cancel`,
+  `twap_order` (all three strings), `update_leverage`,
+  `update_isolated_margin`, `top_up_isolated_only_margin` and
+  `set_position_mode`. An agent signature can no longer be re-posted under
+  another owner.
+  - `submit_order` and `cancel_order` always sign the bound form: their wire
+    `owner` is mandatory, and the node accepts the bound form from the owner
+    and from an agent alike. `TypedTradingDigest::self_signed` keeps the
+    owner-less form reachable; the node accepts it only as the owner's own
+    signature.
+  - The other nine bind the owner when the payload carries one and keep the
+    owner-less string when it does not. Self-signed calls are unchanged.
+  - `update_leverage_as` now binds `owner` in the digest as well as the wire.
+
+### Added
+
+- `ScheduleCancel::owner` and `TwapOrder::owner` (`Option<Address>`, omitted
+  from the wire when `None`), so an agent can act for a master.
+- `Exchange::set_position_mode_as`, `update_isolated_margin_as` and
+  `top_up_isolated_only_margin_as`, with their `*_typed_as` forms.
+- `TypedAction::{SetPositionMode, UpdateLeverage, UpdateIsolatedMargin,
+  TopUpIsolatedOnlyMargin}` gain an `owner: Option<Address>` field.
+
 ## [0.27.0] — 2026-10-30
 
 ### Added

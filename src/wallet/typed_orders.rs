@@ -231,6 +231,17 @@ const TY_TWAP_CANCEL_WITH_OWNER: &[u8] =
 const TY_BATCH_CANCEL_WITH_OWNER: &[u8] =
     b"MetaFluxTransaction:BatchCancel(string metafluxChain,address owner,bytes32 cancels,uint64 nonce)";
 
+// Owner-bound forms of the four actions that used to sign owner-less only. The
+// node accepts the owner-less string from the OWNER alone; an agent must sign
+// the bound form, so its signature cannot be re-posted under another owner.
+const TY_SUBMIT_ORDER_WITH_OWNER: &[u8] = b"MetaFluxTransaction:SubmitOrder(string metafluxChain,address owner,uint32 market,string side,string kind,uint64 size,uint64 limitPx,string tif,string stpMode,bool reduceOnly,string cloid,uint16 builderFee,address builderUser,string positionSide,uint64 triggerPx,bool triggerIsMarket,string triggerTpsl,uint64 nonce)";
+const TY_SUBMIT_ORDER_TRAIL_WITH_OWNER: &[u8] = b"MetaFluxTransaction:SubmitOrder(string metafluxChain,address owner,uint32 market,string side,string kind,uint64 size,uint64 limitPx,string tif,string stpMode,bool reduceOnly,string cloid,uint16 builderFee,address builderUser,string positionSide,uint64 triggerPx,bool triggerIsMarket,string triggerTpsl,uint64 trailPx,uint64 nonce)";
+const TY_CANCEL_ORDER_WITH_OWNER: &[u8] = b"MetaFluxTransaction:CancelOrder(string metafluxChain,address owner,uint32 market,uint64 oid,uint64 nonce)";
+const TY_SCHEDULE_CANCEL_WITH_OWNER: &[u8] = b"MetaFluxTransaction:ScheduleCancel(string metafluxChain,address owner,uint64 cancelAtBlock,uint64 nonce)";
+const TY_TWAP_ORDER_WITH_OWNER: &[u8] = b"MetaFluxTransaction:TwapOrder(string metafluxChain,address owner,uint32 market,string side,uint64 totalSize,uint32 sliceCount,uint64 delayMs,bool reduceOnly,uint64 nonce)";
+const TY_TWAP_ORDER_V2_WITH_OWNER: &[u8] = b"MetaFluxTransaction:TwapOrder(string metafluxChain,address owner,uint32 market,string side,uint64 totalSize,uint32 sliceCount,uint64 delayMs,bool reduceOnly,string positionSide,uint64 nonce)";
+const TY_TWAP_ORDER_V3_WITH_OWNER: &[u8] = b"MetaFluxTransaction:TwapOrder(string metafluxChain,address owner,uint32 market,string side,uint64 totalSize,uint32 sliceCount,uint64 delayMs,bool reduceOnly,string positionSide,bool randomize,uint64 nonce)";
+
 // ===== ScaleOrder / CancelScale encodeType strings (node-native SCALE ladder) —
 // CONSENSUS-FROZEN, byte-identical to the node's `SCALE_ORDER_TYPE` /
 // `CANCEL_SCALE_TYPE` (+ `_WITH_OWNER`). `weights` is a `bytes32` the client
@@ -410,7 +421,7 @@ impl TypedTradingAction<'_> {
         }
     }
 
-    /// The action's own owner SLOT: `Some(slot)` for the six actions that keep
+    /// The action's own owner SLOT: `Some(slot)` for the ten actions that keep
     /// an `owner` field inside their wire struct, `None` for every other action.
     ///
     /// The outer level answers "does the posted body decide the owner?", which
@@ -418,6 +429,10 @@ impl TypedTradingAction<'_> {
     /// [`Self::payload_owner`] flattens away.
     fn payload_owner_slot(&self) -> Option<Option<Address>> {
         match self {
+            Self::SubmitOrder(o) => Some(Some(o.owner)),
+            Self::CancelOrder(c) => Some(Some(c.owner)),
+            Self::ScheduleCancel(p) => Some(p.owner),
+            Self::TwapOrder(p) => Some(p.owner),
             Self::SpotOrder(o) => Some(o.owner),
             Self::SpotCancel(c) => Some(c.owner),
             Self::ScaleOrder(p) => Some(p.owner),
@@ -430,7 +445,8 @@ impl TypedTradingAction<'_> {
 
     /// The agent-resolved `owner` this action's OWN payload carries, if any.
     ///
-    /// Six actions keep the owner INSIDE their wire struct — `spot_order`,
+    /// Ten actions keep the owner INSIDE their wire struct — `submit_order`,
+    /// `cancel_order`, `schedule_cancel`, `twap_order`, `spot_order`,
     /// `spot_cancel`, `scale_order`, `cancel_scale`, `chase_order` and
     /// `cancel_chase`. For those the payload is the ONLY source of truth:
     /// [`TypedTradingDigest`] binds this owner with no further caller action,
@@ -444,13 +460,16 @@ impl TypedTradingAction<'_> {
 
     /// Whether this action has an owner-carrying (`*_WITH_OWNER`) typed form,
     /// used for operator / vault trading where the agent-resolved params-level
-    /// `owner` differs from the signer. `submit_order` / `cancel_order` /
-    /// `schedule_cancel` / `twap_order` have no owner form; `batch_order` carries
-    /// its owner inside its own struct, not via the digest-level owner.
+    /// `owner` differs from the signer. `batch_order` carries its owner inside
+    /// its own word list, not via the digest-level owner.
     const fn supports_owner(&self) -> bool {
         matches!(
             self,
-            Self::SpotOrder(_)
+            Self::SubmitOrder(_)
+                | Self::CancelOrder(_)
+                | Self::ScheduleCancel(_)
+                | Self::TwapOrder(_)
+                | Self::SpotOrder(_)
                 | Self::SpotCancel(_)
                 | Self::CancelByCloid(_)
                 | Self::Modify(_)
@@ -470,6 +489,17 @@ impl TypedTradingAction<'_> {
     /// to the pre-owner digest.
     fn type_string_for(&self, owner: Option<&Address>) -> &'static [u8] {
         match (owner, self) {
+            (Some(_), Self::SubmitOrder(o)) if trail_of(o).is_some() => {
+                TY_SUBMIT_ORDER_TRAIL_WITH_OWNER
+            }
+            (Some(_), Self::SubmitOrder(_)) => TY_SUBMIT_ORDER_WITH_OWNER,
+            (Some(_), Self::CancelOrder(_)) => TY_CANCEL_ORDER_WITH_OWNER,
+            (Some(_), Self::ScheduleCancel(_)) => TY_SCHEDULE_CANCEL_WITH_OWNER,
+            (Some(_), Self::TwapOrder(p)) if p.randomize => TY_TWAP_ORDER_V3_WITH_OWNER,
+            (Some(_), Self::TwapOrder(p)) if p.position_side.is_some() => {
+                TY_TWAP_ORDER_V2_WITH_OWNER
+            }
+            (Some(_), Self::TwapOrder(_)) => TY_TWAP_ORDER_WITH_OWNER,
             (Some(_), Self::SpotOrder(_)) => TY_SPOT_ORDER_WITH_OWNER,
             (Some(_), Self::SpotCancel(_)) => TY_SPOT_CANCEL_WITH_OWNER,
             (Some(_), Self::CancelByCloid(_)) => TY_CANCEL_BY_CLOID_WITH_OWNER,
@@ -675,6 +705,7 @@ pub struct TypedTradingDigest<'a> {
     chain_id: u64,
     nonce: u64,
     expires_after: u64,
+    self_signed: bool,
 }
 
 impl<'a> TypedTradingDigest<'a> {
@@ -693,7 +724,19 @@ impl<'a> TypedTradingDigest<'a> {
             chain_id,
             nonce,
             expires_after: 0,
+            self_signed: false,
         }
+    }
+
+    /// Sign `submit_order` / `cancel_order` with the owner-less type string.
+    ///
+    /// The node accepts that string ONLY when the signer is the order's owner.
+    /// An agent must sign the owner-bound form, which is the default. Every
+    /// other action ignores this flag.
+    #[must_use]
+    pub const fn self_signed(mut self) -> Self {
+        self.self_signed = true;
+        self
     }
 
     /// Attach an OPTIONAL top-level `expiresAfter` (consensus time in ms; `0` =
@@ -736,6 +779,7 @@ impl<'a> TypedTradingDigest<'a> {
             chain_id,
             nonce,
             expires_after: 0,
+            self_signed: false,
         }
     }
 
@@ -744,6 +788,14 @@ impl<'a> TypedTradingDigest<'a> {
     /// picks the type string from the POSTED body. Any other action takes the
     /// explicitly bound owner.
     fn effective_owner(&self) -> Result<Option<Address>, ClientError> {
+        if self.self_signed
+            && matches!(
+                self.action,
+                TypedTradingAction::SubmitOrder(_) | TypedTradingAction::CancelOrder(_)
+            )
+        {
+            return Ok(None);
+        }
         match (self.action.payload_owner_slot(), self.owner) {
             (Some(Some(payload)), Some(bound)) if payload != bound => {
                 Err(ClientError::Validation(format!(
@@ -877,21 +929,64 @@ mod tests {
         }
     }
 
+    /// Owner-less digest hex: the self form of `submit_order` / `cancel_order`.
+    fn hexd_self(action: TypedTradingAction) -> String {
+        hex::encode(
+            TypedTradingDigest::new(action, CHAIN, NONCE)
+                .self_signed()
+                .digest()
+                .unwrap(),
+        )
+    }
+
     // KAT vectors generated from @metaflux-dex/client (TS SDK, lockstep-verified
     // against the node) at chain 114514, nonce 1. Any drift = a consensus break.
+    // `submit_order` / `cancel_order` pin the owner-less SELF form here; the
+    // default sign path binds the payload owner (see `owner_bound_signing_kat`).
     #[test]
     fn submit_order_kat() {
         assert_eq!(
-            hexd(TypedTradingAction::SubmitOrder(&rich_order())),
+            hexd_self(TypedTradingAction::SubmitOrder(&rich_order())),
             "a34651fda7e834d830ca185d30280b861e0ee811786b6ff14cb7ff2b8379fa9f"
         );
     }
     #[test]
     fn cancel_order_kat() {
         assert_eq!(
-            hexd(TypedTradingAction::CancelOrder(&cancel(1, 1234))),
+            hexd_self(TypedTradingAction::CancelOrder(&cancel(1, 1234))),
             "0e36f387b37eda4890fdae26770596e7995bb92b6407ece7095e50813431639a"
         );
+    }
+    #[test]
+    fn submit_and_cancel_bind_the_payload_owner_by_default() {
+        let order = rich_order();
+        let a = TypedTradingAction::SubmitOrder(&order);
+        assert_eq!(
+            a.type_string_for(Some(&owner())),
+            TY_SUBMIT_ORDER_WITH_OWNER
+        );
+        assert_ne!(hexd(a), hexd_self(a));
+        assert_eq!(hexd_owner_of(a, owner()), hexd(a));
+        let c = cancel(1, 1234);
+        let a = TypedTradingAction::CancelOrder(&c);
+        assert_eq!(
+            a.type_string_for(Some(&owner())),
+            TY_CANCEL_ORDER_WITH_OWNER
+        );
+        assert_ne!(hexd(a), hexd_self(a));
+        // A bound owner that contradicts the payload owner is refused.
+        assert!(
+            TypedTradingDigest::new_with_owner(a, Address([0xbb; 20]), CHAIN, NONCE)
+                .digest()
+                .is_err()
+        );
+    }
+    fn hexd_owner_of(action: TypedTradingAction, o: Address) -> String {
+        hex::encode(
+            TypedTradingDigest::new_with_owner(action, o, CHAIN, NONCE)
+                .digest()
+                .unwrap(),
+        )
     }
     #[test]
     fn spot_order_kat() {
@@ -958,6 +1053,7 @@ mod tests {
     fn schedule_cancel_kat() {
         let p = ScheduleCancel {
             cancel_at_block: 1_000_000,
+            owner: None,
         };
         assert_eq!(
             hexd(TypedTradingAction::ScheduleCancel(&p)),
@@ -975,6 +1071,7 @@ mod tests {
             reduce_only: false,
             position_side: None,
             randomize: false,
+            owner: None,
         };
         assert_eq!(
             hexd(TypedTradingAction::TwapOrder(&p)),
@@ -1004,6 +1101,7 @@ mod tests {
             reduce_only: true,
             position_side: None,
             randomize: false,
+            owner: None,
         };
 
         assert_eq!(
@@ -1279,14 +1377,25 @@ mod tests {
         );
     }
 
-    /// Actions with NO owner form (`submit_order` here) ignore a bound owner —
-    /// the digest is byte-identical to the owner-less form (no `*_WITH_OWNER`).
+    /// An absent payload owner keeps the owner-less string for the actions that
+    /// make it optional (`schedule_cancel` / `twap_order`).
     #[test]
-    fn owner_ignored_for_actions_without_owner_form() {
-        let order = rich_order();
-        let a = TypedTradingAction::SubmitOrder(&order);
-        assert_eq!(a.type_string_for(Some(&owner_bind())), a.type_string());
-        assert_eq!(hexd_owner(a), hexd(a));
+    fn absent_payload_owner_keeps_the_owner_less_string() {
+        let p = ScheduleCancel {
+            cancel_at_block: 1,
+            owner: None,
+        };
+        let a = TypedTradingAction::ScheduleCancel(&p);
+        assert_eq!(a.type_string_for(None), TY_SCHEDULE_CANCEL);
+        let bound = ScheduleCancel {
+            owner: Some(owner_bind()),
+            ..p
+        };
+        assert_eq!(
+            TypedTradingAction::ScheduleCancel(&bound).type_string_for(Some(&owner_bind())),
+            TY_SCHEDULE_CANCEL_WITH_OWNER
+        );
+        assert_ne!(hexd(a), hexd(TypedTradingAction::ScheduleCancel(&bound)));
     }
 
     // ── ScaleOrder / CancelScale digest parity (golden from the node) ──
@@ -1663,10 +1772,12 @@ mod tests {
         );
         let plain = spot_order_with(None);
         assert_eq!(TypedTradingAction::SpotOrder(&plain).payload_owner(), None);
-        // The owner of a perp order is not an agent-resolved owner: the digest
-        // omits it, so the payload reports none.
+        // A perp order's mandatory owner is the bound owner.
         let o = rich_order();
-        assert_eq!(TypedTradingAction::SubmitOrder(&o).payload_owner(), None);
+        assert_eq!(
+            TypedTradingAction::SubmitOrder(&o).payload_owner(),
+            Some(owner())
+        );
     }
 
     #[test]

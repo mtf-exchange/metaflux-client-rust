@@ -399,6 +399,7 @@ async fn update_leverage_posts_sender_authorized_envelope() {
     let nonce = body["nonce"].as_u64().unwrap();
     let reconstructed = TypedAction::UpdateLeverage {
         metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        owner: None,
         asset: 2,
         leverage: 10,
         is_isolated: false,

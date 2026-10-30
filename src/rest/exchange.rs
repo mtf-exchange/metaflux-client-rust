@@ -900,6 +900,55 @@ impl<'a> Exchange<'a> {
             .await
     }
 
+    /// As an approved agent, toggle `owner`'s position mode. See
+    /// [`Exchange::update_leverage_as`]: the digest binds `owner`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn set_position_mode_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        hedge: bool,
+    ) -> Result<Value, ClientError> {
+        self.set_position_mode_typed_as(wallet, owner, hedge).await
+    }
+
+    /// As an approved agent, add or remove isolated margin on `owner`'s
+    /// position. The digest binds `owner`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn update_isolated_margin_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        params: &UpdateIsolatedMargin,
+    ) -> Result<Value, ClientError> {
+        self.update_isolated_margin_typed_as(wallet, owner, params.asset.0, params.delta.clone())
+            .await
+    }
+
+    /// As an approved agent, top up `owner`'s strict-isolated-only position.
+    /// The digest binds `owner`.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn top_up_isolated_only_margin_as(
+        &self,
+        wallet: &Wallet,
+        owner: Address,
+        params: &TopUpIsolatedOnlyMargin,
+    ) -> Result<Value, ClientError> {
+        self.top_up_isolated_only_margin_typed_as(
+            wallet,
+            owner,
+            params.asset.0,
+            params.amount.clone(),
+        )
+        .await
+    }
+
     /// Enroll into or out of portfolio margin.
     ///
     /// # Errors

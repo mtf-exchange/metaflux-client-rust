@@ -144,6 +144,7 @@ fn sdk_set_position_mode_path_round_trips() {
     for hedge in [true, false] {
         let action = TypedAction::SetPositionMode {
             metaflux_chain: chain_tag(),
+            owner: None,
             hedge,
             nonce: 7,
         };

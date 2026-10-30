@@ -28,8 +28,12 @@ fn owner() -> Address {
     Address([0x11; 20])
 }
 
+/// The node vectors pin the owner-less SELF form of `submit_order`; the default
+/// sign path binds the payload owner (see `owner_bound_signing_kat`).
 fn digest(action: TypedTradingAction, expires_after: u64) -> String {
-    let d = TypedTradingDigest::new(action, CHAIN, NONCE).with_expires_after(expires_after);
+    let d = TypedTradingDigest::new(action, CHAIN, NONCE)
+        .self_signed()
+        .with_expires_after(expires_after);
     format!("0x{}", hex::encode(d.digest().expect("digest")))
 }
 

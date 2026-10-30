@@ -431,6 +431,11 @@ pub struct CancelByCloid {
 pub struct ScheduleCancel {
     /// Block height at which all of the sender's open orders are cancelled.
     pub cancel_at_block: u64,
+    /// Optional agent-resolved owner. `None` = the signer acts for itself.
+    /// Bound into the `*_WITH_OWNER` digest when present; omitted from the
+    /// wire otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<Address>,
 }
 
 /// Action — cancel all of the sender's open orders, optionally for one asset.

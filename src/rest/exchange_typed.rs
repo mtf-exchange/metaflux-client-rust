@@ -369,13 +369,43 @@ impl<'a> Exchange<'a> {
         wallet: &Wallet,
         hedge: bool,
     ) -> Result<Value, ClientError> {
+        self.set_position_mode_bound(wallet, None, hedge).await
+    }
+
+    /// As an approved agent, toggle `owner`'s position mode. The digest binds
+    /// `owner` (the `*_WITH_OWNER` type string), so the signature cannot be
+    /// re-posted under another owner.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn set_position_mode_typed_as(
+        &self,
+        wallet: &Wallet,
+        owner: crate::wallet::Address,
+        hedge: bool,
+    ) -> Result<Value, ClientError> {
+        self.set_position_mode_bound(wallet, Some(owner), hedge)
+            .await
+    }
+
+    async fn set_position_mode_bound(
+        &self,
+        wallet: &Wallet,
+        owner: Option<crate::wallet::Address>,
+        hedge: bool,
+    ) -> Result<Value, ClientError> {
         self.post_signed_typed(wallet, |chain, nonce| {
             let action = TypedAction::SetPositionMode {
                 metaflux_chain: chain,
+                owner,
                 hedge,
                 nonce,
             };
-            (action, "set_position_mode", json!({ "hedge": hedge }))
+            let mut params = json!({ "hedge": hedge });
+            if let Some(o) = owner {
+                params["owner"] = json!(o);
+            }
+            (action, "set_position_mode", params)
         })
         .await
     }
@@ -438,6 +468,7 @@ impl<'a> Exchange<'a> {
         self.post_signed_typed(wallet, |chain, nonce| {
             let action = TypedAction::UpdateLeverage {
                 metaflux_chain: chain,
+                owner: None,
                 asset,
                 leverage,
                 is_isolated,
@@ -453,8 +484,8 @@ impl<'a> Exchange<'a> {
     /// As an approved agent, set `owner`'s per-asset leverage (and optionally
     /// isolated margin) under the typed scheme.
     ///
-    /// `owner` rides in the params only. The digest stays owner-less: the node
-    /// resolves `owner` at admission and binds the action to that account.
+    /// `owner` rides in the params AND in the digest (the `*_WITH_OWNER` type
+    /// string), so the signature cannot be re-posted under another owner.
     ///
     /// # Errors
     /// HTTP / decode / protocol errors per [`crate::ClientError`].
@@ -469,6 +500,7 @@ impl<'a> Exchange<'a> {
         self.post_signed_typed(wallet, |chain, nonce| {
             let action = TypedAction::UpdateLeverage {
                 metaflux_chain: chain,
+                owner: Some(owner),
                 asset,
                 leverage,
                 is_isolated,
@@ -638,15 +670,45 @@ impl<'a> Exchange<'a> {
         asset: u32,
         delta: impl Into<String>,
     ) -> Result<Value, ClientError> {
-        let delta = delta.into();
+        self.update_isolated_margin_bound(wallet, None, asset, delta.into())
+            .await
+    }
+
+    /// As an approved agent, add or remove isolated margin on `owner`'s
+    /// position. The digest binds `owner` (the `*_WITH_OWNER` type string).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn update_isolated_margin_typed_as(
+        &self,
+        wallet: &Wallet,
+        owner: crate::wallet::Address,
+        asset: u32,
+        delta: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        self.update_isolated_margin_bound(wallet, Some(owner), asset, delta.into())
+            .await
+    }
+
+    async fn update_isolated_margin_bound(
+        &self,
+        wallet: &Wallet,
+        owner: Option<crate::wallet::Address>,
+        asset: u32,
+        delta: String,
+    ) -> Result<Value, ClientError> {
         self.post_signed_typed(wallet, |chain, nonce| {
             let action = TypedAction::UpdateIsolatedMargin {
                 metaflux_chain: chain,
+                owner,
                 asset,
                 delta: delta.clone(),
                 nonce,
             };
-            let params = json!({ "asset": asset, "delta": delta });
+            let mut params = json!({ "asset": asset, "delta": delta });
+            if let Some(o) = owner {
+                params["owner"] = json!(o);
+            }
             (action, "update_isolated_margin", params)
         })
         .await
@@ -665,15 +727,45 @@ impl<'a> Exchange<'a> {
         asset: u32,
         amount: impl Into<String>,
     ) -> Result<Value, ClientError> {
-        let amount = amount.into();
+        self.top_up_isolated_only_margin_bound(wallet, None, asset, amount.into())
+            .await
+    }
+
+    /// As an approved agent, top up `owner`'s strict-isolated-only position.
+    /// The digest binds `owner` (the `*_WITH_OWNER` type string).
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn top_up_isolated_only_margin_typed_as(
+        &self,
+        wallet: &Wallet,
+        owner: crate::wallet::Address,
+        asset: u32,
+        amount: impl Into<String>,
+    ) -> Result<Value, ClientError> {
+        self.top_up_isolated_only_margin_bound(wallet, Some(owner), asset, amount.into())
+            .await
+    }
+
+    async fn top_up_isolated_only_margin_bound(
+        &self,
+        wallet: &Wallet,
+        owner: Option<crate::wallet::Address>,
+        asset: u32,
+        amount: String,
+    ) -> Result<Value, ClientError> {
         self.post_signed_typed(wallet, |chain, nonce| {
             let action = TypedAction::TopUpIsolatedOnlyMargin {
                 metaflux_chain: chain,
+                owner,
                 asset,
                 amount: amount.clone(),
                 nonce,
             };
-            let params = json!({ "asset": asset, "amount": amount });
+            let mut params = json!({ "asset": asset, "amount": amount });
+            if let Some(o) = owner {
+                params["owner"] = json!(o);
+            }
             (action, "top_up_isolated_only_margin", params)
         })
         .await
