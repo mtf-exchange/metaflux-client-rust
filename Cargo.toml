@@ -1,6 +1,6 @@
 [package]
 name = "metaflux-client"
-version = "0.26.0"
+version = "0.27.0"
 edition = "2024"
 rust-version = "1.87"
 authors = ["MTF Exchange contributors"]
@@ -90,6 +90,10 @@ path = "examples/address.rs"
 [[example]]
 name = "vault_transfer"
 path = "examples/vault_transfer.rs"
+
+[[example]]
+name = "vault_rename"
+path = "examples/vault_rename.rs"
 
 [[example]]
 name = "mip3_full_deploy"

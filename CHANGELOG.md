@@ -5,9 +5,13 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
-## [Unreleased]
+## [0.27.0] — 2026-10-30
 
 ### Added
+
+- `perp_set_leverage` accepts `max_leverage` up to 100 (was 50). The node has
+  admitted 100 on a deployer market since 0.9.18; the market still needs the
+  MIP-3 global cap vote and a tier ladder that allows it.
 
 - `Exchange::update_leverage_as` / `update_leverage_typed_as`: an approved
   agent sets `owner`'s leverage and margin mode. The wire gains a params-level
