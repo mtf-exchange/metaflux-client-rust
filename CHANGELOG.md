@@ -5,7 +5,7 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
-## [Unreleased]
+## [0.29.0] — 2026-11-19
 
 ### Added
 
@@ -13,8 +13,8 @@ once we cut `v1.0`. Pre-1.0 minor bumps may break.
   markets in one all-or-nothing action. `Exchange::mip3_set_oracle_pxs`,
   `mip3_set_oracle_pxs_typed`, `TypedAction::Mip3SetOraclePxs` and
   `types::perp::Mip3SetOraclePxs`. The type string is
-  `Mip3SetOraclePxs(string metafluxChain,bytes32 pxs,uint64 nonce)`. Not live
-  yet: the node accepts it from the next node release.
+  `Mip3SetOraclePxs(string metafluxChain,bytes32 pxs,uint64 nonce)`. The node accepts it
+  from node release 0.9.23.
 
 ## [0.28.0] — 2026-10-31
 
