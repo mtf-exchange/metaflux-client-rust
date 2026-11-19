@@ -52,7 +52,7 @@ async fn client_reconnects_and_replays_subscriptions() {
                         }
                         msg = ws.next() => match msg {
                             Some(Ok(Message::Text(t))) => {
-                                let _ = frame_tx.send(t.to_string());
+                                let _ = frame_tx.send(t);
                             }
                             Some(Ok(_)) => {},
                             Some(Err(_)) | None => return,
