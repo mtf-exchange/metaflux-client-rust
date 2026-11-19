@@ -15,7 +15,8 @@
 //! [`Mip3SetOraclePx`] is the eleventh action and the only repeating one. A market
 //! may run its OWN index feed instead of the venue-weighted median; the
 //! deployer then pushes every price. It rides a SEPARATE fork feature from the
-//! ten, so read its doc before you build against it.
+//! ten, so read its doc before you build against it. [`Mip3SetOraclePxs`] is
+//! its batch form, and it is not live yet.
 //!
 //! Wire shape (MTF-native, snake_case):
 //!
@@ -226,6 +227,25 @@ pub struct Mip3SetOraclePx {
     /// SPELLING and not the value: `"1250.5"` and `"1250.50"` are one price and
     /// two digests. Build the string once, then sign and send the same bytes.
     pub px: String,
+}
+
+/// Push index pxs for several MIP-3 markets in one action
+/// (`mip3_set_oracle_pxs`).
+///
+/// NOT LIVE YET: the node accepts this action from the next node release. An
+/// older node answers `unknown variant`.
+///
+/// - `pxs` holds 1 to 64 entries, and no asset occurs twice.
+/// - The action is all-or-nothing. If one entry fails, the node rejects the
+///   whole action and changes nothing.
+/// - Each entry then acts exactly like one [`Mip3SetOraclePx`]: the same
+///   signer rule, the same move band and the same clamp.
+/// - An agent cannot sign it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct Mip3SetOraclePxs {
+    /// The entries, in the order they are signed and sent.
+    pub pxs: Vec<Mip3SetOraclePx>,
 }
 
 #[cfg(test)]

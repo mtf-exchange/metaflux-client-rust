@@ -5,6 +5,17 @@ format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 once we cut `v1.0`. Pre-1.0 minor bumps may break.
 
+## [Unreleased]
+
+### Added
+
+- **`mip3_set_oracle_pxs`** (action 232): push index pxs for 1 to 64 MIP-3
+  markets in one all-or-nothing action. `Exchange::mip3_set_oracle_pxs`,
+  `mip3_set_oracle_pxs_typed`, `TypedAction::Mip3SetOraclePxs` and
+  `types::perp::Mip3SetOraclePxs`. The type string is
+  `Mip3SetOraclePxs(string metafluxChain,bytes32 pxs,uint64 nonce)`. Not live
+  yet: the node accepts it from the next node release.
+
 ## [0.28.0] — 2026-10-31
 
 Takes effect at the next node release. After that swap the node refuses an

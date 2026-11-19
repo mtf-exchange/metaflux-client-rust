@@ -21,9 +21,9 @@ use metaflux_client::{
             OrderKind, OrderStatus, PositionSide, Side, StpMode, TimeInForce,
         },
         perp::{
-            Mip3SetOraclePx, PerpActivateMarket, PerpDeactivateMarket, PerpRegisterAsset,
-            PerpSetFeeTier, PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOiCap,
-            PerpSetOracle, PerpSetSubDeployers,
+            Mip3SetOraclePx, Mip3SetOraclePxs, PerpActivateMarket, PerpDeactivateMarket,
+            PerpRegisterAsset, PerpSetFeeTier, PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize,
+            PerpSetOiCap, PerpSetOracle, PerpSetSubDeployers,
         },
         spot::{
             EarnWithdraw, SpotFinalizeSupply, SpotMarginOpen, SpotRegisterPair, SpotRegisterToken,
@@ -1563,6 +1563,51 @@ async fn mip3_oracle_px_posts_the_exact_string_it_signs() {
         metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
         asset: 42,
         px: px.to_string(),
+        nonce,
+    });
+    let sig = decode_sig(body["signature"].as_str().unwrap());
+    assert_eq!(
+        _recover_for_test(&digest, &sig).expect("recover"),
+        wallet.address()
+    );
+}
+
+#[tokio::test]
+async fn mip3_oracle_pxs_posts_the_entries_it_signs_in_order() {
+    let (client, captor, wallet) = capturing_exchange().await;
+    let entries = [(42u32, "1250.500001"), (1001, "0.0003")];
+    let _: Value = client
+        .exchange()
+        .mip3_set_oracle_pxs(
+            &wallet,
+            &Mip3SetOraclePxs {
+                pxs: entries
+                    .iter()
+                    .map(|(asset, px)| Mip3SetOraclePx {
+                        asset: *asset,
+                        px: px.to_string(),
+                    })
+                    .collect(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let body = captor.last.lock().await.clone().expect("body captured");
+    let action = body["action"].clone();
+    assert_eq!(action["type"].as_str(), Some("mip3_set_oracle_pxs"));
+    assert_eq!(
+        action["params"],
+        json!({ "pxs": [
+            { "asset": 42, "px": "1250.500001" },
+            { "asset": 1001, "px": "0.0003" },
+        ] })
+    );
+
+    let nonce = body["nonce"].as_u64().unwrap();
+    let digest = _typed_digest_for_test(&TypedAction::Mip3SetOraclePxs {
+        metaflux_chain: metaflux_chain_tag(MTF_CHAIN_ID).to_string(),
+        pxs: entries.iter().map(|(a, p)| (*a, p.to_string())).collect(),
         nonce,
     });
     let sig = decode_sig(body["signature"].as_str().unwrap());

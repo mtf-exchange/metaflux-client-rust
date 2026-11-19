@@ -151,6 +151,17 @@ fn enc_string_array(items: &[String]) -> [u8; 32] {
     out
 }
 
+fn enc_oracle_pxs(pxs: &[(u32, String)]) -> [u8; 32] {
+    let mut k = Keccak::v256();
+    for (asset, px) in pxs {
+        k.update(&enc_u32(*asset));
+        k.update(&enc_string(px));
+    }
+    let mut out = [0u8; 32];
+    k.finalize(&mut out);
+    out
+}
+
 // ===== Type strings (signing order = encodeType order = message field order) =====
 
 const SEND_ASSET_TYPE: &[u8] =
@@ -286,6 +297,8 @@ const PERP_SET_SUB_DEPLOYER_PERMS_TYPE: &[u8] =
 // reprice a push nor re-target it at another market.
 const MIP3_SET_ORACLE_PX_TYPE: &[u8] =
     b"MetaFluxTransaction:Mip3SetOraclePx(string metafluxChain,uint32 asset,string px,uint64 nonce)";
+const MIP3_SET_ORACLE_PXS_TYPE: &[u8] =
+    b"MetaFluxTransaction:Mip3SetOraclePxs(string metafluxChain,bytes32 pxs,uint64 nonce)";
 
 // ===== TypedAction =====
 
@@ -1348,6 +1361,19 @@ pub enum TypedAction {
         /// Envelope nonce.
         nonce: u64,
     },
+    /// `Mip3SetOraclePxs(string metafluxChain,bytes32 pxs,uint64 nonce)`
+    ///
+    /// The batch form of [`TypedAction::Mip3SetOraclePx`]. `pxs` is
+    /// `keccak256(concat(uint256(asset) ‖ keccak256(px)))` over the entries in
+    /// order, so the digest covers each market, each spelling and their order.
+    Mip3SetOraclePxs {
+        /// Chain tag.
+        metaflux_chain: String,
+        /// `(asset, verbatim px string)` per entry, in wire order.
+        pxs: Vec<(u32, String)>,
+        /// Envelope nonce.
+        nonce: u64,
+    },
 }
 
 impl TypedAction {
@@ -1448,6 +1474,7 @@ impl TypedAction {
             TypedAction::PerpSetSubDeployers { .. } => PERP_SET_SUB_DEPLOYERS_TYPE,
             TypedAction::PerpSetSubDeployerPerms { .. } => PERP_SET_SUB_DEPLOYER_PERMS_TYPE,
             TypedAction::Mip3SetOraclePx { .. } => MIP3_SET_ORACLE_PX_TYPE,
+            TypedAction::Mip3SetOraclePxs { .. } => MIP3_SET_ORACLE_PXS_TYPE,
         }
     }
 
@@ -2370,6 +2397,15 @@ impl TypedAction {
                 enc_string(metaflux_chain),
                 enc_u32(*asset),
                 enc_string(px),
+                enc_u64(*nonce),
+            ],
+            TypedAction::Mip3SetOraclePxs {
+                metaflux_chain,
+                pxs,
+                nonce,
+            } => vec![
+                enc_string(metaflux_chain),
+                enc_oracle_pxs(pxs),
                 enc_u64(*nonce),
             ],
         }

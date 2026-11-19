@@ -161,6 +161,26 @@ fn the_twelve_perp_deployer_signing_strings_keep_their_digests() {
     }
 }
 
+/// The batch push hashes `(asset, px)` per entry in order into one `bytes32`.
+#[test]
+fn the_batch_oracle_push_keeps_its_digest() {
+    let build = |pxs: Vec<(u32, &str)>| TypedAction::Mip3SetOraclePxs {
+        metaflux_chain: CHAIN.to_string(),
+        pxs: pxs.into_iter().map(|(a, p)| (a, p.to_string())).collect(),
+        nonce: 232,
+    };
+    let batch = build(vec![(42, "1250.500001"), (1001, "0.0003")]);
+    assert_eq!(
+        hex::encode(_typed_digest_for_test(&batch)),
+        "82e0da5c2fa4e8c608ecf4a620ec8b06fb0f9e9c4095ac465c652dc848c71767"
+    );
+    assert_ne!(
+        _typed_digest_for_test(&batch),
+        _typed_digest_for_test(&build(vec![(1001, "0.0003"), (42, "1250.500001")])),
+        "entry order must move the digest"
+    );
+}
+
 /// The px is hashed VERBATIM, so two spellings of ONE price are two digests.
 /// A client that re-formats the string after signing sends an unsigned push.
 #[test]

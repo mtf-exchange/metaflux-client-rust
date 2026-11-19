@@ -47,9 +47,9 @@ use crate::types::{
         Order, OrderResponse, ScheduleCancel, TimeInForce,
     },
     perp::{
-        Mip3SetOraclePx, PerpActivateMarket, PerpDeactivateMarket, PerpRegisterAsset,
-        PerpSetFeeTier, PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize, PerpSetOiCap,
-        PerpSetOracle, PerpSetSubDeployers,
+        Mip3SetOraclePx, Mip3SetOraclePxs, PerpActivateMarket, PerpDeactivateMarket,
+        PerpRegisterAsset, PerpSetFeeTier, PerpSetLeverage, PerpSetMakerRebate, PerpSetMinSize,
+        PerpSetOiCap, PerpSetOracle, PerpSetSubDeployers,
     },
     rfq::{RfqAccept, RfqRequest},
     scale::{CancelScaleParams, ScaleDist, ScaleParams},
@@ -1728,6 +1728,20 @@ impl<'a> Exchange<'a> {
     ) -> Result<Value, ClientError> {
         self.mip3_set_oracle_px_typed(wallet, params.asset, params.px.clone())
             .await
+    }
+
+    /// Push index pxs for several MIP-3 markets in one all-or-nothing action.
+    /// See [`Mip3SetOraclePxs`] for the batch rules and its availability.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn mip3_set_oracle_pxs(
+        &self,
+        wallet: &Wallet,
+        params: &Mip3SetOraclePxs,
+    ) -> Result<Value, ClientError> {
+        let pxs = params.pxs.iter().map(|e| (e.asset, e.px.clone())).collect();
+        self.mip3_set_oracle_pxs_typed(wallet, pxs).await
     }
 
     // --- Legacy opaque MIP-3 deploy lane ---

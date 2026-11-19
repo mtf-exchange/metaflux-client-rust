@@ -2583,6 +2583,35 @@ impl<'a> Exchange<'a> {
         .await
     }
 
+    /// Push index pxs for several MIP-3 markets in one typed action. See
+    /// [`crate::types::perp::Mip3SetOraclePxs`] for the batch rules.
+    ///
+    /// Each `px` string is hashed AND posted verbatim, in the given order.
+    ///
+    /// # Errors
+    /// HTTP / decode / protocol errors per [`crate::ClientError`].
+    pub async fn mip3_set_oracle_pxs_typed(
+        &self,
+        wallet: &Wallet,
+        pxs: Vec<(u32, String)>,
+    ) -> Result<Value, ClientError> {
+        self.post_signed_typed(wallet, |chain, nonce| {
+            let params = json!({
+                "pxs": pxs
+                    .iter()
+                    .map(|(asset, px)| json!({ "asset": asset, "px": px }))
+                    .collect::<Vec<_>>(),
+            });
+            let action = TypedAction::Mip3SetOraclePxs {
+                metaflux_chain: chain,
+                pxs,
+                nonce,
+            };
+            (action, "mip3_set_oracle_pxs", params)
+        })
+        .await
+    }
+
     /// Sign + POST a structured (typed-scheme) action.
     ///
     /// The closure is handed the chain tag and a fresh nonce; it returns the
